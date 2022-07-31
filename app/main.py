@@ -3,12 +3,16 @@ import threading
 import requests
 from server.main import app
 
+from server.models import *
+
+with app.app_context():
+    db.create_all()
 
 sg.theme('DarkAmber')
 
 layout = [
-    [sg.Text('Loading Flask application')],
-    [sg.Exit()]
+    [sg.Text('Welcome to Lab Tycoon Desktop')],
+    [sg.Button('Register', key='-REGISTER-'), sg.Exit()]
 ]
 
 window = sg.Window('Lab Tycoon Desktop!', layout=layout)
@@ -22,3 +26,5 @@ while True:
         requests.get('http://127.0.0.1:5000/kill')
         flask_job.join()
         break
+    elif event == '-REGISTER-':
+        print('About to register.')
