@@ -7,6 +7,10 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 db.init_app(app)
 login_manager.init_app(app)
 
+from server.apis import api_bp
+
+app.register_blueprint(api_bp)
+
 
 @app.route('/kill')
 def kill():

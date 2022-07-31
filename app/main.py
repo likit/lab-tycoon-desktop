@@ -1,6 +1,7 @@
 import PySimpleGUI as sg
 import threading
 import requests
+from client.windows import create_register_window
 from server.main import app
 
 from server.models import *
@@ -28,3 +29,6 @@ while True:
         break
     elif event == '-REGISTER-':
         print('About to register.')
+        create_register_window()
+
+window.close()
