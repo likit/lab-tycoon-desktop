@@ -14,8 +14,8 @@ class UserResource(Resource):
             lastname=data['1'],
             email=data['2'],
             username=data['3'],
-            hashed_password=data['4']
         )
+        user.password = data['4']
         db.session.add(user)
         db.session.commit()
         return jsonify({'message': 'success'})
