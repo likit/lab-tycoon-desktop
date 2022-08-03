@@ -4,11 +4,11 @@ import requests
 
 def create_register_window():
     layout = [
-        [sg.Text('First Name'), sg.InputText()],
-        [sg.Text('Last Name'), sg.InputText()],
-        [sg.Text('Email'), sg.InputText()],
-        [sg.Text('Username'), sg.InputText()],
-        [sg.Text('Password'), sg.Input(password_char='*')],
+        [sg.Text('First Name', size=(8, 1)), sg.InputText()],
+        [sg.Text('Last Name', size=(8, 1)), sg.InputText()],
+        [sg.Text('Email', size=(8, 1)), sg.InputText()],
+        [sg.Text('Username', size=(8, 1)), sg.InputText()],
+        [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*')],
         [sg.Button('Submit'), sg.Exit()],
     ]
 
