@@ -12,6 +12,10 @@ class User(db.Model):
     lastname = db.Column('lastname', db.String(255), nullable=False)
     license_id = db.Column('license_id', db.String(255), nullable=True)
 
+    @classmethod
+    def get_user_by_username(cls, username):
+        return cls.query.filter_by(username=username).first()
+
     @property
     def password(self):
         raise ValueError('Password is not accessible.')
@@ -22,3 +26,12 @@ class User(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.hashed_password, password)
+
+    def to_dict(self):
+        return {
+            'username': self.username,
+            'email': self.email,
+            'firstname': self.firstname,
+            'lastname': self.lastname,
+            'license_id': self.license_id,
+        }

@@ -18,7 +18,7 @@ from server.apis import api_bp
 
 flask_api.init_app(api_bp)
 
-flask_api.add_resource(UserResource, '/register')
+flask_api.add_resource(UserResource, '/users')
 
 app.register_blueprint(api_bp)
 

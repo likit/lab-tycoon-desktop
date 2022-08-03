@@ -12,19 +12,18 @@ with app.app_context():
 sg.theme('DarkAmber')
 
 layout = [
-    [sg.Text('Welcome to Lab Tycoon!', font=('Arial', 34))],
+    [sg.Text('Lab Tycoon V.2022.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
-    [sg.Text('Version 2022.1', font=('Arial', 20))],
     [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
     [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
     [sg.Button('Register', key='-REGISTER-'),
+     sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=False),
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Exit(button_color='white on red')]
 ]
 
 window = sg.Window('Lab Tycoon Desktop!', layout=layout, element_justification='center').finalize()
-window.maximize()
 flask_job = threading.Thread(target=lambda: app.run(use_reloader=False, debug=True))
 flask_job.start()
 access_token = ''
@@ -42,6 +41,7 @@ while True:
         access_token = create_singin_window()
         if access_token:
             window.find_element('-SIGNOUT-').update(visible=True)
+            window.find_element('-EDIT-PROFILE-').update(visible=True)
             window.find_element('-SIGNIN-').update(visible=False)
     elif event == '-SIGNOUT-':
         if sg.popup_yes_no('You sure want to sign out?') == 'Yes':
@@ -51,7 +51,13 @@ while True:
                 sg.popup_auto_close('You have logged out.')
                 window.find_element('-SIGNOUT-').update(visible=False)
                 window.find_element('-SIGNIN-').update(visible=True)
+                window.find_element('-EDIT-PROFILE-').update(visible=False)
             else:
                 sg.popup_error('Error occurred.')
+    elif event == '-EDIT-PROFILE-':
+        if access_token:
+            create_profile_window(access_token)
+        else:
+            sg.popup_error('Access denied.')
 
 window.close()
