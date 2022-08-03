@@ -17,8 +17,10 @@ layout = [
     [sg.Text('Version 2022.1', font=('Arial', 20))],
     [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
     [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
-    [sg.Button('Register', key='-REGISTER-'), sg.Button('Sign In', key='-SIGNIN-'),
-     sg.Button('Sign Out', key='-SIGNOUT-'), sg.Exit(button_color='white on red')]
+    [sg.Button('Register', key='-REGISTER-'),
+     sg.Button('Sign In', key='-SIGNIN-'),
+     sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
+     sg.Exit(button_color='white on red')]
 ]
 
 window = sg.Window('Lab Tycoon Desktop!', layout=layout, element_justification='center').finalize()
@@ -38,10 +40,18 @@ while True:
         create_register_window()
     elif event == '-SIGNIN-':
         access_token = create_singin_window()
-        print(access_token)
+        if access_token:
+            window.find_element('-SIGNOUT-').update(visible=True)
+            window.find_element('-SIGNIN-').update(visible=False)
     elif event == '-SIGNOUT-':
-        headers = {'Authorization': f'Bearer {access_token}'}
-        resp = requests.get('http://127.0.0.1:5000/auth/sign-out', headers=headers)
-        print(resp.json())
+        if sg.popup_yes_no('You sure want to sign out?') == 'Yes':
+            headers = {'Authorization': f'Bearer {access_token}'}
+            resp = requests.get('http://127.0.0.1:5000/auth/sign-out', headers=headers)
+            if resp.status_code == 200:
+                sg.popup_auto_close('You have logged out.')
+                window.find_element('-SIGNOUT-').update(visible=False)
+                window.find_element('-SIGNIN-').update(visible=True)
+            else:
+                sg.popup_error('Error occurred.')
 
 window.close()

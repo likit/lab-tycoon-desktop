@@ -22,9 +22,9 @@ def create_register_window():
             resp = requests.post('http://127.0.0.1:5000/api/register', json=values)
             message = resp.json().get('message')
             if resp.status_code == 200:
-                sg.PopupOK(f'{message}')
+                sg.popup_ok(f'{message}')
             else:
-                sg.PopupError(f'{message}')
+                sg.popup_error(f'{message}')
             break
     window.close()
 
@@ -47,9 +47,9 @@ def create_singin_window():
             access_token = resp.json().get('access_token')
             message = resp.json().get('message')
             if resp.status_code == 200:
-                sg.PopupOK(f'{message}')
+                sg.popup_ok(f'{message}')
             else:
-                sg.PopupError(f'{message}')
+                sg.popup_error(f'{message}')
             break
     window.close()
     return access_token
