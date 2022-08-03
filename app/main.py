@@ -13,10 +13,11 @@ sg.theme('DarkAmber')
 
 layout = [
     [sg.Text('Welcome to Lab Tycoon Desktop')],
-    [sg.Button('Register', key='-REGISTER-'), sg.Exit()]
+    [sg.Button('Register', key='-REGISTER-'), sg.Exit(button_color='white on red')]
 ]
 
-window = sg.Window('Lab Tycoon Desktop!', layout=layout)
+window = sg.Window('Lab Tycoon Desktop!', layout=layout, element_justification='center').finalize()
+window.maximize()
 flask_job = threading.Thread(target=lambda: app.run(use_reloader=False, debug=True))
 flask_job.start()
 
@@ -28,7 +29,6 @@ while True:
         flask_job.join()
         break
     elif event == '-REGISTER-':
-        print('About to register.')
         create_register_window()
 
 window.close()

@@ -19,7 +19,6 @@ def create_register_window():
         if event in ['Exit', sg.WIN_CLOSED]:
             break
         else:
-            print(values)
             resp = requests.post('http://127.0.0.1:5000/api/register', json=values)
             if resp.status_code == 200:
                 window.close()
