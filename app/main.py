@@ -12,7 +12,11 @@ with app.app_context():
 sg.theme('DarkAmber')
 
 layout = [
-    [sg.Text('Welcome to Lab Tycoon Desktop')],
+    [sg.Text('Welcome to Lab Tycoon!', font=('Arial', 34))],
+    [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
+    [sg.Text('Version 2022.1', font=('Arial', 20))],
+    [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
+    [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
     [sg.Button('Register', key='-REGISTER-'), sg.Exit(button_color='white on red')]
 ]
 
