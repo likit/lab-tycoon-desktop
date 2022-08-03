@@ -20,7 +20,36 @@ def create_register_window():
             break
         else:
             resp = requests.post('http://127.0.0.1:5000/api/register', json=values)
+            message = resp.json().get('message')
             if resp.status_code == 200:
-                window.close()
-                sg.PopupOK('Registered successfully')
+                sg.PopupOK(f'{message}')
+            else:
+                sg.PopupError(f'{message}')
+            break
     window.close()
+
+
+def create_singin_window():
+    layout = [
+        [sg.Text('Username', size=(8, 1)), sg.InputText()],
+        [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*')],
+        [sg.Button('Submit'), sg.Exit()],
+    ]
+
+    window = sg.Window('Sign In', layout=layout)
+
+    while True:
+        event, values = window.read()
+        if event in ['Exit', sg.WIN_CLOSED]:
+            break
+        else:
+            resp = requests.post('http://127.0.0.1:5000/auth/sign-in', json=values)
+            access_token = resp.json().get('access_token')
+            message = resp.json().get('message')
+            if resp.status_code == 200:
+                sg.PopupOK(f'{message}')
+            else:
+                sg.PopupError(f'{message}')
+            break
+    window.close()
+    return access_token

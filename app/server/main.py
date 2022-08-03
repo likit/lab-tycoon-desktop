@@ -1,13 +1,18 @@
 from flask import Flask, request
 
 from server.apis.views import UserResource
-from server.extensions import db, login_manager, flask_api
-
+from server.extensions import db, flask_api, jwt
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
+app.config['SECRET_KEY'] = 'mumtmahidol'
+app.config['JWT_SECRET_KEY'] = 'mumtmahidol'
 db.init_app(app)
-login_manager.init_app(app)
+jwt.init_app(app)
+
+from server.auth import auth_bp
+
+app.register_blueprint(auth_bp)
 
 from server.apis import api_bp
 
