@@ -17,7 +17,7 @@ layout = [
     [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
     [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
     [sg.Button('Register', key='-REGISTER-'),
-     sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=False),
+     sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=True),
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Button('Admin', key='-ADMIN-'),
@@ -47,12 +47,12 @@ while True:
     elif event == '-SIGNOUT-':
         if sg.popup_yes_no('You sure want to sign out?') == 'Yes':
             headers = {'Authorization': f'Bearer {access_token}'}
-            resp = requests.get('http://127.0.0.1:5000/auth/sign-out', headers=headers)
+            resp = requests.delete('http://127.0.0.1:5000/auth/sign-out', headers=headers)
             if resp.status_code == 200:
                 sg.popup_auto_close('You have logged out.')
                 window.find_element('-SIGNOUT-').update(visible=False)
                 window.find_element('-SIGNIN-').update(visible=True)
-                window.find_element('-EDIT-PROFILE-').update(visible=False)
+                window.find_element('-EDIT-PROFILE-').update(visible=True)
             else:
                 sg.popup_error(resp.json().get('message'))
     elif event == '-EDIT-PROFILE-':

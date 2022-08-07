@@ -28,24 +28,22 @@ def admin_required():
 class UserResource(Resource):
     @jwt_required()
     def get(self):
-        user = User.get_user_by_username(current_user)
-        if user:
-            return user.to_dict()
+        if current_user:
+            return current_user.to_dict()
         else:
             return {'message': 'user not found'}, HTTPStatus.NOT_FOUND
 
     @jwt_required()
     def put(self):
         data = request.get_json()
-        user = User.get_user_by_username(current_user)
-        if user:
-            user.firstname = data.get('firstname')
-            user.lastname = data.get('lastname')
-            user.email = data.get('email')
-            user.license_id = data.get('license_id')
-            db.session.add(user)
+        if current_user:
+            current_user.firstname = data.get('firstname')
+            current_user.lastname = data.get('lastname')
+            current_user.email = data.get('email')
+            current_user.license_id = data.get('license_id')
+            db.session.add(current_user)
             db.session.commit()
-            return {'message': 'success'}, HTTPStatus.CREATED
+            return {'message': 'Data have been updated.'}, HTTPStatus.CREATED
         else:
             return {'message': 'user not found'}, HTTPStatus.NOT_FOUND
 
@@ -65,7 +63,7 @@ class UserResource(Resource):
         except IntegrityError as e:
             return {'message': str(e)}, HTTPStatus.BAD_REQUEST
 
-        return {'message': 'success'}, HTTPStatus.CREATED
+        return {'message': 'New user have been registered.'}, HTTPStatus.CREATED
 
 
 class ProtectedResource(Resource):

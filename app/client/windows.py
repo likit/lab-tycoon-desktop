@@ -62,6 +62,12 @@ def create_profile_window(access_token):
         return
     headers = {'Authorization': f'Bearer {access_token}'}
     resp = requests.get('http://127.0.0.1:5000/api/users', headers=headers)
+    if resp.status_code != 200:
+        if resp.status_code == 401:
+            sg.popup_error('Please sign in to access this part.')
+        else:
+            sg.popup_error(f'Error occurred: {resp.status_code}')
+        return
     profile = resp.json()
 
     layout = [

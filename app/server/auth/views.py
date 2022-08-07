@@ -1,10 +1,19 @@
+from datetime import datetime, timezone
+
 from flask import request, jsonify
 from http import HTTPStatus
-from flask_jwt_extended import (create_access_token, jwt_required, current_user)
+from flask_jwt_extended import (create_access_token, jwt_required, current_user, get_jwt)
 
 from server.auth import auth_bp
-from server.extensions import jwt
-from server.models import User
+from server.extensions import jwt, db
+from server.models import User, TokenBlocklist
+
+
+@jwt.token_in_blocklist_loader
+def check_if_token_revoked(jwt_header, jwt_payload: dict) -> bool:
+    jti = jwt_payload["jti"]
+    token = db.session.query(TokenBlocklist.id).filter_by(jti=jti).scalar()
+    return token is not None
 
 
 @jwt.user_lookup_loader
@@ -31,10 +40,13 @@ def sign_in():
         return jsonify({'message': 'The username is not found.'}), HTTPStatus.NOT_FOUND
 
 
-@auth_bp.route('/sign-out')
-@jwt_required()
+@auth_bp.route('/sign-out', methods=['DELETE'])
+@jwt_required(verify_type=False)
 def sign_out():
-    if current_user:
-        return {'message': f'You have signed in {current_user}'}
-    else:
-        return {'message': 'User has not signed in.'}, HTTPStatus.UNAUTHORIZED
+    token = get_jwt()
+    jti = token["jti"]
+    ttype = token["type"]
+    now = datetime.now(timezone.utc)
+    db.session.add(TokenBlocklist(jti=jti, type=ttype, created_at=now))
+    db.session.commit()
+    return jsonify(message=f"{ttype.capitalize()} token successfully revoked")
