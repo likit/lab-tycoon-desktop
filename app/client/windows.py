@@ -132,6 +132,23 @@ def create_user_list_window(access_token):
     window.close()
 
 
+def create_admin_window(access_token):
+    layout = [
+        [sg.Button('User Management', key='-USER-')],
+        [sg.Button('Specimens', key='-SPECIMENS-')],
+        [sg.CloseButton('Close')]
+    ]
+
+    window = sg.Window('Administration', layout=layout, modal=True)
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == '-USER-':
+            create_user_list_window(access_token)
+    window.close()
+
+
 def create_admin_user_role_window(access_token, username):
     if not access_token:
         return

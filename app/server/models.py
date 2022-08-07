@@ -81,3 +81,56 @@ class User(db.Model):
     @property
     def all_roles(self):
         return ','.join([r.role_need for r in self.roles])
+
+
+class BioSource(db.Model):
+    __tablename__ = 'biosources'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    source = db.Column('source', db.String(255), nullable=False)
+
+
+class Specimens(db.Model):
+    __tablename__ = 'specimens'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    label = db.Column('label', db.String(255), nullable=False)
+    source_id = db.Column('source_id', db.ForeignKey('biosources.id'))
+    source = db.relationship(BioSource, backref=db.backref('specimens', lazy='dynamic', cascade='all, delete-orphan'))
+    desc = db.Column('desc', db.Text(), nullable=True)
+
+
+class Test(db.Model):
+    __tablename__ = 'tests'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    code = db.Column('code', db.String(), nullable=False)
+    label = db.Column('label', db.String(), nullable=False)
+    value_type = db.Column('value_type', db.String(), nullable=False)
+
+
+class TestItem(db.Model):
+    __tablename__ = 'test_items'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    test_id = db.Column(db.ForeignKey('tests.id'))
+    specimens_id = db.Column(db.ForeignKey('specimens.id'))
+    price = db.Column('price', db.Numeric(), default=0.0, nullable=False)
+    desc = db.Column('desc', db.Text())
+    test = db.relationship(Test, backref=db.backref('items', lazy='dynamic', cascade='all, delete-orphan'))
+    unit = db.Column('unit', db.String(), nullable=False)
+
+
+class TestRecord(db.Model):
+    __tablename__ = 'test_records'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    test_item_id = db.Column(db.ForeignKey('test_items.id'))
+    _value = db.Column('value', db.String(), nullable=True)
+    test_item = db.relationship(TestItem, backref=db.backref('records', lazy='dynamic', cascade='all, delete-orphan'))
+
+    @property
+    def value(self):
+        if self.test_item.test.value_type == 'numeric':
+            return float(self._value)
+        else:
+            return self._value
+
+    @property
+    def value_string(self):
+        return f'{self._value} {self.unit}'

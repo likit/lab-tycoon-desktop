@@ -74,7 +74,7 @@ while True:
             sg.popup_error('Access denied.')
     elif event == '-ADMIN-':
         if access_token:
-            create_user_list_window(access_token)
+            create_admin_window(access_token)
         else:
             sg.popup_error('Access denied.')
 
