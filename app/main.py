@@ -20,6 +20,7 @@ layout = [
      sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=False),
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
+     sg.Button('Admin', key='-ADMIN-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -53,10 +54,17 @@ while True:
                 window.find_element('-SIGNIN-').update(visible=True)
                 window.find_element('-EDIT-PROFILE-').update(visible=False)
             else:
-                sg.popup_error('Error occurred.')
+                sg.popup_error(resp.json().get('message'))
     elif event == '-EDIT-PROFILE-':
         if access_token:
             create_profile_window(access_token)
+        else:
+            sg.popup_error('Access denied.')
+    elif event == '-ADMIN-':
+        if access_token:
+            headers = {'Authorization': f'Bearer {access_token}'}
+            resp = requests.get('http://127.0.0.1:5000/api/admin', headers=headers)
+            print(resp.json())
         else:
             sg.popup_error('Access denied.')
 

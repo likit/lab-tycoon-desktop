@@ -1,6 +1,8 @@
+from functools import wraps
+
 from flask import request, jsonify
 from http import HTTPStatus
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, verify_jwt_in_request, get_jwt
 from sqlalchemy.exc import IntegrityError
 
 from server.models import User
@@ -9,10 +11,23 @@ from flask_restful import Resource
 from ..extensions import db
 
 
+def admin_required():
+    def wrapper(fn):
+        @wraps(fn)
+        def decorator(*args, **kwargs):
+            verify_jwt_in_request()
+            claims = get_jwt()
+            if 'admin' in claims["roles"]:
+                return fn(*args, **kwargs)
+            else:
+                return {'message': 'Admins Only'}, 403
+        return decorator
+    return wrapper
+
+
 class UserResource(Resource):
     @jwt_required()
     def get(self):
-        current_user = get_jwt_identity()
         user = User.get_user_by_username(current_user)
         if user:
             return user.to_dict()
@@ -21,7 +36,6 @@ class UserResource(Resource):
 
     @jwt_required()
     def put(self):
-        current_user = get_jwt_identity()
         data = request.get_json()
         user = User.get_user_by_username(current_user)
         if user:
@@ -52,3 +66,9 @@ class UserResource(Resource):
             return {'message': str(e)}, HTTPStatus.BAD_REQUEST
 
         return {'message': 'success'}, HTTPStatus.CREATED
+
+
+class ProtectedResource(Resource):
+    @admin_required()
+    def get(self):
+        return {'message': 'How da hell you get in here?'}
