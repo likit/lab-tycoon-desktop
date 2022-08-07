@@ -23,7 +23,7 @@ class TokenBlocklist(db.Model):
 
 class UserRole(db.Model):
     __tablename__ = 'roles'
-    id = db.Column(db.Integer(), auto_increment=True, primary_key=True)
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
     role_need = db.Column('role_need', db.String(), nullable=True)
     action_need = db.Column('action_need', db.String())
     resource_id = db.Column('resource_id', db.Integer())
@@ -42,7 +42,7 @@ user_roles = db.Table('user_roles',
 
 class User(db.Model):
     __tablename__ = 'users'
-    id = db.Column(db.Integer(), auto_increment=True, primary_key=True)
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
     username = db.Column(db.String(255), nullable=False, unique=True)
     email = db.Column(db.String(255), nullable=True, unique=True)
     hashed_password = db.Column(db.String(255), nullable=False)
@@ -73,6 +73,7 @@ class User(db.Model):
             'firstname': self.firstname,
             'lastname': self.lastname,
             'license_id': self.license_id,
+            'roles': self.all_roles
         }
 
     @property

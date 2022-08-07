@@ -5,7 +5,7 @@ from http import HTTPStatus
 from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, verify_jwt_in_request, get_jwt
 from sqlalchemy.exc import IntegrityError
 
-from server.models import User
+from server.models import User, UserRole
 from flask_restful import Resource
 
 from ..extensions import db
@@ -25,13 +25,39 @@ def admin_required():
     return wrapper
 
 
+class AdminUserListResource(Resource):
+    @admin_required()
+    def get(self):
+        data = []
+        for user in User.query.all():
+            data.append(user.to_dict())
+        return {'data': data}
+
+
+class AdminUserRoleResource(Resource):
+    @admin_required()
+    def put(self, username):
+        roles = request.get_json()
+        user = User.get_user_by_username(username)
+        user.roles = []
+        for role in UserRole.query.all():
+            if roles[role.role_need] is True:
+                user.roles.append(role)
+        db.session.add(user)
+        db.session.commit()
+        return {'message': 'Roles have been updated.'}, HTTPStatus.CREATED
+
+
 class UserResource(Resource):
     @jwt_required()
-    def get(self):
-        if current_user:
+    def get(self, username=None):
+        if username is None and current_user:
             return current_user.to_dict()
         else:
-            return {'message': 'user not found'}, HTTPStatus.NOT_FOUND
+            user = User.get_user_by_username(username)
+            if user:
+                return user.to_dict()
+        return {'message': 'user not found'}, HTTPStatus.NOT_FOUND
 
     @jwt_required()
     def put(self):
@@ -64,9 +90,3 @@ class UserResource(Resource):
             return {'message': str(e)}, HTTPStatus.BAD_REQUEST
 
         return {'message': 'New user have been registered.'}, HTTPStatus.CREATED
-
-
-class ProtectedResource(Resource):
-    @admin_required()
-    def get(self):
-        return {'message': 'How da hell you get in here?'}

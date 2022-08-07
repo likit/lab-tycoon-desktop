@@ -8,6 +8,15 @@ from server.models import *
 
 with app.app_context():
     db.create_all()
+    user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
+    user.password = '1234'
+    for role in ['admin', 'approver', 'reporter']:
+        r = UserRole(role_need=role)
+        db.session.add(r)
+        user.roles.append(r)
+    db.session.add(user)
+    db.session.commit()
+
 
 sg.theme('DarkAmber')
 
@@ -62,9 +71,7 @@ while True:
             sg.popup_error('Access denied.')
     elif event == '-ADMIN-':
         if access_token:
-            headers = {'Authorization': f'Bearer {access_token}'}
-            resp = requests.get('http://127.0.0.1:5000/api/admin', headers=headers)
-            print(resp.json())
+            create_user_list_window(access_token)
         else:
             sg.popup_error('Access denied.')
 
