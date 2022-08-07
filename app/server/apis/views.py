@@ -66,6 +66,7 @@ class UserResource(Resource):
             current_user.firstname = data.get('firstname')
             current_user.lastname = data.get('lastname')
             current_user.email = data.get('email')
+            current_user.position = data.get('position')
             current_user.license_id = data.get('license_id')
             db.session.add(current_user)
             db.session.commit()
@@ -79,6 +80,7 @@ class UserResource(Resource):
             firstname=data['firstname'],
             lastname=data['lastname'],
             email=data['email'],
+            position=data['position'],
             username=data['username'],
             license_id=data['license_id'],
         )

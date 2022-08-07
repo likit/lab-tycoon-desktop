@@ -1,3 +1,5 @@
+import os.path
+
 import PySimpleGUI as sg
 import threading
 import requests
@@ -7,15 +9,16 @@ from server.main import app
 from server.models import *
 
 with app.app_context():
-    db.create_all()
-    user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
-    user.password = '1234'
-    for role in ['admin', 'approver', 'reporter']:
-        r = UserRole(role_need=role)
-        db.session.add(r)
-        user.roles.append(r)
-    db.session.add(user)
-    db.session.commit()
+    if not os.path.exists(os.path.join('server', 'app.db')):
+        db.create_all()
+        user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
+        user.password = '1234'
+        for role in ['admin', 'approver', 'reporter']:
+            r = UserRole(role_need=role)
+            db.session.add(r)
+            user.roles.append(r)
+        db.session.add(user)
+        db.session.commit()
 
 
 sg.theme('DarkAmber')

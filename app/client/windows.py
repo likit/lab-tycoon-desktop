@@ -7,6 +7,7 @@ def create_register_window():
         [sg.Text('First Name', size=(8, 1)), sg.InputText(key='firstname')],
         [sg.Text('Last Name', size=(8, 1)), sg.InputText(key='lastname')],
         [sg.Text('Email', size=(8, 1)), sg.InputText(key='email')],
+        [sg.Text('Position', size=(8, 1)), sg.InputText(key='position')],
         [sg.Text('License ID', size=(8, 1)), sg.InputText(key='license_id')],
         [sg.Text('Username', size=(8, 1)), sg.InputText(key='username')],
         [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*', key='password')],
@@ -75,6 +76,7 @@ def create_profile_window(access_token):
         [sg.Text('First Name', size=(8, 1)), sg.InputText(profile['firstname'], key='firstname')],
         [sg.Text('Last Name', size=(8, 1)), sg.InputText(profile['lastname'], key='lastname')],
         [sg.Text('Email', size=(8, 1)), sg.InputText(profile['email'], key='email')],
+        [sg.Text('Position', size=(8, 1)), sg.InputText(profile['position'], key='position')],
         [sg.Text('License ID', size=(8, 1)), sg.InputText(profile['license_id'], key='license_id')],
         [sg.Button('Submit'), sg.Exit()],
     ]
@@ -104,10 +106,10 @@ def create_user_list_window(access_token):
     data = []
     for user in resp.json().get('data'):
         data.append([
-            user['firstname'], user['lastname'], user['license_id'], user['username'], user['roles']
+            user['firstname'], user['lastname'], user['license_id'], user['username'], user['position'], user['roles']
         ])
     layout = [
-        [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Roles'],
+        [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles'],
                   values=data, key='-TABLE-', enable_events=True)],
         [sg.Exit()]
     ]
@@ -124,7 +126,7 @@ def create_user_list_window(access_token):
                 username = data[values['-TABLE-'][0]][3]
                 updated_roles = create_admin_user_role_window(access_token, username)
                 if updated_roles:
-                    data[values['-TABLE-'][0]][4] = ','.join([r for r,v in updated_roles.items() if v is True])
+                    data[values['-TABLE-'][0]][5] = ','.join([r for r,v in updated_roles.items() if v is True])
                 window.find_element('-TABLE-').update(values=data)
                 window.refresh()
     window.close()

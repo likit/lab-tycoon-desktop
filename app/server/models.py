@@ -49,6 +49,7 @@ class User(db.Model):
     firstname = db.Column('firstname', db.String(255), nullable=False)
     lastname = db.Column('lastname', db.String(255), nullable=False)
     license_id = db.Column('license_id', db.String(255), nullable=True)
+    position = db.Column('position', db.String(255), nullable=True)
     roles = db.relationship(UserRole, secondary=user_roles, backref=db.backref('users', lazy='dynamic'))
 
     @classmethod
@@ -73,6 +74,7 @@ class User(db.Model):
             'firstname': self.firstname,
             'lastname': self.lastname,
             'license_id': self.license_id,
+            'position': self.position,
             'roles': self.all_roles
         }
 
