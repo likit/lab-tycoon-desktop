@@ -33,6 +33,7 @@ layout = [
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Button('Admin', key='-ADMIN-'),
+     sg.Button('About', key='-ABOUT-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -77,5 +78,8 @@ while True:
             create_admin_window(access_token)
         else:
             sg.popup_error('Access denied.')
+    elif event == '-ABOUT-':
+        sg.popup_no_titlebar('This program is developed by Dr.Likit Preeyanon. '
+                             'Please contact likit.pre@mahidol.edu for more information.', title='About')
 
 window.close()

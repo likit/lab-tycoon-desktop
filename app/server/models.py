@@ -129,9 +129,9 @@ class Test(db.Model):
 class TestRecord(db.Model):
     __tablename__ = 'test_records'
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
-    test_item_id = db.Column(db.ForeignKey('test_items.id'))
+    test_item_id = db.Column(db.ForeignKey('tests.id'))
     _value = db.Column('value', db.String(), nullable=True)
-    test_item = db.relationship(TestItem, backref=db.backref('records', lazy='dynamic', cascade='all, delete-orphan'))
+    test_item = db.relationship(Test, backref=db.backref('records', lazy='dynamic', cascade='all, delete-orphan'))
 
     @property
     def value(self):

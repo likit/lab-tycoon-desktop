@@ -132,8 +132,65 @@ def create_user_list_window(access_token):
     window.close()
 
 
+TMLT_ACCESS_TOKEN_URL = 'https://tmlt.this.or.th/tmltapi/api/TmltToken/GetToken'
+TMLT_SEARCH_URL = 'https://tmlt.this.or.th/tmltapi/10686/search'
+HOSPITAL_CODE = '10686'
+
+
+def create_tmlt_test_window(access_token):
+    resp = requests.post(TMLT_ACCESS_TOKEN_URL, json={'hospcode': HOSPITAL_CODE, 'provinceId': '12', 'amp': '01'})
+    if resp.status_code == 200:
+        tmlt_access_token = resp.json().get('token')
+    else:
+        sg.popup_error(resp.status_code)
+        return
+
+    layout = [
+        [sg.Text('Search Term'), sg.InputText(key='search')],
+        [sg.Button('Submit'), sg.CloseButton('Close')],
+        [sg.Table(values=[], headings=['tmltCode', 'tmltName', 'specimens', 'method', 'unit'], key='-TABLE-',
+                  expand_x=True, expand_y=True, enable_events=True)]
+    ]
+
+    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Submit':
+            search = values.get('search')
+            resp = requests.get(TMLT_SEARCH_URL,
+                                headers={'Authorization': f'Bearer {tmlt_access_token}', 'Accept': 'application/json'},
+                                params={'search': search}
+                                )
+            if resp.status_code == 200:
+                records = []
+                for rec in resp.json().get('tmltData'):
+                    records.append([rec['tmltCode'], rec['tmltName'], rec['specimen'], rec['method'], rec['unit']])
+                window.find_element('-TABLE-').update(values=records)
+                window.refresh()
+            else:
+                sg.popup_error('Error occurred. Could not fetch data from TMLT server.')
+    window.close()
+
+    '''
+    if not access_token:
+        return
+    
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/users/{username}', headers=headers)
+    if resp.status_code != 200:
+        sg.popup_error(f'Error occurred: {resp.status_code}')
+        return
+    '''
+
+
 def create_admin_window(access_token):
-    menu_def = [['&Sample', ['&BioSource', 'S&pecimens']]]
+    menu_def = [
+        ['&Samples', ['&Tests', '&BioSource', 'S&pecimens']],
+        ['&Tests', ['&Add TMLT test']],
+    ]
     layout = [
         [sg.Menu(menu_def)],
         [sg.Button('User Management', key='-USER-')],
@@ -150,6 +207,8 @@ def create_admin_window(access_token):
             create_user_list_window(access_token)
         elif event == 'BioSource':
             create_biosource_window(access_token)
+        elif event == 'Add TMLT test':
+            create_tmlt_test_window(access_token)
     window.close()
 
 
@@ -217,7 +276,6 @@ def create_new_biosource_window():
         event, values = window.read()
         if event in ['CloseButton', sg.WIN_CLOSED]:
             break
-
 
 
 def create_biosource_window(access_token):
