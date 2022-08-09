@@ -5,7 +5,7 @@ from http import HTTPStatus
 from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, verify_jwt_in_request, get_jwt
 from sqlalchemy.exc import IntegrityError
 
-from server.models import User, UserRole
+from server.models import User, UserRole, BioSource
 from flask_restful import Resource
 
 from ..extensions import db
@@ -47,6 +47,16 @@ class AdminUserRoleResource(Resource):
         db.session.commit()
         return {'message': 'Roles have been updated.'}, HTTPStatus.CREATED
 
+
+class AdminBioSource(Resource):
+    @admin_required()
+    def get(self):
+        data = []
+        for src in BioSource.query.all():
+            data.append({
+                'source': src.source
+            })
+        return {'data': data}
 
 class UserResource(Resource):
     @jwt_required()

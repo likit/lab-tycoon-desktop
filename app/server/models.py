@@ -98,23 +98,32 @@ class Specimens(db.Model):
     desc = db.Column('desc', db.Text(), nullable=True)
 
 
+class TestMethod(db.Model):
+    __tablename__ = 'test_methods'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    method = db.Column('method', db.String(), nullable=False)
+
+
 class Test(db.Model):
     __tablename__ = 'tests'
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
     code = db.Column('code', db.String(), nullable=False)
+    tmlt_code = db.Column('tmlt_code', db.String())
+    tmlt_name = db.Column('tmlt_name', db.String())
+    loinc_no = db.Column('loinc_no', db.String())
+    component = db.Column('component', db.String())
     label = db.Column('label', db.String(), nullable=False)
     value_type = db.Column('value_type', db.String(), nullable=False)
-
-
-class TestItem(db.Model):
-    __tablename__ = 'test_items'
-    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
-    test_id = db.Column(db.ForeignKey('tests.id'))
     specimens_id = db.Column(db.ForeignKey('specimens.id'))
+    method_id = db.Column(db.ForeignKey('test_methods.id'))
     price = db.Column('price', db.Numeric(), default=0.0, nullable=False)
     desc = db.Column('desc', db.Text())
-    test = db.relationship(Test, backref=db.backref('items', lazy='dynamic', cascade='all, delete-orphan'))
     unit = db.Column('unit', db.String(), nullable=False)
+    tmlt_order_type = db.Column('tmlt_order_type', db.String())
+    cgd_code = db.Column('cgd_code', db.String())
+    cgd_name = db.Column('cgd_name', db.String())
+    cgd_price = db.Column('cgd_price', db.Numeric())
+    panel = db.Column('panel', db.String())
 
 
 class TestRecord(db.Model):

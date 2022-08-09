@@ -133,7 +133,9 @@ def create_user_list_window(access_token):
 
 
 def create_admin_window(access_token):
+    menu_def = [['&Sample', ['&BioSource', 'S&pecimens']]]
     layout = [
+        [sg.Menu(menu_def)],
         [sg.Button('User Management', key='-USER-')],
         [sg.Button('Specimens', key='-SPECIMENS-')],
         [sg.CloseButton('Close')]
@@ -146,6 +148,8 @@ def create_admin_window(access_token):
             break
         elif event == '-USER-':
             create_user_list_window(access_token)
+        elif event == 'BioSource':
+            create_biosource_window(access_token)
     window.close()
 
 
@@ -200,3 +204,46 @@ def create_admin_user_role_window(access_token, username):
             updated_roles = values
     window.close()
     return updated_roles
+
+
+def create_new_biosource_window():
+    layout = [
+        [sg.Text('Source'), sg.InputText(key='source')],
+        [sg.CloseButton('Cancel'), sg.Ok()]
+    ]
+
+    window = sg.Window('New Biological Source', modal=True, layout=layout)
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+
+
+
+def create_biosource_window(access_token):
+    if not access_token:
+        return
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/admin/biosources', headers=headers)
+    if resp.status_code != 200:
+        sg.popup_error(f'Error occurred: {resp.status_code}')
+        return
+    biosources = resp.json().get('data')
+
+    data = []
+    for src in biosources:
+        data.append(src.get('source'))
+    layout = [
+        [sg.Table(data, headings=['source'], enable_events=True, key='-TABLE-')],
+        [sg.Button('Add'), sg.CloseButton('Close')],
+    ]
+
+    window = sg.Window('Biological Sources', modal=True, layout=layout)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Add':
+            pass
+    window.close()
