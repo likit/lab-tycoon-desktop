@@ -9,6 +9,31 @@ from server.apis.views import (UserResource,
                                TestListResource)
 from server.extensions import db, flask_api, jwt
 
+from logging.config import dictConfig
+
+dictConfig({
+    'version': 1,
+    'formatters': {'default': {
+        'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+    }},
+    'handlers': {
+        'wsgi': {
+            'class': 'logging.StreamHandler',
+            'stream': 'ext://flask.logging.wsgi_errors_stream',
+            'formatter': 'default'
+        },
+        'client': {
+            'class': 'logging.FileHandler',
+            'formatter': 'default',
+            'filename': 'run_log.txt'
+        }
+    },
+    'root': {
+        'level': 'INFO',
+        'handlers': ['wsgi', 'client']
+    }
+})
+
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 app.config['SECRET_KEY'] = 'mumtmahidol'

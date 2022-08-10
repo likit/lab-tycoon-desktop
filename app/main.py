@@ -81,7 +81,7 @@ while True:
             access_token = create_singin_window()
             window.find_element('-ADMIN-').click()
     elif event == '-ABOUT-':
-        sg.popup_no_titlebar('This program is developed by Dr.Likit Preeyanon. '
+        sg.popup_ok('This program is developed by Dr.Likit Preeyanon. '
                              'Please contact likit.pre@mahidol.edu for more information.', title='About')
 
 window.close()

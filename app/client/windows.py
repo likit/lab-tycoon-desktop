@@ -1,7 +1,10 @@
+from server.main import app
 from http import HTTPStatus
 
 import PySimpleGUI as sg
 import requests
+
+logger = app.logger
 
 
 def create_register_window():
@@ -52,6 +55,7 @@ def create_singin_window():
             access_token = resp.json().get('access_token')
             message = resp.json().get('message')
             if resp.status_code == 200:
+                logger.info('USER %s SIGN IN' % values['username'])
                 sg.popup_ok(f'{message}')
                 break
             else:
@@ -210,6 +214,7 @@ def create_tmlt_test_window(access_token):
 
 
 def create_admin_window(access_token):
+    logger.info('OPEN ADMIN DIALOG')
     menu_def = [
         ['&Samples', ['&Tests', '&BioSource', 'S&pecimens']],
         ['&Tests', ['&List', '&Add TMLT test']],
@@ -369,6 +374,7 @@ def create_tmlt_test_form_window(data, access_token):
                 headers = {'Authorization': f'Bearer {access_token}'}
                 resp = requests.post(f'http://127.0.0.1:5000/api/admin/tests', headers=headers, json=values)
                 if resp.status_code == HTTPStatus.CREATED:
+                    logger.info(f'ADD NEW TEST: {values["code"]}')
                     sg.popup_ok(resp.json().get('message'))
                     break
                 else:
