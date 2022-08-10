@@ -21,7 +21,7 @@ with app.app_context():
         db.session.commit()
 
 
-sg.theme('DarkAmber')
+sg.theme('SystemDefault')
 
 layout = [
     [sg.Text('Lab Tycoon V.2022.1', font=('Arial', 34))],
@@ -77,7 +77,9 @@ while True:
         if access_token:
             create_admin_window(access_token)
         else:
-            sg.popup_error('Access denied.')
+            sg.popup_error('Access denied. Please sign in as an admin.')
+            access_token = create_singin_window()
+            window.find_element('-ADMIN-').click()
     elif event == '-ABOUT-':
         sg.popup_no_titlebar('This program is developed by Dr.Likit Preeyanon. '
                              'Please contact likit.pre@mahidol.edu for more information.', title='About')
