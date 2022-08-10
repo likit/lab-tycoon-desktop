@@ -107,10 +107,10 @@ class TestMethod(db.Model):
 class Test(db.Model):
     __tablename__ = 'tests'
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
-    code = db.Column('code', db.String(), nullable=False)
-    tmlt_code = db.Column('tmlt_code', db.String())
+    code = db.Column('code', db.String(), nullable=False, unique=True, index=True)
+    tmlt_code = db.Column('tmlt_code', db.String(), unique=True, index=True)
     tmlt_name = db.Column('tmlt_name', db.String())
-    loinc_no = db.Column('loinc_no', db.String())
+    loinc_no = db.Column('loinc_no', db.String(), unique=True)
     component = db.Column('component', db.String())
     label = db.Column('label', db.String(), nullable=False)
     scale = db.Column('scale', db.String(), nullable=False)
@@ -120,7 +120,7 @@ class Test(db.Model):
     desc = db.Column('desc', db.Text())
     unit = db.Column('unit', db.String(), nullable=False)
     order_type = db.Column('order_type', db.String())
-    cgd_code = db.Column('cgd_code', db.String())
+    cgd_code = db.Column('cgd_code', db.String(), unique=True)
     cgd_name = db.Column('cgd_name', db.String())
     cgd_price = db.Column('cgd_price', db.Numeric())
     panel = db.Column('panel', db.String())

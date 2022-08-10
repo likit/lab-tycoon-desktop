@@ -100,6 +100,7 @@ class UserResource(Resource):
             db.session.add(user)
             db.session.commit()
         except IntegrityError as e:
+            db.session.rollback()
             return {'message': str(e)}, HTTPStatus.BAD_REQUEST
 
         return {'message': 'New user have been registered.'}, HTTPStatus.CREATED
@@ -125,6 +126,10 @@ class TestResource(Resource):
             new_method_obj = TestMethod(method=data['method'])
             db.session.add(new_method_obj)
             test.method = new_method_obj
-        db.session.add(test)
-        db.session.commit()
+        try:
+            db.session.add(test)
+            db.session.commit()
+        except IntegrityError as e:
+            db.session.rollback()
+            return {'message': str(e)}, HTTPStatus.BAD_REQUEST
         return {'message': 'New test added.'}, HTTPStatus.CREATED
