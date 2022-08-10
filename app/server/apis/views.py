@@ -5,7 +5,7 @@ from http import HTTPStatus
 from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, verify_jwt_in_request, get_jwt
 from sqlalchemy.exc import IntegrityError
 
-from server.models import User, UserRole, BioSource
+from server.models import User, UserRole, BioSource, Test, Specimens, TestMethod
 from flask_restful import Resource
 
 from ..extensions import db
@@ -58,6 +58,7 @@ class AdminBioSource(Resource):
             })
         return {'data': data}
 
+
 class UserResource(Resource):
     @jwt_required()
     def get(self, username=None):
@@ -102,3 +103,28 @@ class UserResource(Resource):
             return {'message': str(e)}, HTTPStatus.BAD_REQUEST
 
         return {'message': 'New user have been registered.'}, HTTPStatus.CREATED
+
+
+class TestResource(Resource):
+    @admin_required()
+    def post(self):
+        data = request.get_json()
+        test = Test(**data)
+        specimens_obj = Specimens.query.filter_by(label=data['specimens']).first()
+        if specimens_obj:
+            test.specimens = specimens_obj
+        else:
+            new_specimens_obj = Specimens(label=data['specimens'])
+            db.session.add(new_specimens_obj)
+            test.specimens = new_specimens_obj
+
+        method_obj = TestMethod.query.filter_by(method=data['method']).first()
+        if method_obj:
+            test.method = method_obj
+        else:
+            new_method_obj = TestMethod(method=data['method'])
+            db.session.add(new_method_obj)
+            test.method = new_method_obj
+        db.session.add(test)
+        db.session.commit()
+        return {'message': 'New test added.'}, HTTPStatus.CREATED

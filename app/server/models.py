@@ -119,7 +119,7 @@ class Test(db.Model):
     price = db.Column('price', db.Numeric(), default=0.0, nullable=False)
     desc = db.Column('desc', db.Text())
     unit = db.Column('unit', db.String(), nullable=False)
-    tmlt_order_type = db.Column('tmlt_order_type', db.String())
+    order_type = db.Column('order_type', db.String())
     cgd_code = db.Column('cgd_code', db.String())
     cgd_name = db.Column('cgd_name', db.String())
     cgd_price = db.Column('cgd_price', db.Numeric())
@@ -127,6 +127,31 @@ class Test(db.Model):
     ref_min = db.Column('ref_min', db.Numeric())
     ref_max = db.Column('ref_max', db.Numeric())
     value_choices = db.Column('value_choices', db.String())
+    method = db.relationship(TestMethod, backref=db.backref('tests'))
+    specimens = db.relationship(Specimens, backref=db.backref('tests'))
+
+    def __init__(self, code, tmlt_code, tmlt_name, loinc_no, specimens, method,
+                 component, label, scale, price, desc, unit, order_type,
+                 cgd_code, cgd_name, cgd_price, panel, ref_min, ref_max, value_choices):
+        self.code = code
+        self.tmlt_code = tmlt_code
+        self.tmlt_name = tmlt_name
+        self.loinc_no = loinc_no
+        self.component = component
+        self.label = label
+        self.scale = scale
+        self.price = float(price) if price else None
+        self.desc = desc
+        self.unit = unit
+        self.order_type = order_type
+        self.cgd_code = cgd_code
+        self.cgd_name = cgd_name
+        self.cgd_price = float(cgd_price) if cgd_price else None
+        self.panel = panel
+        self.ref_min = float(ref_min) if ref_min else None
+        self.ref_max = float(ref_max) if ref_max else None
+        self.value_choices = value_choices
+
 
 
 class TestRecord(db.Model):
@@ -138,7 +163,7 @@ class TestRecord(db.Model):
 
     @property
     def value(self):
-        if self.test_item.test.value_type == 'numeric':
+        if self.test_item.test.value_type == 'Quantitative':
             return float(self._value)
         else:
             return self._value

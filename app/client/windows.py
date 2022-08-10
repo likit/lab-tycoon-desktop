@@ -1,3 +1,5 @@
+from http import HTTPStatus
+
 import PySimpleGUI as sg
 import requests
 
@@ -178,14 +180,20 @@ def create_tmlt_test_window(access_token):
                                     rec['orderType'],
                                     rec['scale'],
                                     rec['loincNum'],
+                                    rec['panel'],
+                                    rec['component'],
                                     ])
                 window.find_element('-TABLE-').update(values=records)
                 window.refresh()
             else:
                 sg.popup_error('Error occurred. Could not fetch data from TMLT server.')
         elif event == '-TABLE-':
-            row = values['-TABLE-'][0]
-            create_tmlt_test_form_window(records[row])
+            try:
+                row = values['-TABLE-'][0]
+            except IndexError:
+                pass
+            else:
+                create_tmlt_test_form_window(records[row], access_token)
     window.close()
 
     '''
@@ -321,23 +329,28 @@ def create_biosource_window(access_token):
     window.close()
 
 
-def create_tmlt_test_form_window(data):
+def create_tmlt_test_form_window(data, access_token):
     layout = [
         [sg.Text('Code', size=(8, 1)), sg.InputText(key='code')],
-        [sg.Text('Label', size=(8, 1)), sg.InputText(data[1], key='label')],
-        [sg.Text('Description', size=(8, 1)), sg.Multiline(size=(45, 10), key='desc')],
+        [sg.Text('Label', size=(8, 1)), sg.InputText(key='label')],
+        [sg.Text('Description', size=(8, 1)), sg.Multiline(data[1], size=(45, 10), key='desc')],
         [sg.Text('Price', size=(8, 1)), sg.InputText(key='price')],
         [sg.Text('TMLT Code', size=(8, 1)), sg.InputText(data[0], disabled=True, key='tmlt_code')],
         [sg.Text('TMLT Name', size=(8, 1)), sg.InputText(data[1], disabled=True, key='tmlt_name')],
         [sg.Text('Specimens', size=(8, 1)), sg.InputText(data[2], key='specimens')],
+        [sg.Text('Component', size=(8, 1)), sg.InputText(data[12], key='component')],
         [sg.Text('Method', size=(8, 1)), sg.InputText(data[3], key='method')],
         [sg.Text('Unit', size=(8, 1)), sg.InputText(data[4], key='unit')],
         [sg.Text('CGD Code', size=(8, 1)), sg.InputText(data[5], disabled=True, key='cgd_code')],
-        [sg.Text('CGD Name', size=(8, 1)), sg.InputText(data[6], key='cgd_code')],
-        [sg.Text('CGD Price', size=(8, 1)), sg.InputText(data[7], key='cgd_code')],
-        [sg.Text('Order Type', size=(8, 1)), sg.InputText(data[8], key='cgd_code')],
+        [sg.Text('CGD Name', size=(8, 1)), sg.InputText(data[6], key='cgd_name')],
+        [sg.Text('CGD Price', size=(8, 1)), sg.InputText(data[7], key='cgd_price')],
+        [sg.Text('Order Type', size=(8, 1)), sg.InputText(data[8], key='order_type')],
         [sg.Text('Scale', size=(8, 1)), sg.InputText(data[9], key='scale')],
         [sg.Text('LOINC Code', size=(8, 1)), sg.InputText(data[10], disabled=True, key='loinc_no')],
+        [sg.Text('Panel', size=(8, 1)), sg.InputText(data[11], key='panel')],
+        [sg.Text('Ref. Min', size=(8, 1)), sg.InputText(key='ref_min')],
+        [sg.Text('Ref. Max', size=(8, 1)), sg.InputText(key='ref_max')],
+        [sg.Text('Valuce Choices', size=(8, 1)), sg.Multiline(size=(45, 10), key='value_choices')],
         [sg.CloseButton('Close', size=(8, 1)), sg.Button('Add')]
     ]
 
@@ -345,6 +358,19 @@ def create_tmlt_test_form_window(data):
 
     while True:
         event, values = window.read()
+        print(event)
         if event in ['CloseButton', sg.WIN_CLOSED]:
             break
+        elif event == 'Add':
+            if access_token:
+                headers = {'Authorization': f'Bearer {access_token}'}
+                print(values)
+                resp = requests.post(f'http://127.0.0.1:5000/api/admin/tests', headers=headers, json=values)
+                if resp.status_code == HTTPStatus.CREATED:
+                    sg.popup_ok(resp.json().get('message'))
+                    break
+                else:
+                    sg.popup_error(resp.json().get('message'))
+            else:
+                sg.popup_error('Access denied')
     window.close()
