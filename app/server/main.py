@@ -2,7 +2,11 @@ from http import HTTPStatus
 
 from flask import Flask, request, jsonify
 
-from server.apis.views import UserResource, AdminUserListResource, AdminUserRoleResource, AdminBioSource, TestResource
+from server.apis.views import (UserResource,
+                               AdminUserListResource,
+                               AdminUserRoleResource,
+                               AdminBioSource,
+                               TestListResource)
 from server.extensions import db, flask_api, jwt
 
 app = Flask(__name__)
@@ -24,7 +28,7 @@ flask_api.add_resource(UserResource, '/users', '/users/<string:username>')
 flask_api.add_resource(AdminUserListResource, '/admin/users')
 flask_api.add_resource(AdminUserRoleResource, '/admin/users/<string:username>/roles')
 flask_api.add_resource(AdminBioSource, '/admin/biosources')
-flask_api.add_resource(TestResource, '/admin/tests')
+flask_api.add_resource(TestListResource, '/admin/tests')
 
 app.register_blueprint(api_bp)
 

@@ -212,7 +212,7 @@ def create_tmlt_test_window(access_token):
 def create_admin_window(access_token):
     menu_def = [
         ['&Samples', ['&Tests', '&BioSource', 'S&pecimens']],
-        ['&Tests', ['&Add TMLT test']],
+        ['&Tests', ['&List', '&Add TMLT test']],
     ]
     layout = [
         [sg.Menu(menu_def)],
@@ -232,6 +232,8 @@ def create_admin_window(access_token):
             create_biosource_window(access_token)
         elif event == 'Add TMLT test':
             create_tmlt_test_window(access_token)
+        elif event == 'List':
+            create_test_list_window(access_token)
     window.close()
 
 
@@ -365,13 +367,66 @@ def create_tmlt_test_form_window(data, access_token):
         elif event == 'Add':
             if access_token:
                 headers = {'Authorization': f'Bearer {access_token}'}
-                print(values)
                 resp = requests.post(f'http://127.0.0.1:5000/api/admin/tests', headers=headers, json=values)
                 if resp.status_code == HTTPStatus.CREATED:
                     sg.popup_ok(resp.json().get('message'))
                     break
                 else:
                     sg.popup_error(resp.json().get('message'))
+            else:
+                sg.popup_error('Access denied')
+    window.close()
+
+
+def load_all_tests(access_token):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/admin/tests', headers=headers)
+    tests = []
+    if resp.status_code == HTTPStatus.OK:
+        for t in resp.json().get('data'):
+            tests.append([
+                t['code'],
+                t['label'],
+                t['desc'],
+                t['tmlt_code'],
+                t['tmlt_name'],
+                t['specimens'],
+                t['method'],
+                t['unit'],
+                t['price'],
+                t['active'],
+            ])
+    return tests, resp.status_code
+
+
+def create_test_list_window(access_token):
+    tests, status_code = load_all_tests(access_token)
+    if not tests or status_code != HTTPStatus.OK:
+        sg.popup_error(status_code)
+    layout = [
+        [sg.Table(values=tests,
+                  headings=['Code', 'Label', 'Description',
+                            'TMLT Code', 'TMLT Name', 'Specimens',
+                            'Method', 'Unit', 'Price', 'Active'],
+                  key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)],
+        [sg.Button('Add'), sg.CloseButton('Close')],
+    ]
+
+    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Add':
+            if access_token:
+                create_tmlt_test_window(access_token)
+                tests, status_code = load_all_tests(access_token)
+                if not tests or status_code != HTTPStatus.OK:
+                    sg.popup_error(status_code)
+                else:
+                    window.find_element('-TABLE-').update(values=tests)
+                    window.refresh()
             else:
                 sg.popup_error('Access denied')
     window.close()

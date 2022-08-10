@@ -129,6 +129,7 @@ class Test(db.Model):
     value_choices = db.Column('value_choices', db.String())
     method = db.relationship(TestMethod, backref=db.backref('tests'))
     specimens = db.relationship(Specimens, backref=db.backref('tests'))
+    active = db.Column('active', db.Boolean(), default=True)
 
     def __init__(self, code, tmlt_code, tmlt_name, loinc_no, specimens, method,
                  component, label, scale, price, desc, unit, order_type,
@@ -151,6 +152,31 @@ class Test(db.Model):
         self.ref_min = float(ref_min) if ref_min else None
         self.ref_max = float(ref_max) if ref_max else None
         self.value_choices = value_choices
+
+    def to_dict(self):
+        return {
+            'code': self.code,
+            'tmlt_code': self.tmlt_code,
+            'tmlt_name': self.tmlt_name,
+            'loinc_no': self.loinc_no,
+            'component': self.component,
+            'label': self.label,
+            'scale': self.scale,
+            'price': float(self.price) if self.price else None,
+            'desc': self.desc,
+            'specimens': self.specimens.label,
+            'method': self.method.method,
+            'unit': self.unit,
+            'order_type': self.order_type,
+            'cgd_code': self.cgd_code,
+            'cgd_name': self.cgd_name,
+            'cgd_price': float(self.cgd_price) if self.cgd_price else None,
+            'panel': self.panel,
+            'ref_min': float(self.ref_min) if self.ref_min else None,
+            'ref_max': float(self.ref_max) if self.ref_max else None,
+            'value_choices': self.value_choices,
+            'active': self.active
+        }
 
 
 

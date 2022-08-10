@@ -106,7 +106,12 @@ class UserResource(Resource):
         return {'message': 'New user have been registered.'}, HTTPStatus.CREATED
 
 
-class TestResource(Resource):
+class TestListResource(Resource):
+    @jwt_required()
+    def get(self):
+        data = [d.to_dict() for d in Test.query.filter_by(active=True)]
+        return {'data': data, 'message': 'Done'}, HTTPStatus.OK
+
     @admin_required()
     def post(self):
         data = request.get_json()
