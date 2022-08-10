@@ -113,7 +113,7 @@ class Test(db.Model):
     loinc_no = db.Column('loinc_no', db.String())
     component = db.Column('component', db.String())
     label = db.Column('label', db.String(), nullable=False)
-    value_type = db.Column('value_type', db.String(), nullable=False)
+    scale = db.Column('scale', db.String(), nullable=False)
     specimens_id = db.Column(db.ForeignKey('specimens.id'))
     method_id = db.Column(db.ForeignKey('test_methods.id'))
     price = db.Column('price', db.Numeric(), default=0.0, nullable=False)
@@ -124,6 +124,9 @@ class Test(db.Model):
     cgd_name = db.Column('cgd_name', db.String())
     cgd_price = db.Column('cgd_price', db.Numeric())
     panel = db.Column('panel', db.String())
+    ref_min = db.Column('ref_min', db.Numeric())
+    ref_max = db.Column('ref_max', db.Numeric())
+    value_choices = db.Column('value_choices', db.String())
 
 
 class TestRecord(db.Model):

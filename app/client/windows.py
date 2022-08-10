@@ -167,11 +167,25 @@ def create_tmlt_test_window(access_token):
             if resp.status_code == 200:
                 records = []
                 for rec in resp.json().get('tmltData'):
-                    records.append([rec['tmltCode'], rec['tmltName'], rec['specimen'], rec['method'], rec['unit']])
+                    records.append([rec['tmltCode'],
+                                    rec['tmltName'],
+                                    rec['specimen'],
+                                    rec['method'],
+                                    rec['unit'],
+                                    rec['cgdCode'],
+                                    rec['cgdName'],
+                                    rec['cgdPrice'],
+                                    rec['orderType'],
+                                    rec['scale'],
+                                    rec['loincNum'],
+                                    ])
                 window.find_element('-TABLE-').update(values=records)
                 window.refresh()
             else:
                 sg.popup_error('Error occurred. Could not fetch data from TMLT server.')
+        elif event == '-TABLE-':
+            row = values['-TABLE-'][0]
+            create_tmlt_test_form_window(records[row])
     window.close()
 
     '''
@@ -304,4 +318,33 @@ def create_biosource_window(access_token):
             break
         elif event == 'Add':
             pass
+    window.close()
+
+
+def create_tmlt_test_form_window(data):
+    layout = [
+        [sg.Text('Code', size=(8, 1)), sg.InputText(key='code')],
+        [sg.Text('Label', size=(8, 1)), sg.InputText(data[1], key='label')],
+        [sg.Text('Description', size=(8, 1)), sg.Multiline(size=(45, 10), key='desc')],
+        [sg.Text('Price', size=(8, 1)), sg.InputText(key='price')],
+        [sg.Text('TMLT Code', size=(8, 1)), sg.InputText(data[0], disabled=True, key='tmlt_code')],
+        [sg.Text('TMLT Name', size=(8, 1)), sg.InputText(data[1], disabled=True, key='tmlt_name')],
+        [sg.Text('Specimens', size=(8, 1)), sg.InputText(data[2], key='specimens')],
+        [sg.Text('Method', size=(8, 1)), sg.InputText(data[3], key='method')],
+        [sg.Text('Unit', size=(8, 1)), sg.InputText(data[4], key='unit')],
+        [sg.Text('CGD Code', size=(8, 1)), sg.InputText(data[5], disabled=True, key='cgd_code')],
+        [sg.Text('CGD Name', size=(8, 1)), sg.InputText(data[6], key='cgd_code')],
+        [sg.Text('CGD Price', size=(8, 1)), sg.InputText(data[7], key='cgd_code')],
+        [sg.Text('Order Type', size=(8, 1)), sg.InputText(data[8], key='cgd_code')],
+        [sg.Text('Scale', size=(8, 1)), sg.InputText(data[9], key='scale')],
+        [sg.Text('LOINC Code', size=(8, 1)), sg.InputText(data[10], disabled=True, key='loinc_no')],
+        [sg.CloseButton('Close', size=(8, 1)), sg.Button('Add')]
+    ]
+
+    window = sg.Window('Test Form', layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
     window.close()
