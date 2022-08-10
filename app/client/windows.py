@@ -150,8 +150,9 @@ def create_tmlt_test_window(access_token):
     layout = [
         [sg.Text('Search Term'), sg.InputText(key='search')],
         [sg.Button('Submit'), sg.CloseButton('Close')],
-        [sg.Table(values=[], headings=['tmltCode', 'tmltName', 'specimens', 'method', 'unit'], key='-TABLE-',
-                  expand_x=True, expand_y=True, enable_events=True)]
+        [sg.Table(values=[],
+                  headings=['TMLT Code', 'TMLT Name', 'Specimens', 'Method', 'Unit'],
+                  key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)]
     ]
 
     window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True)
