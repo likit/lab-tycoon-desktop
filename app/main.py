@@ -1,16 +1,21 @@
 import os.path
+import random
 
 import PySimpleGUI as sg
 import threading
 import requests
+from faker import Faker
 from client.windows import *
 from server.main import app
 
 from server.models import *
 
+fake = Faker()
+
 with app.app_context():
     if not os.path.exists(os.path.join('server', 'app.db')):
         db.create_all()
+        print('Populating a default admin account...')
         user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
         user.password = '1234'
         for role in ['admin', 'approver', 'reporter']:
@@ -18,6 +23,23 @@ with app.app_context():
             db.session.add(r)
             user.roles.append(r)
         db.session.add(user)
+
+        print('Populating customers database...')
+        for i in range(100):
+            hn = fake.random_number(digits=10)
+            gender = random.choice(['male', 'female'])
+            firstname = fake.first_name()
+            lastname = fake.last_name()
+            address = fake.address()
+            dob = fake.date_of_birth()
+            db.session.add(Customer(
+                hn=hn,
+                gender=gender,
+                firstname=firstname,
+                lastname=lastname,
+                address=address,
+                dob=dob,
+            ))
         db.session.commit()
 
 

@@ -179,21 +179,61 @@ class Test(db.Model):
         }
 
 
-
 class TestRecord(db.Model):
     __tablename__ = 'test_records'
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
-    test_item_id = db.Column(db.ForeignKey('tests.id'))
+    order_item_id = db.Column(db.ForeignKey('lab_order_items.id'))
+    order_item = db.relationship('LabOrderItem', backref=db.backref('record', uselist=False))
     _value = db.Column('value', db.String(), nullable=True)
-    test_item = db.relationship(Test, backref=db.backref('records', lazy='dynamic', cascade='all, delete-orphan'))
 
     @property
     def value(self):
-        if self.test_item.test.value_type == 'Quantitative':
+        if self.order_item.test.value_type == 'Quantitative':
             return float(self._value)
         else:
             return self._value
 
     @property
     def value_string(self):
-        return f'{self._value} {self.unit}'
+        return f'{self._value} {self.order_item.test.unit}'
+
+
+class Customer(db.Model):
+    __tablename__ = 'customers'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    hn = db.Column('hn', db.String(), unique=True)
+    firstname = db.Column('firstname', db.String())
+    lastname = db.Column('lastname', db.String())
+    gender = db.Column('gender', db.String())
+    dob = db.Column('dob', db.Date())
+    address = db.Column('address', db.Text())
+
+
+class LabOrder(db.Model):
+    __tablename__ = 'lab_orders'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    customer_id = db.Column('customer_id', db.ForeignKey('customers.id'))
+    order_datetime = db.Column('order_datetime', db.DateTime())
+    cancelled_at = db.Column('cancelled_at', db.DateTime())
+    received_at = db.Column('received_at', db.DateTime())
+
+
+class LabOrderItem(db.Model):
+    __tablename__ = 'lab_order_items'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    order_id = db.Column('order_id', db.ForeignKey('lab_orders.id'))
+    test_id = db.Column('test_id', db.ForeignKey('tests.id'))
+    test = db.relationship(Test, backref=db.backref('order_items', lazy='dynamic', cascade='all, delete-orphan'))
+    order = db.relationship(LabOrder, backref=db.backref('order_items', lazy='dynamic', cascade='all, delete-orphan'))
+    comment = db.Column('comment', db.Text())
+    cancelled_at = db.Column('cancelled_at', db.DateTime())
+    received_at = db.Column('received_at', db.DateTime())
+
+
+class LabRejectRecord(db.Model):
+    __tablename__ = 'lab_reject_records'
+    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
+    order_item_id = db.Column('order_item_id', db.ForeignKey('lab_order_items.id'))
+    order_item = db.relationship(LabOrderItem, backref=db.backref('reject_records'))
+    rejected_at = db.Column('rejected_at', db.DateTime())
+    reason = db.Column('reason', db.Text())
