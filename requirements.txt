@@ -10,3 +10,5 @@ sql-formatter==0.6.2
 SQLAlchemy==1.4.39
 tabulate==0.8.9
 Werkzeug==2.0.3
+openpyxl==3.0.10
+Faker==13.15.1

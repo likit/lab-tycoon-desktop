@@ -34,6 +34,7 @@ layout = [
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Button('Admin', key='-ADMIN-'),
      sg.Button('About', key='-ABOUT-'),
+     sg.Button('SQL Tool', key='-sql-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -83,5 +84,7 @@ while True:
     elif event == '-ABOUT-':
         sg.popup_ok('This program is developed by Dr.Likit Preeyanon. '
                              'Please contact likit.pre@mahidol.edu for more information.', title='About')
+    elif event == '-sql-':
+        create_sql_window()
 
 window.close()
