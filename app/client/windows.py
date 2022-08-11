@@ -449,7 +449,7 @@ def create_test_list_window(access_token):
 
 def show_save_query_dialog():
     layout = [
-        [sg.Input(key='-filepath-'), sg.FileSaveAs('Browse')],
+        [sg.Input(key='-filepath-'), sg.FileSaveAs('Browse', file_types=(('Excel', 'xlsx'),))],
         [sg.Ok()]
     ]
     dialog = sg.Window('Save As', layout, modal=True)
@@ -511,10 +511,11 @@ def create_sql_window():
         elif event == '-save-data-':
             if not df.empty:
                 filepath = show_save_query_dialog()
-                if not filepath.endswith('xlsx'):
-                    filepath += '.xlsx'
-                df.to_excel(f'{filepath}', index=False)
-                sg.PopupQuickMessage('Data have been saved.')
+                if filepath:
+                    if not filepath.endswith('xlsx'):
+                        filepath += '.xlsx'
+                    df.to_excel(f'{filepath}', index=False)
+                    sg.PopupQuickMessage('Data have been saved.')
             else:
                 sg.PopupQuickMessage('The result data is empty.')
 
