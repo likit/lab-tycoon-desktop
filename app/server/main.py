@@ -6,7 +6,7 @@ from server.apis.views import (UserResource,
                                AdminUserListResource,
                                AdminUserRoleResource,
                                AdminBioSource,
-                               TestListResource)
+                               TestListResource, SimulationResource)
 from server.extensions import db, flask_api, jwt
 
 from logging.config import dictConfig
@@ -54,6 +54,7 @@ flask_api.add_resource(AdminUserListResource, '/admin/users')
 flask_api.add_resource(AdminUserRoleResource, '/admin/users/<string:username>/roles')
 flask_api.add_resource(AdminBioSource, '/admin/biosources')
 flask_api.add_resource(TestListResource, '/admin/tests')
+flask_api.add_resource(SimulationResource, '/simulations')
 
 app.register_blueprint(api_bp)
 

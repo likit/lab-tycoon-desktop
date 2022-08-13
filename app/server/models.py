@@ -216,6 +216,7 @@ class LabOrder(db.Model):
     order_datetime = db.Column('order_datetime', db.DateTime())
     cancelled_at = db.Column('cancelled_at', db.DateTime())
     received_at = db.Column('received_at', db.DateTime())
+    customer = db.relationship(Customer, backref=db.backref('orders'))
 
 
 class LabOrderItem(db.Model):

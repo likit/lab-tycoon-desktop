@@ -61,6 +61,7 @@ layout = [
      sg.Button('Admin', key='-ADMIN-'),
      sg.Button('About', key='-ABOUT-'),
      sg.Button('SQL Tool', key='-sql-'),
+     sg.Button('Simulate', key='-sim-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -112,5 +113,7 @@ while True:
                              'Please contact likit.pre@mahidol.edu for more information.', title='About')
     elif event == '-sql-':
         create_sql_window()
+    elif event == '-sim-':
+        create_simulation_window(access_token)
 
 window.close()

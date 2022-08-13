@@ -1,11 +1,14 @@
+import datetime
+import logging
 from functools import wraps
 
 from flask import request, jsonify
 from http import HTTPStatus
 from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, verify_jwt_in_request, get_jwt
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
-from server.models import User, UserRole, BioSource, Test, Specimens, TestMethod
+from server.models import User, UserRole, BioSource, Test, Specimens, TestMethod, Customer, LabOrder, LabOrderItem
 from flask_restful import Resource
 
 from ..extensions import db
@@ -138,3 +141,44 @@ class TestListResource(Resource):
             db.session.rollback()
             return {'message': str(e)}, HTTPStatus.BAD_REQUEST
         return {'message': 'New test added.'}, HTTPStatus.CREATED
+
+
+
+import simpy
+
+env = simpy.Environment()
+reception = simpy.Resource(env, capacity=1)
+instrument = simpy.Resource(env, capacity=1)
+
+
+def run_test(env, order_item, run_duration):
+    logging.info(f'Analyzing {order_item}...')
+    yield env.timeout(run_duration)
+    order_item.received_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
+    db.session.add(order_item)
+
+
+def check_item(env, order, waiting_time, check_duration):
+    yield env.timeout(waiting_time)
+    logging.info(f'{order} is arrived at {env.now}')
+
+    logging.info('Checking in...')
+    yield env.timeout(check_duration)
+    order.received_at = order.order_datetime + datetime.timedelta(minutes=env.now)
+    db.session.add(order)
+
+    for test in order.order_items:
+        yield env.process(run_test(env, test, 2))
+
+
+class SimulationResource(Resource):
+    @jwt_required()
+    def get(self):
+        customer = Customer.query.order_by(func.random()).first()
+        test = Test.query.order_by(func.random()).first()
+        order = LabOrder(customer=customer, order_datetime=datetime.datetime.now())
+        order_item = LabOrderItem(order=order, test=test)
+        env.process(check_item(env, order, 2, 1))
+        env.run()
+        db.session.commit()
+        return {'message': 'done'}

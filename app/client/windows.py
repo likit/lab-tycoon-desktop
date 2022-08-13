@@ -141,7 +141,7 @@ def create_user_list_window(access_token):
                 username = data[values['-TABLE-'][0]][3]
                 updated_roles = create_admin_user_role_window(access_token, username)
                 if updated_roles:
-                    data[values['-TABLE-'][0]][5] = ','.join([r for r,v in updated_roles.items() if v is True])
+                    data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated_roles.items() if v is True])
                 window.find_element('-TABLE-').update(values=data)
                 window.refresh()
     window.close()
@@ -456,7 +456,7 @@ def show_save_query_dialog():
     filepath = ''
     while True:
         event, values = dialog.read()
-        if event in (sg.WIN_CLOSED, ):
+        if event in (sg.WIN_CLOSED,):
             break
         elif event == 'Ok':
             filepath = values['-filepath-']
@@ -472,13 +472,13 @@ with app.app_context():
 
 def create_sql_window():
     layout = [
-        [sg.Text('Results'),],
+        [sg.Text('Results'), ],
         [sg.Multiline(key='-table-', size=(80, 10), reroute_stdout=True, disabled=True,
                       font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
         [sg.Button('Save Data', key='-save-data-')],
         [sg.Text('SQL Query')],
         [sg.Multiline(key='-query-', size=(80, 10), expand_y=True, expand_x=True,
-                      focus=True, font='Courier 13 bold',  text_color='blue')],
+                      focus=True, font='Courier 13 bold', text_color='blue')],
         [sg.Button('Run'), sg.Button('Format'), sg.Button('Save Query', key='-save-query-'),
          sg.Button('Clear'), sg.Button('Exit')],
         [sg.Text('Console')],
@@ -531,4 +531,24 @@ def create_sql_window():
                 window['-table-'].update('')
                 print(tabulate(df, headers='keys', tablefmt='psql'))
 
+    window.close()
+
+
+def create_simulation_window(access_token):
+    layout = [
+        [sg.Multiline(key='-console-', size=(80, 10), reroute_stdout=True, disabled=True,
+                      font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
+        [sg.Button('Run'), sg.CloseButton('Close')],
+    ]
+
+    window = sg.Window('Simulation', layout=layout, modal=True, resizable=True)
+
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+        elif event == 'Run':
+            headers = {'Authorization': f'Bearer {access_token}'}
+            resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
+            sg.popup_ok(resp.json().get('message'))
     window.close()
