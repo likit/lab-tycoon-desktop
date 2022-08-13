@@ -45,7 +45,7 @@ def create_register_window():
     window.close()
 
 
-def create_singin_window():
+def create_signin_window():
     layout = [
         [sg.Text('Username', size=(8, 1)), sg.InputText(focus=True, key='username')],
         [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*', key='password')],
@@ -466,7 +466,8 @@ def show_save_query_dialog():
     return filepath
 
 
-engine = create_engine(f"sqlite:///{os.path.join('server', 'app.db')}")
+with app.app_context():
+    engine = create_engine(db.engine.url)
 
 
 def create_sql_window():

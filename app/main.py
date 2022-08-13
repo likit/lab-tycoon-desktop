@@ -1,6 +1,8 @@
 import os.path
 import random
 
+BASE_URL = os.getcwd()
+
 import PySimpleGUI as sg
 import threading
 import requests
@@ -12,8 +14,10 @@ from server.models import *
 
 fake = Faker()
 
+base_url = os.path.dirname(os.path.abspath(__file__))
+
 with app.app_context():
-    if not os.path.exists(os.path.join('server', 'app.db')):
+    if not os.path.exists(os.path.join(base_url, 'server', 'data', 'app.db')):
         db.create_all()
         print('Populating a default admin account...')
         user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
@@ -75,7 +79,7 @@ while True:
     elif event == '-REGISTER-':
         create_register_window()
     elif event == '-SIGNIN-':
-        access_token = create_singin_window()
+        access_token = create_signin_window()
         if access_token:
             window.find_element('-SIGNOUT-').update(visible=True)
             window.find_element('-EDIT-PROFILE-').update(visible=True)
@@ -101,7 +105,7 @@ while True:
             create_admin_window(access_token)
         else:
             sg.popup_error('Access denied. Please sign in as an admin.')
-            access_token = create_singin_window()
+            access_token = create_signin_window()
             window.find_element('-ADMIN-').click()
     elif event == '-ABOUT-':
         sg.popup_ok('This program is developed by Dr.Likit Preeyanon. '
