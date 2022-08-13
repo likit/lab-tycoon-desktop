@@ -179,25 +179,6 @@ class Test(db.Model):
         }
 
 
-class TestRecord(db.Model):
-    __tablename__ = 'test_records'
-    id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
-    order_item_id = db.Column(db.ForeignKey('lab_order_items.id'))
-    order_item = db.relationship('LabOrderItem', backref=db.backref('record', uselist=False))
-    _value = db.Column('value', db.String(), nullable=True)
-
-    @property
-    def value(self):
-        if self.order_item.test.value_type == 'Quantitative':
-            return float(self._value)
-        else:
-            return self._value
-
-    @property
-    def value_string(self):
-        return f'{self._value} {self.order_item.test.unit}'
-
-
 class Customer(db.Model):
     __tablename__ = 'customers'
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
@@ -228,7 +209,25 @@ class LabOrderItem(db.Model):
     order = db.relationship(LabOrder, backref=db.backref('order_items', lazy='dynamic', cascade='all, delete-orphan'))
     comment = db.Column('comment', db.Text())
     cancelled_at = db.Column('cancelled_at', db.DateTime())
-    received_at = db.Column('received_at', db.DateTime())
+    finished_at = db.Column('finished_at', db.DateTime())
+    reported_at = db.Column('reported_at', db.DateTime())
+    approved_at = db.Column('approved_at', db.DateTime())
+    approver_id = db.Column('approver_id', db.ForeignKey('users.id'))
+    reporter_id = db.Column('reporter_id', db.ForeignKey('users.id'))
+    approver = db.relationship(User, foreign_keys=[approver_id])
+    reporter = db.relationship(User, foreign_keys=[reporter_id])
+    _value = db.Column('value', db.String(), nullable=True)
+
+    @property
+    def value(self):
+        if self.order_item.test.value_type == 'Quantitative':
+            return float(self._value)
+        else:
+            return self._value
+
+    @property
+    def value_string(self):
+        return f'{self._value} {self.order_item.test.unit}'
 
 
 class LabRejectRecord(db.Model):

@@ -1,6 +1,7 @@
 import datetime
 import logging
 from functools import wraps
+import random
 
 from flask import request, jsonify
 from http import HTTPStatus
@@ -146,28 +147,52 @@ class TestListResource(Resource):
 
 import simpy
 
-env = simpy.Environment()
+env = simpy.rt.RealtimeEnvironment(factor=1.0, strict=False)
 reception = simpy.Resource(env, capacity=1)
 instrument = simpy.Resource(env, capacity=1)
 
 
 def run_test(env, order_item, run_duration):
-    logging.info(f'Analyzing {order_item}...')
-    yield env.timeout(run_duration)
-    order_item.received_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
-    db.session.add(order_item)
+    reporters = [u for u in User.query.all() if 'reporter' in u.all_roles]
+    approvers = [u for u in User.query.all() if 'approver' in u.all_roles]
+
+    reporter = simpy.Resource(env, capacity=len(reporters))
+    approver = simpy.Resource(env, capacity=len(approvers))
+
+    with instrument.request() as req:
+        yield req
+
+        logging.info(f'Analyzing {order_item}...')
+        yield env.timeout(run_duration)
+        order_item.finished_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
+
+    with reporter.request() as req:
+        yield req
+        logging.info(f'Reporting {order_item}...')
+        order_item.reporter = random.choices(reporters)[0]
+        order_item.reported_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
+
+    with approver.request() as req:
+        yield req
+        logging.info(f'Approving {order_item}...')
+        order_item.approved_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
+        order_item.approver = random.choices(approvers)[0]
+        db.session.add(order_item)
 
 
 def check_item(env, order, waiting_time, check_duration):
     yield env.timeout(waiting_time)
     logging.info(f'{order} is arrived at {env.now}')
 
-    logging.info('Checking in...')
-    yield env.timeout(check_duration)
-    order.received_at = order.order_datetime + datetime.timedelta(minutes=env.now)
-    db.session.add(order)
+    with reception.request() as req:
+        yield req
 
-    for test in order.order_items:
+        logging.info('Checking in...')
+        yield env.timeout(check_duration)
+        order.received_at = order.order_datetime + datetime.timedelta(minutes=env.now)
+        db.session.add(order)
+
+    for test in order.order_items.all():
         yield env.process(run_test(env, test, 2))
 
 
@@ -175,9 +200,13 @@ class SimulationResource(Resource):
     @jwt_required()
     def get(self):
         customer = Customer.query.order_by(func.random()).first()
-        test = Test.query.order_by(func.random()).first()
+        tests = [t for t in Test.query.all()]
+        logging.info(tests)
         order = LabOrder(customer=customer, order_datetime=datetime.datetime.now())
-        order_item = LabOrderItem(order=order, test=test)
+        n = 5 if len(tests) > 5 else len(tests)
+        for test in random.choices(tests, k=n):
+            order_item = LabOrderItem(test=test)
+            order.order_items.append(order_item)
         env.process(check_item(env, order, 2, 1))
         env.run()
         db.session.commit()
