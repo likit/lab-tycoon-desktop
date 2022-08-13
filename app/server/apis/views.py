@@ -211,3 +211,20 @@ class SimulationResource(Resource):
         env.run()
         db.session.commit()
         return {'message': 'done'}
+
+
+class OrderListResource(Resource):
+    @jwt_required()
+    def get(self):
+        orders = []
+        for order in LabOrder.query.order_by(LabOrder.order_datetime.desc()):
+            orders.append({
+                'id': order.id,
+                'order_datetime': order.order_datetime.isoformat(),
+                'received_datetime': order.received_at.isoformat(),
+                'firstname': order.customer.firstname,
+                'lastname': order.customer.lastname,
+                'hn': order.customer.hn,
+                'items': order.order_items.count()
+            })
+        return {'data': orders}

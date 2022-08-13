@@ -62,6 +62,7 @@ layout = [
      sg.Button('About', key='-ABOUT-'),
      sg.Button('SQL Tool', key='-sql-'),
      sg.Button('Simulate', key='-sim-'),
+     sg.Button('Order List', key='-order-list-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -115,5 +116,7 @@ while True:
         create_sql_window()
     elif event == '-sim-':
         create_simulation_window(access_token)
+    elif event == '-order-list-':
+        create_order_list_window(access_token)
 
 window.close()

@@ -552,3 +552,34 @@ def create_simulation_window(access_token):
             resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
             sg.popup_ok(resp.json().get('message'))
     window.close()
+
+
+def create_order_list_window(access_token):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
+    data = []
+    if resp.status_code == 200:
+        for order in resp.json().get('data'):
+            data.append([
+                order['id'],
+                order['hn'],
+                order['order_datetime'],
+                order['received_datetime'],
+                order['firstname'],
+                order['lastname'],
+                order['items']
+            ])
+
+    layout = [
+        [sg.Table(values=data, headings=['ID', 'HN', 'Order At', 'Received At',
+                                         'Firstname', 'Lastname', 'Items'])],
+        [sg.CloseButton('Close')]
+    ]
+
+    window = sg.Window('Order List', layout=layout, modal=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+    window.close()
+
