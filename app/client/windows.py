@@ -613,7 +613,9 @@ def create_order_item_list_window(access_token, lab_order_id):
                 item['tmlt_name'],
                 item['value_string'],
                 format_datetime(item['reported_at']),
+                item['reporter_name'],
                 format_datetime(item['approved_at']),
+                item['approver_name'],
                 format_datetime(item['finished_at']),
                 format_datetime(item['cancelled_at']),
             ])
@@ -622,7 +624,7 @@ def create_order_item_list_window(access_token, lab_order_id):
             [sg.Text('Name'), sg.Text(f"{data['firstname']} {data['lastname']}")],
             [sg.Text('Ordered At'), sg.Text(f"{format_datetime(data['order_datetime'])}")],
             [sg.Table(values=items, headings=['Item ID', 'Code', 'Name', 'Result', 'Reported At',
-                                              'Approved At', 'Finished At', 'Cancelled At'],
+                                              'Reporter', 'Approved At', 'Approver', 'Finished At', 'Cancelled At'],
                       key="-ORDER-ITEM-TABLE-",
                       enable_events=True,
                       )],
