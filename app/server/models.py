@@ -221,14 +221,30 @@ class LabOrderItem(db.Model):
 
     @property
     def value(self):
-        if self.order_item.test.value_type == 'Quantitative':
+        if self._value and self.test.scale == 'Quantitative':
             return float(self._value)
         else:
             return self._value
 
     @property
     def value_string(self):
-        return f'{self._value} {self.order_item.test.unit}'
+        if self._value:
+            return f'{self._value} {self.test.unit}'
+        else:
+            return 'N/A'
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'code': self.test.code,
+            'tmlt_name': self.test.tmlt_name,
+            'value': self.value,
+            'value_string': self.value_string,
+            'reported_at': self.reported_at.isoformat() if self.reported_at else None,
+            'approved_at': self.approved_at.isoformat() if self.approved_at else None,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+            'cancelled_at': self.cancelled_a.isoformat() if self.cancelled_at else None,
+        }
 
 
 class LabRejectRecord(db.Model):

@@ -228,3 +228,26 @@ class OrderListResource(Resource):
                 'items': order.order_items.count()
             })
         return {'data': orders}
+
+
+class OrderResource(Resource):
+    @jwt_required()
+    def get(self, lab_order_id):
+        order = LabOrder.query.get(lab_order_id)
+        if not order:
+            return {'message': 'Lab order not found.'}, HTTPStatus.NOT_FOUND
+        else:
+            return {
+                'data': {
+                    'id': order.id,
+                    'customer_id': order.customer_id,
+                    'order_datetime': order.order_datetime.isoformat() if order.order_datetime else None,
+                    'released_at': order.released_at.isoformat() if order.released_at else None,
+                    'cancelled_at': order.cancelled_at.isoformat() if order.cancelled_at else None,
+                    'received_at': order.received_at.isoformat() if order.received_at else None,
+                    'firstname': order.customer.firstname,
+                    'lastname': order.customer.lastname,
+                    'hn': order.customer.hn,
+                    'items': [t.to_dict() for t in order.order_items]
+                }
+            }
