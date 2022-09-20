@@ -91,6 +91,7 @@ while True:
             resp = requests.delete('http://127.0.0.1:5000/auth/sign-out', headers=headers)
             if resp.status_code == 200:
                 sg.popup_auto_close('You have logged out.')
+                # TODO: store current_user in the database so that it is accessible outside Flask
                 window.find_element('-SIGNOUT-').update(visible=False)
                 window.find_element('-SIGNIN-').update(visible=True)
                 window.find_element('-EDIT-PROFILE-').update(visible=True)

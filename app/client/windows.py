@@ -74,7 +74,7 @@ def create_signin_window():
             access_token = resp.json().get('access_token')
             message = resp.json().get('message')
             if resp.status_code == 200:
-                logger.info('USER %s SIGN IN' % values['username'])
+                logger.info('USER %s SIGNED IN' % values['username'])
                 sg.popup_ok(f'{message}')
                 break
             else:

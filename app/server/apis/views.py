@@ -15,7 +15,6 @@ from flask_restful import Resource
 from ..extensions import db
 
 logger = logging.getLogger('client')
-stdout_logger = logging.getLogger('stdout')
 
 
 def admin_required():
@@ -285,16 +284,19 @@ class OrderItemResource(Resource):
                     if key == 'cancelled_at':
                         message = 'The item has been cancelled.'
                         item.canceller = current_user
+                        logger.info(f'{current_user.username} CANCELLED LAB ORDER ITEM ID={item.id}')
                     elif key == 'reported_at':
                         message = 'The report has been made.'
                         if current_user.has_role('reporter'):
                             item.reporter = current_user
+                            logger.info(f'{current_user.username} REPORTED LAB ORDER ITEM ID={item.id}')
                         else:
                             return {'message': 'Reporter role is required.'}, HTTPStatus.UNAUTHORIZED
                     elif key == 'approved_at':
                         message = 'The item has been approved.'
                         if current_user.has_role('approver'):
                             item.approver = current_user
+                            logger.info(f'{current_user.username} APPROVED LAB ORDER ITEM ID={item.id}')
                         else:
                             return {'message': 'Approver role is required.'}, HTTPStatus.UNAUTHORIZED
                 else:
