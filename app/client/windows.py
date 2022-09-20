@@ -544,14 +544,29 @@ def create_sql_window():
     window.close()
 
 
-def create_simulation_window(access_token):
+def create_analysis_window(access_token):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/order-items', headers=headers, params={'unfinished': 'true'})
+    if resp.status_code == 200:
+        items = []
+        data = resp.json().get('data')
+        for item in data:
+            items.append([
+                item['id'],
+                item['code'],
+                item['label'],
+                item['tmlt_name'],
+                format_datetime(item['received_at']),
+                item['hn'],
+                item['patient']
+            ])
     layout = [
-        [sg.Multiline(key='-console-', size=(80, 10), reroute_stdout=True, disabled=True,
-                      font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
-        [sg.Button('Run'), sg.CloseButton('Close')],
+        [sg.Table(headings=['ID', 'Code', 'Label', 'TMLT Name', 'Received At', 'HN', 'Patient'],
+                  values=items, key='-TABLE-', enable_events=True)],
+        [sg.Button('Run', button_color=('white', 'green')), sg.CloseButton('Close'), sg.Help()],
     ]
 
-    window = sg.Window('Simulation', layout=layout, modal=True, resizable=True)
+    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True)
 
     while True:
         event, values = window.read()
@@ -559,8 +574,11 @@ def create_simulation_window(access_token):
             break
         elif event == 'Run':
             headers = {'Authorization': f'Bearer {access_token}'}
-            resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
+            resp = requests.get(f'http://127.0.0.1:5000/api/analyses', headers=headers)
             sg.popup_ok(resp.json().get('message'))
+        elif event == 'Help':
+            sg.popup_ok('The list shows all test that waiting to be analyzed.'
+                        ' If you click run, all tests will be sent to virtual analyzers.')
     window.close()
 
 
@@ -573,8 +591,8 @@ def create_order_list_window(access_token):
             data.append([
                 order['id'],
                 order['hn'],
-                order['order_datetime'],
-                order['received_datetime'],
+                format_datetime(order['order_datetime']),
+                format_datetime(order['received_datetime']),
                 order['firstname'],
                 order['lastname'],
                 order['items']
@@ -586,7 +604,7 @@ def create_order_list_window(access_token):
                   key="-ORDER-TABLE-",
                   enable_events=True,
                   )],
-        [sg.CloseButton('Close')]
+        [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')]
     ]
 
     window = sg.Window('Order List', layout=layout, modal=True)
@@ -595,8 +613,24 @@ def create_order_list_window(access_token):
         if event in ('Exit', sg.WIN_CLOSED):
             break
         elif event == '-ORDER-TABLE-':
-            print(event, values)
             create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
+        elif event == '-GET-ORDER-':
+            headers = {'Authorization': f'Bearer {access_token}'}
+            resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
+            resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
+            data = []
+            if resp.status_code == 200:
+                for order in resp.json().get('data'):
+                    data.append([
+                        order['id'],
+                        order['hn'],
+                        order['order_datetime'],
+                        order['received_datetime'],
+                        order['firstname'],
+                        order['lastname'],
+                        order['items']
+                    ])
+            window.find_element('-ORDER-TABLE-').update(values=data)
     window.close()
 
 
@@ -607,7 +641,6 @@ def create_order_item_list_window(access_token, lab_order_id):
         items = []
         data = resp.json().get('data')
         for item in data['items']:
-            print(item)
             items.append([
                 item['id'],
                 item['code'],
@@ -689,6 +722,7 @@ def create_item_detail_window(access_token, item_id):
                                       json={'cancelled_at': datetime.now().isoformat()})
                 if resp.status_code == 200:
                     sg.popup_ok('The item has been cancelled.')
+                    break
                 else:
                     sg.popup_error(f'{resp.json()["message"]}')
     window.close()

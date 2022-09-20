@@ -189,6 +189,10 @@ class Customer(db.Model):
     dob = db.Column('dob', db.Date())
     address = db.Column('address', db.Text())
 
+    @property
+    def fullname(self):
+        return f'{self.firstname} {self.lastname}'
+
 
 class LabOrder(db.Model):
     __tablename__ = 'lab_orders'
@@ -215,8 +219,10 @@ class LabOrderItem(db.Model):
     approved_at = db.Column('approved_at', db.DateTime())
     approver_id = db.Column('approver_id', db.ForeignKey('users.id'))
     reporter_id = db.Column('reporter_id', db.ForeignKey('users.id'))
+    canceller_id = db.Column('canceller_id', db.ForeignKey('users.id'))
     approver = db.relationship(User, foreign_keys=[approver_id])
     reporter = db.relationship(User, foreign_keys=[reporter_id])
+    canceller = db.relationship(User, foreign_keys=[canceller_id])
     _value = db.Column('value', db.String(), nullable=True)
 
     @property
@@ -239,6 +245,10 @@ class LabOrderItem(db.Model):
             'code': self.test.code,
             'tmlt_name': self.test.tmlt_name,
             'value': self.value,
+            'label': self.test.label,
+            'hn': self.order.customer.hn,
+            'patient': self.order.customer.fullname,
+            'received_at': self.order.received_at.isoformat() if self.order.received_at else None,
             'value_string': self.value_string,
             'reported_at': self.reported_at.isoformat() if self.reported_at else None,
             'approved_at': self.approved_at.isoformat() if self.approved_at else None,

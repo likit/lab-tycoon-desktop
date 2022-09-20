@@ -14,8 +14,8 @@ from flask_restful import Resource
 
 from ..extensions import db
 
-
 logger = logging.getLogger('client')
+stdout_logger = logging.getLogger('stdout')
 
 
 def admin_required():
@@ -151,37 +151,9 @@ class TestListResource(Resource):
 
 import simpy
 
-env = simpy.rt.RealtimeEnvironment(factor=1.0, strict=False)
+env = simpy.rt.RealtimeEnvironment(factor=0.1, strict=False)
 reception = simpy.Resource(env, capacity=1)
 instrument = simpy.Resource(env, capacity=1)
-
-
-def run_test(env, order_item, run_duration):
-    reporters = [u for u in User.query.all() if 'reporter' in u.all_roles]
-    approvers = [u for u in User.query.all() if 'approver' in u.all_roles]
-
-    reporter = simpy.Resource(env, capacity=len(reporters))
-    approver = simpy.Resource(env, capacity=len(approvers))
-
-    with instrument.request() as req:
-        yield req
-
-        logging.info(f'Analyzing {order_item}...')
-        yield env.timeout(run_duration)
-        order_item.finished_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
-
-    with reporter.request() as req:
-        yield req
-        logging.info(f'Reporting {order_item}...')
-        order_item.reporter = random.choices(reporters)[0]
-        order_item.reported_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
-
-    with approver.request() as req:
-        yield req
-        logging.info(f'Approving {order_item}...')
-        order_item.approved_at = order_item.order.order_datetime + datetime.timedelta(minutes=env.now)
-        order_item.approver = random.choices(approvers)[0]
-        db.session.add(order_item)
 
 
 def check_item(env, order, waiting_time, check_duration):
@@ -198,9 +170,16 @@ def check_item(env, order, waiting_time, check_duration):
     db.session.commit()
 
 
-def run_test(env, order):
-    for test in order.order_items.all():
-        yield env.process(run_test(env, test, 2))
+def run_test(env, item, duration):
+    start_datetime = datetime.datetime.now()
+    with instrument.request() as req:
+        yield req
+        logger.info(f'LAB ORDER ITEM ID={item.id} STARTED ANALYZING AT {start_datetime + datetime.timedelta(minutes=env.now)}')
+        yield env.timeout(duration)
+        item.finished_at = start_datetime + datetime.timedelta(minutes=env.now)
+        logger.info(f'LAB ORDER ITEM ID={item.id} FINISHED AT {item.finished_at}')
+        db.session.add(item)
+        db.session.commit()
 
 
 class SimulationResource(Resource):
@@ -217,6 +196,19 @@ class SimulationResource(Resource):
         env.run()
         db.session.commit()
         return {'message': 'done'}
+
+
+class AnalyzerResource(Resource):
+    @jwt_required()
+    def get(self):
+        items = LabOrderItem.query.filter(LabOrderItem.finished_at==None)\
+            .filter(LabOrderItem.cancelled_at==None).all()
+        if not items:
+            return {'message': 'Nothing to analyze.'}, HTTPStatus.OK
+        for item in items:
+            env.process(run_test(env, item, random.randint(10, 40)))
+        env.run()
+        return {'message': 'Analyses finished.'}, HTTPStatus.OK
 
 
 class OrderListResource(Resource):
@@ -259,6 +251,18 @@ class OrderResource(Resource):
             }
 
 
+class OrderItemListResource(Resource):
+    @jwt_required()
+    def get(self):
+        unfinished = request.args.get('unfinished')
+        if unfinished == 'true':
+            items = LabOrderItem.query.filter(LabOrderItem.finished_at==None)\
+                .filter(LabOrderItem.cancelled_at==None).all()
+        else:
+            items = LabOrderItem.query.all()
+        return {'data': [t.to_dict() for t in items]}
+
+
 class OrderItemResource(Resource):
     @jwt_required()
     def get(self, lab_order_item_id):
@@ -276,8 +280,10 @@ class OrderItemResource(Resource):
         else:
             data = request.get_json()
             for key in data:
-                if key in ['cancelled_at', 'approved_at', 'reported_at', 'finished_at']:
+                if key in ['cancelled_at']:
                     setattr(item, key, datetime.datetime.fromisoformat(data[key]))
+                    if key == 'cancelled_at':
+                        item.canceller = current_user
                 else:
                     setattr(item, key, data[key])
             db.session.add(item)
