@@ -113,7 +113,7 @@ while True:
         if not access_token:
             sg.popup_error('Please sign in to access this section.', title='Access Denied')
         else:
-            create_sql_window(access_token)
+            create_sql_window()
     elif event == '-sim-':
         create_simulation_window(access_token)
     elif event == '-order-list-':
