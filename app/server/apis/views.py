@@ -15,6 +15,9 @@ from flask_restful import Resource
 from ..extensions import db
 
 
+logger = logging.getLogger('client')
+
+
 def admin_required():
     def wrapper(fn):
         @wraps(fn)
@@ -25,7 +28,9 @@ def admin_required():
                 return fn(*args, **kwargs)
             else:
                 return {'message': 'Admins Only'}, 403
+
         return decorator
+
     return wrapper
 
 
@@ -144,7 +149,6 @@ class TestListResource(Resource):
         return {'message': 'New test added.'}, HTTPStatus.CREATED
 
 
-
 import simpy
 
 env = simpy.rt.RealtimeEnvironment(factor=1.0, strict=False)
@@ -182,7 +186,6 @@ def run_test(env, order_item, run_duration):
 
 def check_item(env, order, waiting_time, check_duration):
     yield env.timeout(waiting_time)
-    logging.info(f'{order} is arrived at {env.now}')
 
     with reception.request() as req:
         yield req
@@ -190,8 +193,12 @@ def check_item(env, order, waiting_time, check_duration):
         logging.info('Checking in...')
         yield env.timeout(check_duration)
         order.received_at = order.order_datetime + datetime.timedelta(minutes=env.now)
+        logger.info(f'LAB ORDER ID={order.id} RECEIVED AT {order.received_at}')
         db.session.add(order)
+    db.session.commit()
 
+
+def run_test(env, order):
     for test in order.order_items.all():
         yield env.process(run_test(env, test, 2))
 
@@ -201,7 +208,6 @@ class SimulationResource(Resource):
     def get(self):
         customer = Customer.query.order_by(func.random()).first()
         tests = [t for t in Test.query.all()]
-        logging.info(tests)
         order = LabOrder(customer=customer, order_datetime=datetime.datetime.now())
         n = 5 if len(tests) > 5 else len(tests)
         for test in random.choices(tests, k=n):
