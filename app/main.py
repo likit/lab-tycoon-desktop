@@ -99,22 +99,26 @@ while True:
         if access_token:
             create_profile_window(access_token)
         else:
-            sg.popup_error('Access denied.')
+            sg.popup_error('Please sign in to access this section.', title='Access Denied')
     elif event == '-ADMIN-':
         if access_token:
             create_admin_window(access_token)
         else:
             sg.popup_error('Access denied. Please sign in as an admin.')
-            access_token = create_signin_window()
-            window.find_element('-ADMIN-').click()
     elif event == '-ABOUT-':
-        sg.popup_ok('This program is developed by Dr.Likit Preeyanon. '
+        sg.popup_ok('This program is developed by Likit Preeyanon. '
                     'Please contact likit.pre@mahidol.edu for more information.', title='About')
     elif event == '-sql-':
-        create_sql_window()
+        if not access_token:
+            sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        else:
+            create_sql_window(access_token)
     elif event == '-sim-':
         create_simulation_window(access_token)
     elif event == '-order-list-':
-        create_order_list_window(access_token)
+        if not access_token:
+            sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        else:
+            create_order_list_window(access_token)
 
 window.close()
