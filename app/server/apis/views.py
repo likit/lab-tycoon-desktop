@@ -257,3 +257,29 @@ class OrderResource(Resource):
                     'items': [t.to_dict() for t in order.order_items]
                 }
             }
+
+
+class OrderItemResource(Resource):
+    @jwt_required()
+    def get(self, lab_order_item_id):
+        item = LabOrderItem.query.get(lab_order_item_id)
+        if not item:
+            return {'message': 'Lab order item not found.'}, HTTPStatus.NOT_FOUND
+        else:
+            return {'data': item.to_dict()}
+
+    @jwt_required()
+    def patch(self, lab_order_item_id):
+        item = LabOrderItem.query.get(lab_order_item_id)
+        if not item:
+            return {'message': 'Lab order item not found.'}, HTTPStatus.NOT_FOUND
+        else:
+            data = request.get_json()
+            for key in data:
+                if key in ['cancelled_at', 'approved_at', 'reported_at', 'finished_at']:
+                    setattr(item, key, datetime.datetime.fromisoformat(data[key]))
+                else:
+                    setattr(item, key, data[key])
+            db.session.add(item)
+            db.session.commit()
+            return {'message': 'Cancellation completed.'}, HTTPStatus.OK

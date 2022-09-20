@@ -637,7 +637,7 @@ def create_order_item_list_window(access_token, lab_order_id):
             if event in ('Exit', sg.WIN_CLOSED):
                 break
             elif event == '-ORDER-ITEM-TABLE-':
-                print(event, values)
+                create_item_detail_window(access_token, items[values['-ORDER-ITEM-TABLE-'][0]][0])
         window.close()
     else:
         sg.popup_error(f"{resp.json().get('message')}")
@@ -655,4 +655,40 @@ def create_logging_window(access_token):
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
+    window.close()
+
+
+def create_item_detail_window(access_token, item_id):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/order-items/{item_id}', headers=headers)
+    if resp.status_code != 200:
+        sg.popup_error('Cannot load item detail.')
+        return
+
+    item = resp.json().get('data')
+    if item['cancelled_at']:
+        actions = [],
+    else:
+        actions = [sg.Button('Update', button_color=('white', 'green')), sg.Cancel(button_color=('white', 'red'))],
+    layout = [
+        [sg.Text('ID', size=(8, 1)), sg.Text(item_id)],
+        [sg.Text('Code', size=(8, 1)), sg.Text(item['code'])],
+        actions,
+        [sg.CloseButton('Close', button_color=('white', 'red')), sg.Help()],
+    ]
+    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+        elif event == 'Cancel':
+            response = sg.popup_ok_cancel('Are you sure want to cancel this item?')
+            if response == 'OK':
+                resp = requests.patch(f'http://127.0.0.1:5000/api/order-items/{item_id}',
+                                      headers=headers,
+                                      json={'cancelled_at': datetime.now().isoformat()})
+                if resp.status_code == 200:
+                    sg.popup_ok('The item has been cancelled.')
+                else:
+                    sg.popup_error(f'{resp.json()["message"]}')
     window.close()

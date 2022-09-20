@@ -243,7 +243,7 @@ class LabOrderItem(db.Model):
             'reported_at': self.reported_at.isoformat() if self.reported_at else None,
             'approved_at': self.approved_at.isoformat() if self.approved_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
-            'cancelled_at': self.cancelled_a.isoformat() if self.cancelled_at else None,
+            'cancelled_at': self.cancelled_at.isoformat() if self.cancelled_at else None,
             'approver_name': self.approver.lastname if self.approver else None,
             'reporter_name': self.reporter.lastname if self.reporter else None,
         }

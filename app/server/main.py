@@ -7,7 +7,8 @@ from server.apis.views import (UserResource,
                                AdminUserListResource,
                                AdminUserRoleResource,
                                AdminBioSource,
-                               TestListResource, SimulationResource, OrderListResource, OrderResource)
+                               TestListResource, SimulationResource, OrderListResource, OrderResource,
+                               OrderItemResource)
 from server.extensions import db, flask_api, jwt
 
 from logging.config import dictConfig
@@ -55,6 +56,7 @@ flask_api.add_resource(TestListResource, '/admin/tests')
 flask_api.add_resource(SimulationResource, '/simulations')
 flask_api.add_resource(OrderListResource, '/orders')
 flask_api.add_resource(OrderResource, '/orders/<int:lab_order_id>')
+flask_api.add_resource(OrderItemResource, '/order-items/<int:lab_order_item_id>')
 
 app.register_blueprint(api_bp)
 
