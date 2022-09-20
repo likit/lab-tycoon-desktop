@@ -3,13 +3,10 @@ import random
 
 BASE_URL = os.getcwd()
 
-import PySimpleGUI as sg
 import threading
-import requests
 from faker import Faker
 from client.windows import *
 from server.main import app
-
 from server.models import *
 
 fake = Faker()
@@ -53,7 +50,8 @@ layout = [
     [sg.Text('Lab Tycoon V.2022.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
     [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
-    [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
+    [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น '
+             'ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
     [sg.Button('Register', key='-REGISTER-'),
      sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=True),
      sg.Button('Sign In', key='-SIGNIN-'),
@@ -111,7 +109,7 @@ while True:
             window.find_element('-ADMIN-').click()
     elif event == '-ABOUT-':
         sg.popup_ok('This program is developed by Dr.Likit Preeyanon. '
-                             'Please contact likit.pre@mahidol.edu for more information.', title='About')
+                    'Please contact likit.pre@mahidol.edu for more information.', title='About')
     elif event == '-sql-':
         create_sql_window()
     elif event == '-sim-':
