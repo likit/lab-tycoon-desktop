@@ -654,9 +654,10 @@ def create_order_item_list_window(access_token, lab_order_id):
                 format_datetime(item['cancelled_at']),
             ])
         layout = [
-            [sg.Text('HN'), sg.Text(data['hn'])],
-            [sg.Text('Name'), sg.Text(f"{data['firstname']} {data['lastname']}")],
-            [sg.Text('Ordered At'), sg.Text(f"{format_datetime(data['order_datetime'])}")],
+            [sg.Text('HN:'), sg.Text(data['hn']),
+             sg.Text('Name:'), sg.Text(f"{data['firstname']} {data['lastname']}"),
+             sg.Text('Ordered At:'), sg.Text(f"{format_datetime(data['order_datetime'])}"),
+             ],
             [sg.Table(values=items, headings=['Item ID', 'Code', 'Name', 'Result', 'Reported At',
                                               'Reporter', 'Approved At', 'Approver', 'Finished At', 'Cancelled At'],
                       key="-ORDER-ITEM-TABLE-",
