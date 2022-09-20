@@ -45,8 +45,13 @@ with app.app_context():
 
 
 sg.theme('SystemDefault')
+menu_def = [
+    ['Users', ['Manage']],
+    ['Tests', ['List', 'Add TMLT test']],
+]
 
 layout = [
+    [sg.Menu(menu_def)],
     [sg.Text('Lab Tycoon V.2022.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
     [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
@@ -127,5 +132,13 @@ while True:
             sg.popup_error('Please sign in to access this section.', title='Access Denied')
         else:
             create_logging_window(access_token)
+    elif event == 'Manage':
+        create_user_list_window(access_token)
+    elif event == 'BioSource':
+        create_biosource_window(access_token)
+    elif event == 'Add TMLT test':
+        create_tmlt_test_window(access_token)
+    elif event == 'List':
+        create_test_list_window(access_token)
 
 window.close()

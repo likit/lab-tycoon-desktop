@@ -125,36 +125,39 @@ def create_profile_window(access_token):
 
 def create_user_list_window(access_token):
     if not access_token:
+        sg.popup_error('Please sign in to access this section.', title='Unauthorization Error')
         return
     headers = {'Authorization': f'Bearer {access_token}'}
     resp = requests.get('http://127.0.0.1:5000/api/admin/users', headers=headers)
     data = []
-    for user in resp.json().get('data'):
-        data.append([
-            user['firstname'], user['lastname'], user['license_id'], user['username'], user['position'], user['roles']
-        ])
-    layout = [
-        [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles'],
-                  values=data, key='-TABLE-', enable_events=True)],
-        [sg.Exit()]
-    ]
+    if resp.status_code != 200:
+        sg.popup_error(resp.json().get('message'), title='System Error')
+    else:
+        for user in resp.json().get('data'):
+            data.append([
+                user['firstname'], user['lastname'], user['license_id'], user['username'], user['position'], user['roles']
+            ])
+        layout = [
+            [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles'],
+                      values=data, key='-TABLE-', enable_events=True)],
+            [sg.Exit()]
+        ]
 
-    window = sg.Window('Users', layout=layout, resizable=True, modal=True)
+        window = sg.Window('Users', layout=layout, resizable=True, modal=True)
 
-    while True:
-        event, values = window.read()
-        if event in ['Exit', sg.WIN_CLOSED]:
-            break
-        elif event == '-TABLE-':
-            print(event, values)
-            if values['-TABLE-']:
-                username = data[values['-TABLE-'][0]][3]
-                updated_roles = create_admin_user_role_window(access_token, username)
-                if updated_roles:
-                    data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated_roles.items() if v is True])
-                window.find_element('-TABLE-').update(values=data)
-                window.refresh()
-    window.close()
+        while True:
+            event, values = window.read()
+            if event in ['Exit', sg.WIN_CLOSED]:
+                break
+            elif event == '-TABLE-':
+                if values['-TABLE-']:
+                    username = data[values['-TABLE-'][0]][3]
+                    updated_roles = create_admin_user_role_window(access_token, username)
+                    if updated_roles:
+                        data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated_roles.items() if v is True])
+                    window.find_element('-TABLE-').update(values=data)
+                    window.refresh()
+        window.close()
 
 
 TMLT_ACCESS_TOKEN_URL = 'https://tmlt.this.or.th/tmltapi/api/TmltToken/GetToken'
@@ -230,35 +233,6 @@ def create_tmlt_test_window(access_token):
         sg.popup_error(f'Error occurred: {resp.status_code}')
         return
     '''
-
-
-def create_admin_window(access_token):
-    logger.info('OPEN ADMIN DIALOG')
-    menu_def = [
-        ['&Samples', ['&Tests', '&BioSource', 'S&pecimens']],
-        ['&Tests', ['&List', '&Add TMLT test']],
-    ]
-    layout = [
-        [sg.Menu(menu_def)],
-        [sg.Button('User Management', key='-USER-')],
-        [sg.Button('Specimens', key='-SPECIMENS-')],
-        [sg.CloseButton('Close')]
-    ]
-
-    window = sg.Window('Administration', layout=layout, modal=True)
-    while True:
-        event, values = window.read()
-        if event in ['CloseButton', sg.WIN_CLOSED]:
-            break
-        elif event == '-USER-':
-            create_user_list_window(access_token)
-        elif event == 'BioSource':
-            create_biosource_window(access_token)
-        elif event == 'Add TMLT test':
-            create_tmlt_test_window(access_token)
-        elif event == 'List':
-            create_test_list_window(access_token)
-    window.close()
 
 
 def create_admin_user_role_window(access_token, username):
