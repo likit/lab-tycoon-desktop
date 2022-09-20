@@ -61,6 +61,7 @@ layout = [
      sg.Button('SQL Tool', key='-sql-'),
      sg.Button('Simulate', key='-sim-'),
      sg.Button('Order List', key='-order-list-'),
+     sg.Button('Logs', key='-LOGGING-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -120,5 +121,10 @@ while True:
             sg.popup_error('Please sign in to access this section.', title='Access Denied')
         else:
             create_order_list_window(access_token)
+    elif event == '-LOGGING-':
+        if not access_token:
+            sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        else:
+            create_logging_window(access_token)
 
 window.close()

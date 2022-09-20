@@ -641,3 +641,18 @@ def create_order_item_list_window(access_token, lab_order_id):
         window.close()
     else:
         sg.popup_error(f"{resp.json().get('message')}")
+
+
+def create_logging_window(access_token):
+    logs = open('run_log.txt').readlines()
+    layout = [
+        [sg.Multiline('\n'.join(logs), size=(80, 10), disabled=True,
+                      font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
+        [sg.CloseButton('Close')],
+    ]
+    window = sg.Window('Program Logs', layout=layout, modal=True, resizable=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+    window.close()
