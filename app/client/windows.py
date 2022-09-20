@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 from sqlalchemy import create_engine
 
@@ -14,6 +15,14 @@ import PySimpleGUI as sg
 import requests
 
 logger = app.logger
+
+
+def format_datetime(isodatetime, datetime_format='%d/%m/%Y %H:%M:%S'):
+    """A helper function that converts isodatetime to a datetime with a given format."""
+    try:
+        return datetime.fromisoformat(isodatetime).strftime(datetime_format)
+    except:
+        return isodatetime
 
 
 def create_register_window():
@@ -572,7 +581,10 @@ def create_order_list_window(access_token):
 
     layout = [
         [sg.Table(values=data, headings=['ID', 'HN', 'Order At', 'Received At',
-                                         'Firstname', 'Lastname', 'Items'])],
+                                         'Firstname', 'Lastname', 'Items'],
+                  key="-ORDER-TABLE-",
+                  enable_events=True,
+                  )],
         [sg.CloseButton('Close')]
     ]
 
@@ -581,5 +593,48 @@ def create_order_list_window(access_token):
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
+        elif event == '-ORDER-TABLE-':
+            print(event, values)
+            create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
     window.close()
 
+
+def create_order_item_list_window(access_token, lab_order_id):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/orders/{lab_order_id}', headers=headers)
+    if resp.status_code == 200:
+        items = []
+        data = resp.json().get('data')
+        for item in data['items']:
+            print(item)
+            items.append([
+                item['id'],
+                item['code'],
+                item['tmlt_name'],
+                item['value_string'],
+                format_datetime(item['reported_at']),
+                format_datetime(item['approved_at']),
+                format_datetime(item['finished_at']),
+                format_datetime(item['cancelled_at']),
+            ])
+        layout = [
+            [sg.Text('HN'), sg.Text(data['hn'])],
+            [sg.Text('Name'), sg.Text(f"{data['firstname']} {data['lastname']}")],
+            [sg.Text('Ordered At'), sg.Text(f"{format_datetime(data['order_datetime'])}")],
+            [sg.Table(values=items, headings=['Item ID', 'Code', 'Name', 'Result', 'Reported At',
+                                              'Approved At', 'Finished At', 'Cancelled At'],
+                      key="-ORDER-ITEM-TABLE-",
+                      enable_events=True,
+                      )],
+            [sg.CloseButton('Close')]
+        ]
+        window = sg.Window('Ordered Item List', layout=layout, modal=True)
+        while True:
+            event, values = window.read()
+            if event in ('Exit', sg.WIN_CLOSED):
+                break
+            elif event == '-ORDER-ITEM-TABLE-':
+                print(event, values)
+        window.close()
+    else:
+        sg.popup_error(f"{resp.json().get('message')}")
