@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime
 
@@ -14,7 +15,7 @@ from http import HTTPStatus
 import PySimpleGUI as sg
 import requests
 
-logger = app.logger
+logger = logging.getLogger('client')
 
 
 def format_datetime(isodatetime, datetime_format='%d/%m/%Y %H:%M:%S'):

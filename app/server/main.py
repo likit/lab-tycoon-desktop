@@ -1,3 +1,4 @@
+import logging
 from http import HTTPStatus
 
 from flask import Flask, request, jsonify
@@ -17,21 +18,18 @@ dictConfig({
         'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
     }},
     'handlers': {
-        'wsgi': {
-            'class': 'logging.StreamHandler',
-            'stream': 'ext://flask.logging.wsgi_errors_stream',
-            'formatter': 'default'
-        },
-        'client': {
+        'file': {
             'class': 'logging.FileHandler',
             'formatter': 'default',
             'filename': 'run_log.txt'
         }
     },
-    'root': {
-        'level': 'INFO',
-        'handlers': ['wsgi', 'client']
-    }
+    'loggers': {
+        'client': {
+            'level': 'INFO',
+            'handlers': ['file']
+        },
+    },
 })
 
 app = Flask(__name__)
