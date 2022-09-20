@@ -700,15 +700,25 @@ def create_item_detail_window(access_token, item_id):
         return
 
     item = resp.json().get('data')
+
+    actions = [sg.Button('Update', button_color=('white', 'green')), sg.Cancel(button_color=('white', 'red')), sg.Help()]
+
+    if item['approved_at']:
+        pass
+    elif item['reported_at']:
+        actions.insert(0, sg.Button('Approve', button_color=('white', 'green')))
+    elif item['finished_at']:
+        actions.insert(0, sg.Button('Report', button_color=('white', 'green')))
+
     if item['cancelled_at']:
-        actions = [],
-    else:
-        actions = [sg.Button('Update', button_color=('white', 'green')), sg.Cancel(button_color=('white', 'red'))],
+        actions = []
+
     layout = [
-        [sg.Text('ID', size=(8, 1)), sg.Text(item_id)],
-        [sg.Text('Code', size=(8, 1)), sg.Text(item['code'])],
+        [sg.Text('ID', size=(8, 1)), sg.Text(item_id),
+         sg.Text('Code', size=(8, 1)), sg.Text(item['code'])
+         ],
         actions,
-        [sg.CloseButton('Close', button_color=('white', 'red')), sg.Help()],
+        [sg.CloseButton('Close', button_color=('white', 'red'))],
     ]
     window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
@@ -722,8 +732,30 @@ def create_item_detail_window(access_token, item_id):
                                       headers=headers,
                                       json={'cancelled_at': datetime.now().isoformat()})
                 if resp.status_code == 200:
-                    sg.popup_ok('The item has been cancelled.')
+                    sg.popup_ok(f'{resp.json().get("message")}')
                     break
                 else:
-                    sg.popup_error(f'{resp.json()["message"]}')
+                    sg.popup_error(f'{resp.json().get("message")}', title='System Error')
+        elif event == 'Report':
+            response = sg.popup_ok_cancel('Are you sure want to report this item?')
+            if response == 'OK':
+                resp = requests.patch(f'http://127.0.0.1:5000/api/order-items/{item_id}',
+                                      headers=headers,
+                                      json={'reported_at': datetime.now().isoformat()})
+                if resp.status_code == 200:
+                    sg.popup_ok(f'{resp.json().get("message")}')
+                    break
+                else:
+                    sg.popup_error(f'{resp.json().get("message")}', title='Unauthorized')
+        elif event == 'Approve':
+            response = sg.popup_ok_cancel('Are you sure want to approve this item?')
+            if response == 'OK':
+                resp = requests.patch(f'http://127.0.0.1:5000/api/order-items/{item_id}',
+                                      headers=headers,
+                                      json={'approved_at': datetime.now().isoformat()})
+                if resp.status_code == 200:
+                    sg.popup_ok(f'{resp.json().get("message")}')
+                    break
+                else:
+                    sg.popup_error(f'{resp.json().get("message")}', title='Unauthorized')
     window.close()

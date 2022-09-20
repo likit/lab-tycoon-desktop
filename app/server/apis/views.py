@@ -280,12 +280,25 @@ class OrderItemResource(Resource):
         else:
             data = request.get_json()
             for key in data:
-                if key in ['cancelled_at']:
+                if key in ['cancelled_at', 'reported_at', 'approved_at']:
                     setattr(item, key, datetime.datetime.fromisoformat(data[key]))
                     if key == 'cancelled_at':
+                        message = 'The item has been cancelled.'
                         item.canceller = current_user
+                    elif key == 'reported_at':
+                        message = 'The report has been made.'
+                        if current_user.has_role('reporter'):
+                            item.reporter = current_user
+                        else:
+                            return {'message': 'Reporter role is required.'}, HTTPStatus.UNAUTHORIZED
+                    elif key == 'approved_at':
+                        message = 'The item has been approved.'
+                        if current_user.has_role('approver'):
+                            item.approver = current_user
+                        else:
+                            return {'message': 'Approver role is required.'}, HTTPStatus.UNAUTHORIZED
                 else:
                     setattr(item, key, data[key])
             db.session.add(item)
             db.session.commit()
-            return {'message': 'Cancellation completed.'}, HTTPStatus.OK
+            return {'message': message}, HTTPStatus.OK

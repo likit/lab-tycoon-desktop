@@ -82,6 +82,9 @@ class User(db.Model):
     def all_roles(self):
         return ','.join([r.role_need for r in self.roles])
 
+    def has_role(self, role_need):
+        return role_need in [r.role_need for r in self.roles]
+
 
 class BioSource(db.Model):
     __tablename__ = 'biosources'
