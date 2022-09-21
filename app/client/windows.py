@@ -166,6 +166,9 @@ HOSPITAL_CODE = '10686'
 
 
 def create_tmlt_test_window(access_token):
+    if not access_token:
+        sg.popup_error('Please sign in to access this section.', title='Unauthorization Error')
+        return
     resp = requests.post(TMLT_ACCESS_TOKEN_URL, json={'hospcode': HOSPITAL_CODE, 'provinceId': '12', 'amp': '01'})
     if resp.status_code == 200:
         tmlt_access_token = resp.json().get('token')
@@ -222,17 +225,6 @@ def create_tmlt_test_window(access_token):
             else:
                 create_tmlt_test_form_window(records[row], access_token)
     window.close()
-
-    '''
-    if not access_token:
-        return
-    
-    headers = {'Authorization': f'Bearer {access_token}'}
-    resp = requests.get(f'http://127.0.0.1:5000/api/users/{username}', headers=headers)
-    if resp.status_code != 200:
-        sg.popup_error(f'Error occurred: {resp.status_code}')
-        return
-    '''
 
 
 def create_admin_user_role_window(access_token, username):

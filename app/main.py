@@ -46,8 +46,10 @@ with app.app_context():
 
 sg.theme('SystemDefault')
 menu_def = [
-    ['Users', ['Manage']],
+    ['Users', ['Register', 'Manage']],
     ['Tests', ['List', 'Add TMLT test']],
+    ['Tools', ['SQL Editor']],
+    ['About', ['Program']],
 ]
 
 layout = [
@@ -57,13 +59,9 @@ layout = [
     [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
     [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น '
              'ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
-    [sg.Button('Register', key='-REGISTER-'),
-     sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=True),
+    [sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=True),
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
-     sg.Button('Admin', key='-ADMIN-'),
-     sg.Button('About', key='-ABOUT-'),
-     sg.Button('SQL Tool', key='-sql-'),
      sg.Button('Analyze', key='-ANALYZE-'),
      sg.Button('Order List', key='-order-list-'),
      sg.Button('Logs', key='-LOGGING-'),
@@ -82,8 +80,11 @@ while True:
         requests.get('http://127.0.0.1:5000/kill')
         flask_job.join()
         break
-    elif event == '-REGISTER-':
-        create_register_window()
+    elif event == 'Register':
+        if not access_token:
+            sg.popup_error('Please sing in to access this section.')
+        else:
+            create_register_window()
     elif event == '-SIGNIN-':
         access_token = create_signin_window()
         if access_token:
@@ -107,15 +108,13 @@ while True:
             create_profile_window(access_token)
         else:
             sg.popup_error('Please sign in to access this section.', title='Access Denied')
-    elif event == '-ADMIN-':
-        if access_token:
-            create_admin_window(access_token)
-        else:
-            sg.popup_error('Access denied. Please sign in as an admin.')
-    elif event == '-ABOUT-':
+    elif event == 'Program':
         sg.popup_ok('This program is developed by Likit Preeyanon. '
-                    'Please contact likit.pre@mahidol.edu for more information.', title='About')
-    elif event == '-sql-':
+                    'Please contact likit.pre@mahidol.edu for more information.'
+                    'โปรแกรมนี้พัฒนาโดย ลิขิต ปรียานนท์ เพื่อประกอบการเรียนการสอนในวิชาสารสนเทศทางการแพทย์สำหรับนักเทคนิคการแพทย์'
+                    ' กรุณาติดต่อที่ likit.pre@mahidol.edu หากต้องการใช้งานหรือมีคำแนะนำ'
+                    , title='About')
+    elif event == 'SQL Editor':
         if not access_token:
             sg.popup_error('Please sign in to access this section.', title='Access Denied')
         else:
