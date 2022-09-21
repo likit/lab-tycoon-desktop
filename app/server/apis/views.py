@@ -301,6 +301,34 @@ class OrderItemResource(Resource):
                             return {'message': 'Approver role is required.'}, HTTPStatus.UNAUTHORIZED
                 else:
                     setattr(item, key, data[key])
+            item.updater = current_user
+            item.updated_at = datetime.datetime.now()
             db.session.add(item)
             db.session.commit()
             return {'message': message}, HTTPStatus.OK
+
+
+class OrderItemVersionListResource(Resource):
+    @jwt_required()
+    def get(self, lab_order_item_id):
+        item = LabOrderItem.query.get(lab_order_item_id)
+        if not item:
+            return {'message': 'Lab order item not found.'}, HTTPStatus.NOT_FOUND
+        else:
+            versions = []
+            for ver in item.versions:
+                if ver._value and ver.test.scale == 'Quantitative':
+                    value = float(ver._value)
+                else:
+                    value = ver._value
+                versions.append({
+                    'value': value,
+                    'comment': ver.comment,
+                    'reported_at': ver.reported_at.isoformat() if ver.reported_at else None,
+                    'approved_at': ver.reported_at.isoformat() if ver.approved_at else None,
+                    'updated_at': ver.reported_at.isoformat() if ver.updated_at else None,
+                    'approver_name': ver.approver.lastname if ver.approver else '',
+                    'reporter_name': ver.reporter.lastname if ver.reporter else '',
+                    'updater_name': ver.updater.lastname if ver.updater else '',
+                })
+            return {'data': versions}

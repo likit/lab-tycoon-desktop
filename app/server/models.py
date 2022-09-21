@@ -224,12 +224,15 @@ class LabOrderItem(db.Model):
     comment = db.Column('comment', db.Text())
     cancelled_at = db.Column('cancelled_at', db.DateTime())
     finished_at = db.Column('finished_at', db.DateTime())
+    updated_at = db.Column('updated_at', db.DateTime())
     reported_at = db.Column('reported_at', db.DateTime())
     approved_at = db.Column('approved_at', db.DateTime())
     approver_id = db.Column('approver_id', db.ForeignKey('users.id'))
+    updater_id = db.Column('updater_id', db.ForeignKey('users.id'))
     reporter_id = db.Column('reporter_id', db.ForeignKey('users.id'))
     canceller_id = db.Column('canceller_id', db.ForeignKey('users.id'))
     approver = db.relationship(User, foreign_keys=[approver_id])
+    updater = db.relationship(User, foreign_keys=[updater_id])
     reporter = db.relationship(User, foreign_keys=[reporter_id])
     canceller = db.relationship(User, foreign_keys=[canceller_id])
     _value = db.Column('value', db.String(), nullable=True)
@@ -254,6 +257,7 @@ class LabOrderItem(db.Model):
             'code': self.test.code,
             'tmlt_name': self.test.tmlt_name,
             'value': self.value,
+            'comment': self.comment,
             'label': self.test.label,
             'hn': self.order.customer.hn,
             'patient': self.order.customer.fullname,

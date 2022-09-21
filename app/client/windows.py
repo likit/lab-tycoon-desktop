@@ -674,6 +674,49 @@ def create_logging_window(access_token):
     window.close()
 
 
+def create_lab_order_item_version_list_window(access_token, item):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/order-items/{item["id"]}/versions',
+                        headers=headers)
+    versions = []
+    if resp.status_code == 200:
+        for n, ver in enumerate(resp.json().get('data'), start=1):
+            versions.append([
+                n,
+                ver['value'],
+                format_datetime(ver['reported_at']),
+                ver['reporter_name'],
+                format_datetime(ver['approved_at']),
+                ver['approver_name'],
+                ver['comment'],
+                format_datetime(ver['updated_at']),
+                ver['updater_name'],
+            ])
+    else:
+        sg.popup_error(f'{resp.json().get("message")}', title='Server Error')
+        return
+
+    layout = [
+        [sg.Text('ID: '), sg.Text(item['id']),
+         sg.Text('Label: '), sg.Text(item['label']),
+         sg.Text('HN: '), sg.Text(item['hn']),
+         sg.Text('Patient: '), sg.Text(item['patient']),
+         ],
+        [sg.Table(values=versions, headings=['Version', 'Value', 'Reported At',
+                                             'Reporter', 'Approved At', 'Approver', 'Comment',
+                                             'Updated At', 'Updater'],
+                  key="-VERSION-TABLE-", enable_events=True)
+         ],
+        [sg.CloseButton('Close')]
+    ]
+    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+    window.close()
+
+
 def create_item_detail_window(access_token, item_id):
     headers = {'Authorization': f'Bearer {access_token}'}
     resp = requests.get(f'http://127.0.0.1:5000/api/order-items/{item_id}', headers=headers)
@@ -698,11 +741,15 @@ def create_item_detail_window(access_token, item_id):
 
     layout = [
         [sg.Text('ID', size=(8, 1)), sg.Text(item_id),
-         sg.Text('Code', size=(8, 1)), sg.Text(item['code'])
+         sg.Text('Code', size=(8, 1)), sg.Text(item['code']),
+         sg.Text('HN: '), sg.Text(item['hn']),
+         sg.Text('Patient: '), sg.Text(item['patient']),
          ],
         [sg.Text('Value'), sg.Input(item['value'], key='-ITEM-VALUE-')],
+        [sg.Text('Comment')],
+        [sg.Multiline(item['comment'], key='-UPDATE-COMMENT-', size=(45, 10))],
         actions,
-        [sg.CloseButton('Close', button_color=('white', 'red'))],
+        [sg.Button('History'), sg.CloseButton('Close', button_color=('white', 'red'))],
     ]
     window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
@@ -748,10 +795,14 @@ def create_item_detail_window(access_token, item_id):
                 resp = requests.patch(f'http://127.0.0.1:5000/api/order-items/{item_id}',
                                       headers=headers,
                                       json={'_value': values['-ITEM-VALUE-'],
+                                            'comment': values['-UPDATE-COMMENT-'],
                                             'reported_at': datetime.now().isoformat()})
                 if resp.status_code == 200:
                     sg.popup_ok(f'{resp.json().get("message")}')
                     break
                 else:
                     sg.popup_error(f'{resp.json().get("message")}', title='Unauthorized')
+
+        elif event == 'History':
+            create_lab_order_item_version_list_window(access_token, item)
     window.close()
