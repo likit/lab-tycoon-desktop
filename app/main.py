@@ -9,6 +9,9 @@ from client.windows import *
 from server.main import app
 from server.models import *
 
+from ctypes import windll
+windll.shcore.SetProcessDpiAwareness(1)
+
 fake = Faker()
 
 base_url = os.path.dirname(os.path.abspath(__file__))
