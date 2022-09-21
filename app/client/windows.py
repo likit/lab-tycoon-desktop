@@ -144,20 +144,20 @@ def create_user_list_window(access_token):
             [sg.Exit()]
         ]
 
-        window = sg.Window('Users', layout=layout, resizable=True, modal=True)
+        window = sg.Window('Users', layout=layout, resizable=True, modal=True, finalize=True)
+        window['-TABLE-'].bind("<Double-Button-1>", " Double")
 
         while True:
             event, values = window.read()
             if event in ['Exit', sg.WIN_CLOSED]:
                 break
-            elif event == '-TABLE-':
-                if values['-TABLE-']:
-                    username = data[values['-TABLE-'][0]][3]
-                    updated_roles = create_admin_user_role_window(access_token, username)
-                    if updated_roles:
-                        data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated_roles.items() if v is True])
-                    window.find_element('-TABLE-').update(values=data)
-                    window.refresh()
+            elif event == '-TABLE- Double' and values['-TABLE-']:
+                username = data[values['-TABLE-'][0]][3]
+                updated_roles = create_admin_user_role_window(access_token, username)
+                if updated_roles:
+                    data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated_roles.items() if v is True])
+                window.find_element('-TABLE-').update(values=data)
+                window.refresh()
         window.close()
 
 
