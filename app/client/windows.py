@@ -135,7 +135,8 @@ def create_user_list_window(access_token):
     else:
         for user in resp.json().get('data'):
             data.append([
-                user['firstname'], user['lastname'], user['license_id'], user['username'], user['position'], user['roles']
+                user['firstname'], user['lastname'], user['license_id'], user['username'], user['position'],
+                user['roles']
             ])
         layout = [
             [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles'],
@@ -579,11 +580,9 @@ def create_order_list_window(access_token):
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
-        elif event == '-ORDER-TABLE- Double':
-            print(event, values)
+        elif event == '-ORDER-TABLE- Double' and values['-ORDER-TABLE-']:
             create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
         elif event == '-GET-ORDER-':
-            print(event, values)
             headers = {'Authorization': f'Bearer {access_token}'}
             # TODO: add code to check if the simulations run successfully
             resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
@@ -606,23 +605,33 @@ def create_order_list_window(access_token):
 
 def create_order_item_list_window(access_token, lab_order_id):
     headers = {'Authorization': f'Bearer {access_token}'}
-    resp = requests.get(f'http://127.0.0.1:5000/api/orders/{lab_order_id}', headers=headers)
-    if resp.status_code == 200:
-        items = []
-        data = resp.json().get('data')
-        for item in data['items']:
-            items.append([
-                item['id'],
-                item['code'],
-                item['tmlt_name'],
-                item['value_string'],
-                format_datetime(item['reported_at']),
-                item['reporter_name'],
-                format_datetime(item['approved_at']),
-                item['approver_name'],
-                format_datetime(item['finished_at']),
-                format_datetime(item['cancelled_at']),
-            ])
+
+    def load_item_list():
+        resp = requests.get(f'http://127.0.0.1:5000/api/orders/{lab_order_id}', headers=headers)
+        if resp.status_code == 200:
+            items = []
+            data = resp.json().get('data')
+            for item in data['items']:
+                items.append([
+                    item['id'],
+                    item['code'],
+                    item['tmlt_name'],
+                    item['value_string'],
+                    format_datetime(item['reported_at']),
+                    item['reporter_name'],
+                    format_datetime(item['approved_at']),
+                    item['approver_name'],
+                    format_datetime(item['finished_at']),
+                    format_datetime(item['cancelled_at']),
+                ])
+            return data, items
+        else:
+            sg.popup_error(f"{resp.json().get('message')}")
+            return None, None
+
+    data, items = load_item_list()
+
+    if data:
         layout = [
             [sg.Text('HN:'), sg.Text(data['hn']),
              sg.Text('Name:'), sg.Text(f"{data['firstname']} {data['lastname']}"),
@@ -635,16 +644,19 @@ def create_order_item_list_window(access_token, lab_order_id):
                       )],
             [sg.CloseButton('Close')]
         ]
-        window = sg.Window('Ordered Item List', layout=layout, modal=True)
+        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
+        window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
         while True:
             event, values = window.read()
             if event in ('Exit', sg.WIN_CLOSED):
                 break
-            elif event == '-ORDER-ITEM-TABLE-':
+            elif event == '-ORDER-ITEM-TABLE- Double' and values['-ORDER-ITEM-TABLE-']:
                 create_item_detail_window(access_token, items[values['-ORDER-ITEM-TABLE-'][0]][0])
+                data, items = load_item_list()
+                window.find_element('-ORDER-ITEM-TABLE-').update(values=items)
         window.close()
     else:
-        sg.popup_error(f"{resp.json().get('message')}")
+        return
 
 
 def create_logging_window(access_token):
@@ -671,7 +683,8 @@ def create_item_detail_window(access_token, item_id):
 
     item = resp.json().get('data')
 
-    actions = [sg.Button('Update', button_color=('white', 'green')), sg.Cancel(button_color=('white', 'red')), sg.Help()]
+    actions = [sg.Button('Update', button_color=('white', 'green')), sg.Cancel(button_color=('white', 'red')),
+               sg.Help()]
 
     if item['approved_at']:
         pass
@@ -687,6 +700,7 @@ def create_item_detail_window(access_token, item_id):
         [sg.Text('ID', size=(8, 1)), sg.Text(item_id),
          sg.Text('Code', size=(8, 1)), sg.Text(item['code'])
          ],
+        [sg.Text('Value'), sg.Input(item['value'], key='-ITEM-VALUE-')],
         actions,
         [sg.CloseButton('Close', button_color=('white', 'red'))],
     ]
@@ -723,6 +737,18 @@ def create_item_detail_window(access_token, item_id):
                 resp = requests.patch(f'http://127.0.0.1:5000/api/order-items/{item_id}',
                                       headers=headers,
                                       json={'approved_at': datetime.now().isoformat()})
+                if resp.status_code == 200:
+                    sg.popup_ok(f'{resp.json().get("message")}')
+                    break
+                else:
+                    sg.popup_error(f'{resp.json().get("message")}', title='Unauthorized')
+        elif event == 'Update':
+            response = sg.popup_ok_cancel('Are you sure want to update this item?')
+            if response == 'OK':
+                resp = requests.patch(f'http://127.0.0.1:5000/api/order-items/{item_id}',
+                                      headers=headers,
+                                      json={'_value': values['-ITEM-VALUE-'],
+                                            'reported_at': datetime.now().isoformat()})
                 if resp.status_code == 200:
                     sg.popup_ok(f'{resp.json().get("message")}')
                     break
