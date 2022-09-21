@@ -1,8 +1,13 @@
-from flask_jwt_extended import get_current_user
 from sqlalchemy import func
+import sqlalchemy
+from sqlalchemy_continuum import make_versioned
+from sqlalchemy_continuum.plugins import FlaskPlugin
+from flask_jwt_extended import get_current_user
 
 from server.extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
+
+make_versioned(plugins=[FlaskPlugin()])
 
 
 class TokenBlocklist(db.Model):
@@ -209,6 +214,7 @@ class LabOrder(db.Model):
 
 
 class LabOrderItem(db.Model):
+    __versioned__ = {}
     __tablename__ = 'lab_order_items'
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
     order_id = db.Column('order_id', db.ForeignKey('lab_orders.id'))
@@ -269,3 +275,6 @@ class LabRejectRecord(db.Model):
     order_item = db.relationship(LabOrderItem, backref=db.backref('reject_records'))
     rejected_at = db.Column('rejected_at', db.DateTime())
     reason = db.Column('reason', db.Text())
+
+
+sqlalchemy.orm.configure_mappers()
