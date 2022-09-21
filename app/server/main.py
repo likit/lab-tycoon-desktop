@@ -1,7 +1,4 @@
-import logging
-from http import HTTPStatus
-
-from flask import Flask, request, jsonify
+from flask import Flask, request
 
 from server.apis.views import (UserResource,
                                AdminUserListResource,
