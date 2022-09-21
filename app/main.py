@@ -138,6 +138,9 @@ while True:
     elif event == 'Add TMLT test':
         create_tmlt_test_window(access_token)
     elif event == 'List':
-        create_test_list_window(access_token)
+        if not access_token:
+            sg.popup_error('Please sign in to access this section.')
+        else:
+            create_test_list_window(access_token)
 
 window.close()
