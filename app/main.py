@@ -9,8 +9,12 @@ from client.windows import *
 from server.main import app
 from server.models import *
 
-from ctypes import windll
-windll.shcore.SetProcessDpiAwareness(1)
+import platform
+
+if any(platform.win32_ver()):
+    from ctypes import windll
+
+    windll.shcore.SetProcessDpiAwareness(1)
 
 fake = Faker()
 
@@ -45,7 +49,6 @@ with app.app_context():
                 dob=dob,
             ))
         db.session.commit()
-
 
 sg.theme('SystemDefault')
 menu_def = [
