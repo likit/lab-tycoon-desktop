@@ -573,15 +573,19 @@ def create_order_list_window(access_token):
         [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')]
     ]
 
-    window = sg.Window('Order List', layout=layout, modal=True)
+    window = sg.Window('Order List', layout=layout, modal=True, finalize=True)
+    window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
-        elif event == '-ORDER-TABLE-':
+        elif event == '-ORDER-TABLE- Double':
+            print(event, values)
             create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
         elif event == '-GET-ORDER-':
+            print(event, values)
             headers = {'Authorization': f'Bearer {access_token}'}
+            # TODO: add code to check if the simulations run successfully
             resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
             resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
             data = []
