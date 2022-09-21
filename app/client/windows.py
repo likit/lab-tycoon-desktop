@@ -113,9 +113,9 @@ def create_profile_window(access_token):
         if event in ['Exit', sg.WIN_CLOSED]:
             break
         else:
-            resp = requests.put('http://127.0.0.1:5000/api/users', json=values, headers=headers)
+            resp = requests.patch('http://127.0.0.1:5000/api/users', json=values, headers=headers)
             message = resp.json().get('message')
-            if resp.status_code == 201:
+            if resp.status_code == 200:
                 sg.popup_ok(f'{message}')
             else:
                 sg.popup_error(f'{message}')
@@ -136,10 +136,10 @@ def create_user_list_window(access_token):
         for user in resp.json().get('data'):
             data.append([
                 user['firstname'], user['lastname'], user['license_id'], user['username'], user['position'],
-                user['roles']
+                user['roles'], user['active']
             ])
         layout = [
-            [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles'],
+            [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles', 'Active'],
                       values=data, key='-TABLE-', enable_events=True)],
             [sg.Exit()]
         ]
@@ -153,9 +153,12 @@ def create_user_list_window(access_token):
                 break
             elif event == '-TABLE- Double' and values['-TABLE-']:
                 username = data[values['-TABLE-'][0]][3]
-                updated_roles = create_admin_user_role_window(access_token, username)
-                if updated_roles:
-                    data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated_roles.items() if v is True])
+                updated = create_admin_user_role_window(access_token, username)
+                print(updated)
+                if updated:
+                    data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated.items()
+                                                              if v is True and r != '-ACTIVE-'])
+                    data[values['-TABLE-'][0]][6] = updated['-ACTIVE-']
                 window.find_element('-TABLE-').update(values=data)
                 window.refresh()
         window.close()
@@ -237,9 +240,14 @@ def create_admin_user_role_window(access_token, username):
         sg.popup_error(f'Error occurred: {resp.status_code}')
         return
     profile = resp.json()
+    fullname = profile.get('firstname') + ' ' + profile.get('lastname')
     roles = profile.get('roles').split(',')
     layout = [
-        [sg.Text('Username: '), sg.Text(username)],
+        [sg.Text('Username:'), sg.Text(username),
+         sg.Text('Name:'), sg.Text(fullname)],
+        [sg.Text('License ID:'), sg.Text(profile.get('license_id')),
+         sg.Text('Position:'), sg.Text(profile.get('position'))],
+        [sg.Checkbox('Active', default=profile.get('active'), key='-ACTIVE-', enable_events=True)],
         [sg.Text('Role:')],
     ]
 
@@ -257,28 +265,32 @@ def create_admin_user_role_window(access_token, username):
         [sg.Button('Update'), sg.CloseButton('Close')]
     )
 
-    updated_roles = None
+    updated = None
     window = sg.Window('User Roles', layout, modal=True)
     while True:
         event, values = window.read()
         if event in ['CloseButton', sg.WIN_CLOSED]:
             break
         elif event == 'Update':
-            if updated_roles is not None:
-                headers = {'Authorization': f'Bearer {access_token}'}
-                resp = requests.put(f'http://127.0.0.1:5000/api/admin/users/{username}/roles',
-                                    headers=headers, json=updated_roles)
-                if resp.status_code == 201:
-                    sg.popup_ok(resp.json().get('message'))
-                    break
-                else:
-                    sg.popup_error(resp.status_code)
-            else:
-                sg.popup_ok('No change detected.')
+            error = False
+            headers = {'Authorization': f'Bearer {access_token}'}
+            if updated:
+                resp = requests.patch(f'http://127.0.0.1:5000/api/admin/users/{username}/roles',
+                                      headers=headers, json=updated)
+                if resp.status_code != 201:
+                    error = True
+
+            resp = requests.patch(f'http://127.0.0.1:5000/api/users/{username}',
+                                  headers=headers, json={'active': values['-ACTIVE-']})
+            if resp.status_code != 200:
+                error = True
+            if error:
+                sg.popup_error('Could not update the account.', 'Server Error')
+            break
         else:
-            updated_roles = values
+            updated = values
     window.close()
-    return updated_roles
+    return updated
 
 
 def create_new_biosource_window():

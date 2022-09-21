@@ -29,6 +29,8 @@ def sign_in():
     username = data['username']
     password = data['password']
     user = User.get_user_by_username(username)
+    if not user.active:
+        return jsonify({'message': 'Your account has been deactivated. Please contact the admin.'}), HTTPStatus.UNAUTHORIZED
     if user:
         if user.check_password(password):
             return jsonify({'message': 'You have signed in.',

@@ -56,6 +56,7 @@ class User(db.Model):
     license_id = db.Column('license_id', db.String(255), nullable=True)
     position = db.Column('position', db.String(255), nullable=True)
     roles = db.relationship(UserRole, secondary=user_roles, backref=db.backref('users', lazy='dynamic'))
+    active = db.Column('active', db.Boolean(), default=True)
 
     @classmethod
     def get_user_by_username(cls, username):
@@ -80,7 +81,8 @@ class User(db.Model):
             'lastname': self.lastname,
             'license_id': self.license_id,
             'position': self.position,
-            'roles': self.all_roles
+            'roles': self.all_roles,
+            'active': self.active,
         }
 
     @property

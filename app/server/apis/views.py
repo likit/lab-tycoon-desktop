@@ -44,7 +44,7 @@ class AdminUserListResource(Resource):
 
 class AdminUserRoleResource(Resource):
     @admin_required()
-    def put(self, username):
+    def patch(self, username):
         roles = request.get_json()
         user = User.get_user_by_username(username)
         user.roles = []
@@ -79,17 +79,18 @@ class UserResource(Resource):
         return {'message': 'user not found'}, HTTPStatus.NOT_FOUND
 
     @jwt_required()
-    def put(self):
+    def patch(self, username=None):
+        if username:
+            user = User.get_user_by_username(username)
+        else:
+            user = current_user
         data = request.get_json()
-        if current_user:
-            current_user.firstname = data.get('firstname')
-            current_user.lastname = data.get('lastname')
-            current_user.email = data.get('email')
-            current_user.position = data.get('position')
-            current_user.license_id = data.get('license_id')
-            db.session.add(current_user)
+        if user:
+            for key in data:
+                setattr(user, key, data.get(key))
+            db.session.add(user)
             db.session.commit()
-            return {'message': 'Data have been updated.'}, HTTPStatus.CREATED
+            return {'message': 'Data have been updated.'}, HTTPStatus.OK
         else:
             return {'message': 'user not found'}, HTTPStatus.NOT_FOUND
 
