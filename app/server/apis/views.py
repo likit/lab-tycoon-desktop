@@ -248,6 +248,8 @@ class OrderListResource(Resource):
                 'received_datetime': order.received_at.isoformat(),
                 'rejected_datetime': order.rejected_at.isoformat() if order.rejected_at else None,
                 'rejected_by': order.rejector.lastname if order.rejector else None,
+                'cancelled_datetime': order.cancelled_at.isoformat() if order.cancelled_at else None,
+                'cancelled_by': order.canceller.lastname if order.canceller else None,
                 'firstname': order.customer.firstname,
                 'lastname': order.customer.lastname,
                 'hn': order.customer.hn,
@@ -292,6 +294,11 @@ class OrderResource(Resource):
                 if key == 'cancelled_at':
                     message = 'The order has been cancelled.'
                     order.canceller = current_user
+                    for item in order.order_items:
+                        item.cancelled_at = datetime.datetime.fromisoformat(data['cancelled_at'])
+                        db.session.add(item)
+                        logger.info(f'{current_user.username} REJECTED LAB ORDER ID={order.id}:'
+                                    ' CANCELLED LAB ORDER ITEM ID={item.id}')
                     logger.info(f'{current_user.username} CANCELLED LAB ORDER ID={order.id}')
                 elif key == 'rejected_at':
                     message = 'The order has been rejected.'
@@ -301,7 +308,7 @@ class OrderResource(Resource):
                         item.cancelled_at = datetime.datetime.fromisoformat(data['rejected_at'])
                         db.session.add(item)
                         logger.info(f'{current_user.username} REJECTED LAB ORDER ID={order.id}:'
-                                    ' REJECTED LAB ORDER ITEM ID={item.id}')
+                                    ' CANCELLED LAB ORDER ITEM ID={item.id}')
                     logger.info(f'{current_user.username} REJECTED LAB ORDER ID={order.id}')
             else:
                 setattr(order, key, data[key])

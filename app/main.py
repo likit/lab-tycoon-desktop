@@ -51,6 +51,7 @@ with app.app_context():
         db.session.commit()
 
 sg.theme('SystemDefault')
+sg.set_options(font=('Helvetica', 14))
 menu_def = [
     ['Users', ['Register', 'Manage']],
     ['Tests', ['List', 'Add TMLT test']],

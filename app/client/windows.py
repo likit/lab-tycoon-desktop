@@ -576,6 +576,8 @@ def create_order_list_window(access_token):
                     format_datetime(order['received_datetime']),
                     format_datetime(order['rejected_datetime']),
                     order['rejected_by'],
+                    format_datetime(order['cancelled_datetime']),
+                    order['cancelled_by'],
                     order['firstname'],
                     order['lastname'],
                     order['items'],
@@ -586,15 +588,17 @@ def create_order_list_window(access_token):
 
     layout = [
         [sg.Table(values=data, headings=['ID', 'HN', 'Order At', 'Received At',
-                                         'Rejected At', 'By',
+                                         'Rejected At', 'Rejected By', 'Cancelled At', 'Cancelled By',
                                          'Firstname', 'Lastname', 'Items'],
-                  key="-ORDER-TABLE-",
+                  key="-ORDER-TABLE-", auto_size_columns=True,
+                  expand_x=True, expand_y=True,
                   enable_events=True,
+                  num_rows=20,
                   )],
         [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')]
     ]
 
-    window = sg.Window('Order List', layout=layout, modal=True, finalize=True)
+    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     while True:
         event, values = window.read()
@@ -658,7 +662,13 @@ def create_order_item_list_window(access_token, lab_order_id):
 
     data, items = load_item_list()
 
+    is_order_rejected = data['rejected_at'] is not None
+    is_order_cancelled = data['cancelled_at'] is not None
+
     if data:
+        desc = """
+        The table displays a list of items in the order. Click the Reject button to reject the order or click the Cancel button to cancel the order.
+        """
         layout = [
             [sg.Text('HN:'), sg.Text(data['hn']),
              sg.Text('Name:'), sg.Text(f"{data['firstname']} {data['lastname']}"),
@@ -667,13 +677,20 @@ def create_order_item_list_window(access_token, lab_order_id):
             [sg.Table(values=items, headings=['Item ID', 'Code', 'Name', 'Result', 'Reported At',
                                               'Reporter', 'Approved At', 'Approver', 'Finished At', 'Cancelled At'],
                       key="-ORDER-ITEM-TABLE-",
+                      auto_size_columns=True,
+                      expand_y=True,
+                      expand_x=True,
                       enable_events=True,
                       )],
-            [sg.Button('Reject', button_color=('white', 'red')),
-             sg.Button('Cancel', button_color=('white', 'red')),
+            [sg.Button('Reject', button_color=('white', 'red'),
+                       disabled_button_color=('white', 'lightgrey'),
+                       disabled=is_order_rejected or is_order_cancelled),
+             sg.Button('Cancel', button_color=('white', 'red'),
+                       disabled_button_color=('white', 'lightgrey'),
+                       disabled=is_order_cancelled or is_order_rejected),
              sg.CloseButton('Close')]
         ]
-        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
+        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
         window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
         while True:
             event, values = window.read()
@@ -695,10 +712,21 @@ def create_order_item_list_window(access_token, lab_order_id):
                     resp = requests.patch(f'http://127.0.0.1:5000/api/orders/{lab_order_id}',
                                           headers=headers, json=update_data)
                     if resp.status_code == HTTPStatus.OK:
-                        sg.popup_ok('The order has been rejectd.')
+                        sg.popup_ok('The order has been rejected.')
                         break
                     else:
                         sg.popup_error('Failed to reject the order.', title='System Error')
+            elif event == 'Cancel':
+                resp = sg.popup_ok_cancel('Are you sure want to cancel this order?', title='Order Cancellation')
+                if resp == 'OK':
+                    update_data = {'cancelled_at': datetime.now().isoformat()}
+                    resp = requests.patch(f'http://127.0.0.1:5000/api/orders/{lab_order_id}',
+                                          headers=headers, json=update_data)
+                    if resp.status_code == HTTPStatus.OK:
+                        sg.popup_ok('The order has been cancelled.')
+                        break
+                    else:
+                        sg.popup_error('Failed to cancel the order.', title='System Error')
         window.close()
     else:
         return
@@ -782,7 +810,10 @@ def create_item_detail_window(access_token, item_id):
         actions.insert(0, sg.Button('Report', button_color=('white', 'green')))
 
     if item['cancelled_at']:
+        is_item_cancelled = True
         actions = []
+    else:
+        is_item_cancelled = False
 
     layout = [
         [sg.Text('ID', size=(8, 1)), sg.Text(item_id),
@@ -790,7 +821,7 @@ def create_item_detail_window(access_token, item_id):
          sg.Text('HN: '), sg.Text(item['hn']),
          sg.Text('Patient: '), sg.Text(item['patient']),
          ],
-        [sg.Text('Value'), sg.Input(item['value'], key='-ITEM-VALUE-')],
+        [sg.Text('Value'), sg.Input(item['value'], key='-ITEM-VALUE-', disabled=is_item_cancelled)],
         [sg.Text('Comment')],
         [sg.Multiline(item['comment'], key='-UPDATE-COMMENT-', size=(45, 10))],
         actions,
