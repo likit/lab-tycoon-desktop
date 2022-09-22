@@ -563,22 +563,30 @@ def create_analysis_window(access_token):
 
 def create_order_list_window(access_token):
     headers = {'Authorization': f'Bearer {access_token}'}
-    resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
-    data = []
-    if resp.status_code == 200:
-        for order in resp.json().get('data'):
-            data.append([
-                order['id'],
-                order['hn'],
-                format_datetime(order['order_datetime']),
-                format_datetime(order['received_datetime']),
-                order['firstname'],
-                order['lastname'],
-                order['items']
-            ])
+
+    def load_orders():
+        resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
+        data = []
+        if resp.status_code == 200:
+            for order in resp.json().get('data'):
+                data.append([
+                    order['id'],
+                    order['hn'],
+                    format_datetime(order['order_datetime']),
+                    format_datetime(order['received_datetime']),
+                    format_datetime(order['rejected_datetime']),
+                    order['rejected_by'],
+                    order['firstname'],
+                    order['lastname'],
+                    order['items'],
+                ])
+        return data
+
+    data = load_orders()
 
     layout = [
         [sg.Table(values=data, headings=['ID', 'HN', 'Order At', 'Received At',
+                                         'Rejected At', 'By',
                                          'Firstname', 'Lastname', 'Items'],
                   key="-ORDER-TABLE-",
                   enable_events=True,
@@ -594,25 +602,32 @@ def create_order_list_window(access_token):
             break
         elif event == '-ORDER-TABLE- Double' and values['-ORDER-TABLE-']:
             create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
+            data = load_orders()
+            window.find_element('-ORDER-TABLE-').update(values=data)
         elif event == '-GET-ORDER-':
             headers = {'Authorization': f'Bearer {access_token}'}
             # TODO: add code to check if the simulations run successfully
             resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
             resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
-            data = []
-            if resp.status_code == 200:
-                for order in resp.json().get('data'):
-                    data.append([
-                        order['id'],
-                        order['hn'],
-                        order['order_datetime'],
-                        order['received_datetime'],
-                        order['firstname'],
-                        order['lastname'],
-                        order['items']
-                    ])
+            data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
     window.close()
+
+
+def create_reject_reason_window():
+    layout = [
+        [sg.Text('Please select the reason:')],
+        [sg.Combo(['Improper specimens collection', 'Not enough specimens', 'Tests not available'], key='-REASON-')],
+        [sg.Multiline(size=(40, 10), key='-COMMENT-')],
+        [sg.Ok('Submit'), sg.Cancel('Cancel')]
+    ]
+    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED, 'Cancel', 'Submit'):
+            break
+    window.close()
+    return values.get('-REASON-'), values.get('-COMMENT-')
 
 
 def create_order_item_list_window(access_token, lab_order_id):
@@ -654,7 +669,9 @@ def create_order_item_list_window(access_token, lab_order_id):
                       key="-ORDER-ITEM-TABLE-",
                       enable_events=True,
                       )],
-            [sg.CloseButton('Close')]
+            [sg.Button('Reject', button_color=('white', 'red')),
+             sg.Button('Cancel', button_color=('white', 'red')),
+             sg.CloseButton('Close')]
         ]
         window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
         window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
@@ -666,6 +683,22 @@ def create_order_item_list_window(access_token, lab_order_id):
                 create_item_detail_window(access_token, items[values['-ORDER-ITEM-TABLE-'][0]][0])
                 data, items = load_item_list()
                 window.find_element('-ORDER-ITEM-TABLE-').update(values=items)
+            elif event == 'Reject':
+                resp = sg.popup_ok_cancel('Are you sure want to reject this order?', title='Order Rejection')
+                if resp == 'OK':
+                    update_data = {'rejected_at': datetime.now().isoformat()}
+                    reason, comment = create_reject_reason_window()
+                    if reason:
+                        update_data['reason'] = reason
+                    if comment:
+                        update_data['comment'] = comment
+                    resp = requests.patch(f'http://127.0.0.1:5000/api/orders/{lab_order_id}',
+                                          headers=headers, json=update_data)
+                    if resp.status_code == HTTPStatus.OK:
+                        sg.popup_ok('The order has been rejectd.')
+                        break
+                    else:
+                        sg.popup_error('Failed to reject the order.', title='System Error')
         window.close()
     else:
         return

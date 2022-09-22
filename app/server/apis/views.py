@@ -246,6 +246,8 @@ class OrderListResource(Resource):
                 'id': order.id,
                 'order_datetime': order.order_datetime.isoformat(),
                 'received_datetime': order.received_at.isoformat(),
+                'rejected_datetime': order.rejected_at.isoformat() if order.rejected_at else None,
+                'rejected_by': order.rejector.lastname if order.rejector else None,
                 'firstname': order.customer.firstname,
                 'lastname': order.customer.lastname,
                 'hn': order.customer.hn,
@@ -269,12 +271,43 @@ class OrderResource(Resource):
                     'released_at': order.released_at.isoformat() if order.released_at else None,
                     'cancelled_at': order.cancelled_at.isoformat() if order.cancelled_at else None,
                     'received_at': order.received_at.isoformat() if order.received_at else None,
+                    'rejected_at': order.rejected_at.isoformat() if order.rejected_at else None,
+                    'rejected_by': order.rejector.lastname if order.rejector else None,
                     'firstname': order.customer.firstname,
                     'lastname': order.customer.lastname,
                     'hn': order.customer.hn,
                     'items': [t.to_dict() for t in order.order_items]
                 }
             }
+
+    @jwt_required()
+    def patch(self, lab_order_id):
+        order = LabOrder.query.get(lab_order_id)
+        if not order:
+            return {'message': 'Lab order not found.'}, HTTPStatus.NOT_FOUND
+        data = request.get_json()
+        for key in data:
+            if key in ['cancelled_at', 'rejected_at']:
+                setattr(order, key, datetime.datetime.fromisoformat(data[key]))
+                if key == 'cancelled_at':
+                    message = 'The order has been cancelled.'
+                    order.canceller = current_user
+                    logger.info(f'{current_user.username} CANCELLED LAB ORDER ID={order.id}')
+                elif key == 'rejected_at':
+                    message = 'The order has been rejected.'
+                    order.rejector = current_user
+                    # Cancel all items in the order also.
+                    for item in order.order_items:
+                        item.cancelled_at = datetime.datetime.fromisoformat(data['rejected_at'])
+                        db.session.add(item)
+                        logger.info(f'{current_user.username} REJECTED LAB ORDER ID={order.id}:'
+                                    ' REJECTED LAB ORDER ITEM ID={item.id}')
+                    logger.info(f'{current_user.username} REJECTED LAB ORDER ID={order.id}')
+            else:
+                setattr(order, key, data[key])
+        db.session.add(order)
+        db.session.commit()
+        return {'message': 'Updated successfully'}, HTTPStatus.OK
 
 
 class OrderItemListResource(Resource):

@@ -221,9 +221,16 @@ class LabOrder(db.Model):
     customer_id = db.Column('customer_id', db.ForeignKey('customers.id'))
     order_datetime = db.Column('order_datetime', db.DateTime())
     cancelled_at = db.Column('cancelled_at', db.DateTime())
+    canceller_id = db.Column('canceller_id', db.ForeignKey('users.id'))
+    canceller = db.relationship(User, foreign_keys=[canceller_id])
     received_at = db.Column('received_at', db.DateTime())
     customer = db.relationship(Customer, backref=db.backref('orders'))
     released_at = db.Column('released_at', db.DateTime())
+    rejected_at = db.Column('rejected_at', db.DateTime())
+    reason = db.Column('reason', db.String())
+    comment = db.Column('comment', db.Text())
+    rejector_id = db.Column('rejector_id', db.ForeignKey('users.id'))
+    rejector = db.relationship(User, foreign_keys=[rejector_id])
 
 
 class LabOrderItem(db.Model):
@@ -290,8 +297,6 @@ class LabRejectRecord(db.Model):
     id = db.Column(db.Integer(), autoincrement=True, primary_key=True)
     order_item_id = db.Column('order_item_id', db.ForeignKey('lab_order_items.id'))
     order_item = db.relationship(LabOrderItem, backref=db.backref('reject_records'))
-    rejected_at = db.Column('rejected_at', db.DateTime())
-    reason = db.Column('reason', db.Text())
 
 
 sqlalchemy.orm.configure_mappers()
