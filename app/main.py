@@ -70,6 +70,7 @@ layout = [
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Button('Analyze', key='-ANALYZE-'),
      sg.Button('Order List', key='-order-list-'),
+     sg.Button('Patient', key='-PATIENT-'),
      sg.Button('Logs', key='-LOGGING-'),
      sg.Exit(button_color='white on red')]
 ]
@@ -115,10 +116,8 @@ while True:
         else:
             sg.popup_error('Please sign in to access this section.', title='Access Denied')
     elif event == 'Program':
-        sg.popup_ok('This program is developed by Likit Preeyanon. '
+        sg.popup_ok('This program is developed by Asst. Prof.Likit Preeyanon. '
                     'Please contact likit.pre@mahidol.edu for more information.'
-                    'โปรแกรมนี้พัฒนาโดย ลิขิต ปรียานนท์ เพื่อประกอบการเรียนการสอนในวิชาสารสนเทศทางการแพทย์สำหรับนักเทคนิคการแพทย์'
-                    ' กรุณาติดต่อที่ likit.pre@mahidol.edu หากต้องการใช้งานหรือมีคำแนะนำ'
                     , title='About')
     elif event == 'SQL Editor':
         if not access_token:
@@ -142,11 +141,20 @@ while True:
     elif event == 'BioSource':
         create_biosource_window(access_token)
     elif event == 'Add TMLT test':
-        create_tmlt_test_window(access_token)
+        if not access_token:
+            sg.popup_error('Please sign in to access this section.')
+        else:
+            create_tmlt_test_window(access_token)
     elif event == 'List':
         if not access_token:
             sg.popup_error('Please sign in to access this section.')
         else:
             create_test_list_window(access_token)
+    elif event == '-PATIENT-':
+        if not access_token:
+            sg.popup_error('Please sign in to access this section.')
+        else:
+            create_customer_list_window(access_token)
+
 
 window.close()

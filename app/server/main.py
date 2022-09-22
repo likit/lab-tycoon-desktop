@@ -5,7 +5,8 @@ from server.apis.views import (UserResource,
                                AdminUserRoleResource,
                                AdminBioSource,
                                TestListResource, SimulationResource, OrderListResource, OrderResource,
-                               OrderItemResource, OrderItemListResource, AnalyzerResource, OrderItemVersionListResource)
+                               OrderItemResource, OrderItemListResource, AnalyzerResource, OrderItemVersionListResource,
+                               CustomerListResource, CustomerResource)
 from server.extensions import db, flask_api, jwt
 
 from logging.config import dictConfig
@@ -45,6 +46,8 @@ from server.apis import api_bp
 
 flask_api.init_app(api_bp)
 
+flask_api.add_resource(CustomerListResource, '/customers')
+flask_api.add_resource(CustomerResource, '/customers/<int:customer_id>/orders/')
 flask_api.add_resource(UserResource, '/users', '/users/<string:username>')
 flask_api.add_resource(AdminUserListResource, '/admin/users')
 flask_api.add_resource(AdminUserRoleResource, '/admin/users/<string:username>/roles')

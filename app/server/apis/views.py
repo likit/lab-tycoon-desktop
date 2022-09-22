@@ -67,6 +67,32 @@ class AdminBioSource(Resource):
         return {'data': data}
 
 
+class CustomerListResource(Resource):
+    @jwt_required()
+    def get(self):
+        customers = Customer.query.all()
+        return {'data': [c.to_dict() for c in customers]}, HTTPStatus.OK
+
+
+class CustomerResource(Resource):
+    @jwt_required()
+    def get(self, customer_id):
+        customer = Customer.query.get(customer_id)
+        cust_data = customer.to_dict()
+        cust_data['orders'] = []
+        for order in customer.orders:
+            order_data = {
+                'id': order.id,
+                'received_at': order.received_at.isoformat(),
+                'items': [],
+            }
+            for item in order.order_items:
+                order_data['items'].append(item.to_dict())
+            cust_data['orders'].append(order_data)
+
+        return {'data': cust_data}, HTTPStatus.OK
+
+
 class UserResource(Resource):
     @jwt_required()
     def get(self, username=None):

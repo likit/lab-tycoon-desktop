@@ -203,6 +203,17 @@ class Customer(db.Model):
     def fullname(self):
         return f'{self.firstname} {self.lastname}'
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'hn': self.hn,
+            'firstname': self.firstname,
+            'lastname': self.lastname,
+            'fullname': self.fullname,
+            'dob': self.dob.isoformat(),
+            'address': self.address
+        }
+
 
 class LabOrder(db.Model):
     __tablename__ = 'lab_orders'

@@ -818,3 +818,88 @@ def create_item_detail_window(access_token, item_id):
         elif event == 'History':
             create_lab_order_item_version_list_window(access_token, item)
     window.close()
+
+
+def create_customer_list_window(access_token):
+    if not access_token:
+        sg.popup_error('Please sign in to access this section.', title='Unauthorization Error')
+        return
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get('http://127.0.0.1:5000/api/customers', headers=headers)
+    data = []
+    if resp.status_code != 200:
+        sg.popup_error(resp.json().get('message'), title='System Error')
+    else:
+        for customer in resp.json().get('data'):
+            data.append([
+                customer['id'], customer['hn'], customer['fullname'], customer['dob']
+            ])
+        layout = [
+            [sg.Text('Search'), sg.InputText(key='-QUERY-'), sg.Button('Go'),
+             sg.Button('Clear', button_color=('white', 'red'))],
+            [sg.Table(headings=['ID', 'HN', 'Name', 'DOB'],
+                      values=data, key='-CUSTOMER-TABLE-', enable_events=True, expand_x=True, expand_y=True)],
+            [sg.Exit()]
+        ]
+
+        flt_data = data
+        window = sg.Window('Users', layout=layout, resizable=True, modal=True, finalize=True)
+        window['-CUSTOMER-TABLE-'].bind("<Double-Button-1>", " Double")
+
+        while True:
+            event, values = window.read()
+            if event in ['Exit', sg.WIN_CLOSED]:
+                break
+            elif event == '-CUSTOMER-TABLE- Double' and values['-CUSTOMER-TABLE-']:
+                customer_id = flt_data[values['-CUSTOMER-TABLE-'][0]][0]
+                create_customer_order_list_window(access_token, customer_id)
+            elif event == 'Go':
+                flt_data = []
+                for cust in data:
+                    if values['-QUERY-'] in cust[1] or values['-QUERY-'] in cust[2]:
+                        flt_data.append(cust)
+                if not flt_data:
+                    flt_data = data
+                window.find_element('-CUSTOMER-TABLE-').update(values=flt_data)
+            elif event == 'Clear':
+                window.find_element('-QUERY-').update('')
+                window.find_element('-CUSTOMER-TABLE-').update(values=data)
+        window.close()
+
+
+def create_customer_order_list_window(access_token, customer_id):
+    if not access_token:
+        sg.popup_error('Please sign in to access this section.', title='Unauthorization Error')
+        return
+    headers = {'Authorization': f'Bearer {access_token}'}
+    resp = requests.get(f'http://127.0.0.1:5000/api/customers/{customer_id}/orders', headers=headers)
+    if resp.status_code != 200:
+        sg.popup_error(resp.json().get('message'), title='System Error')
+        return
+    else:
+        treedata = sg.TreeData()
+        data = resp.json().get('data')
+        print(data)
+        for order in data['orders']:
+            treedata.insert('', order['id'], order['id'], [format_datetime(order['received_at'])])
+            for item in order['items']:
+                treedata.insert(order['id'], item['id'], item['id'],
+                                ['', item['code'], item['label'], item['value'],
+                                 format_datetime(item['finished_at']),
+                                 format_datetime(item['reported_at']), item['reporter_name'],
+                                 item['approved_at'], item['approver_name'],
+                                 ])
+        layout = [
+            [sg.Tree(data=treedata, headings=['Received At', 'Code', 'Label', 'Value',
+                                              'Finished At', 'Reported At', 'Reporter',
+                                              'Approved At', 'Approver'],
+                     auto_size_columns=True, show_expanded=False, expand_y=True, expand_x=True)],
+            [sg.CloseButton('Close')]
+        ]
+
+        window = sg.Window('Customer Orders', layout=layout, resizable=True, modal=True, finalize=True)
+        while True:
+            event, values = window.read()
+            if event in ['Exit', sg.WIN_CLOSED]:
+                break
+        window.close()
