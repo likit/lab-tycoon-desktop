@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from flask import request, jsonify
 from http import HTTPStatus
-from flask_jwt_extended import (create_access_token, jwt_required, current_user, get_jwt)
+from flask_jwt_extended import (create_access_token, jwt_required, current_user, get_jwt, create_refresh_token)
 
 from server.auth import auth_bp
 from server.extensions import jwt, db
@@ -34,7 +34,7 @@ def sign_in():
     if user:
         if user.check_password(password):
             return jsonify({'message': 'You have signed in.',
-                            'access_token': create_access_token(identity=username,
+                            'access_token': create_access_token(identity=username, expires_delta=False,
                                                                 additional_claims={'roles': user.all_roles})})
         else:
             return jsonify({'message': 'Wrong password. You have not been authorized.'}), HTTPStatus.UNAUTHORIZED
