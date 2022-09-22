@@ -83,6 +83,36 @@ def create_signin_window():
     return access_token
 
 
+def create_password_setting_window(access_token):
+    layout = [
+        [sg.Text('Old Password', size=(15, 1)), sg.InputText(key='-OLD-PWD-', password_char='*')],
+        [sg.Text('New Password', size=(15, 1)), sg.InputText(key='-NEW-PWD-', password_char='*')],
+        [sg.Text('Confirm Password', size=(15, 1)), sg.InputText(key='-CF-PWD-', password_char='*')],
+        [sg.Button('Submit'), sg.CloseButton('Close')]
+    ]
+    window = sg.Window('User Profile', layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['Exit', sg.WIN_CLOSED]:
+            break
+        elif event == 'Submit':
+            if values['-NEW-PWD-'] == values['-CF-PWD-']:
+                headers = {'Authorization': f'Bearer {access_token}'}
+                resp = requests.patch('http://127.0.0.1:5000/api/users', headers=headers, json=values)
+                if resp.status_code != 200:
+                    if resp.status_code == 401:
+                        sg.popup_error('Please sign in to access this part.')
+                    else:
+                        sg.popup_error(f'Error occurred: {resp.status_code}')
+                else:
+                    sg.popup_ok(resp.json().get('message'))
+                    break
+            else:
+                sg.popup_error('Passwords do not match.', title='Password Error')
+    window.close()
+
+
 def create_profile_window(access_token):
     if not access_token:
         return
@@ -103,7 +133,8 @@ def create_profile_window(access_token):
         [sg.Text('Email', size=(8, 1)), sg.InputText(profile['email'], key='email')],
         [sg.Text('Position', size=(8, 1)), sg.InputText(profile['position'], key='position')],
         [sg.Text('License ID', size=(8, 1)), sg.InputText(profile['license_id'], key='license_id')],
-        [sg.Button('Submit'), sg.Exit()],
+        [sg.Button('Submit'), sg.Button('Change Password', key='-PASSWORD-',
+                                        button_color=('white', 'red')), sg.CloseButton('Close')],
     ]
 
     window = sg.Window('User Profile', layout=layout, modal=True)
@@ -112,6 +143,8 @@ def create_profile_window(access_token):
         event, values = window.read()
         if event in ['Exit', sg.WIN_CLOSED]:
             break
+        elif event == '-PASSWORD-':
+            create_password_setting_window(access_token)
         else:
             resp = requests.patch('http://127.0.0.1:5000/api/users', json=values, headers=headers)
             message = resp.json().get('message')

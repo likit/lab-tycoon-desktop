@@ -4,6 +4,7 @@ from functools import wraps
 import random
 
 from flask import request, jsonify
+from werkzeug.security import check_password_hash
 from http import HTTPStatus
 from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, verify_jwt_in_request, get_jwt
 from sqlalchemy import func
@@ -112,6 +113,15 @@ class UserResource(Resource):
             user = current_user
         data = request.get_json()
         if user:
+            if '-OLD-PWD-' in data:
+                if check_password_hash(current_user.hashed_password, data['-OLD-PWD-']):
+                    current_user.password = data['-NEW-PWD-']
+                    db.session.add(current_user)
+                    db.session.commit()
+                    return {'message': 'Password has been changed.'}, HTTPStatus.OK
+                else:
+                    return {'message': 'Wrong Password'}, HTTPStatus.UNAUTHORIZED
+
             for key in data:
                 setattr(user, key, data.get(key))
             db.session.add(user)
