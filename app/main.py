@@ -76,7 +76,9 @@ layout = [
      sg.Exit(button_color='white on red')]
 ]
 
-window = sg.Window('Lab Tycoon Desktop!', layout=layout, element_justification='center').finalize()
+window = sg.Window('Lab Tycoon Desktop!',
+                   layout=layout,
+                   element_justification='center').finalize()
 flask_job = threading.Thread(target=lambda: app.run(use_reloader=False, debug=True))
 flask_job.start()
 access_token = ''
