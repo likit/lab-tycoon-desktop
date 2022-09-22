@@ -141,7 +141,7 @@ def create_profile_window(access_token):
 
     while True:
         event, values = window.read()
-        if event in ['Exit', sg.WIN_CLOSED]:
+        if event in ['Exit', sg.WIN_CLOSED, 'Close']:
             break
         elif event == '-PASSWORD-':
             create_password_setting_window(access_token)
@@ -989,7 +989,7 @@ def create_customer_order_list_window(access_token, customer_id):
             [sg.Tree(data=treedata, headings=['Received At', 'Code', 'Label', 'Value',
                                               'Finished At', 'Reported At', 'Reporter',
                                               'Approved At', 'Approver'],
-                     auto_size_columns=True, show_expanded=False, expand_y=True, expand_x=True)],
+                     auto_size_columns=True, show_expanded=True, expand_y=True, expand_x=True)],
             [sg.CloseButton('Close')]
         ]
 
