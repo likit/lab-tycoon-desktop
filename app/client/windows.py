@@ -977,9 +977,12 @@ def create_customer_order_list_window(access_token, customer_id):
         treedata = sg.TreeData()
         data = resp.json().get('data')
         for order in data['orders']:
-            treedata.insert('', order['id'], order['id'], [format_datetime(order['received_at'])])
+            treedata.insert('',
+                            f"Order-{order['id']}",
+                            f"Order:{order['id']}",
+                            [format_datetime(order['received_at'])])
             for item in order['items']:
-                treedata.insert(order['id'], item['id'], item['id'],
+                treedata.insert(f"Order-{order['id']}", item['id'], f"Item:{item['id']}",
                                 ['', item['code'], item['label'], item['value'],
                                  format_datetime(item['finished_at']),
                                  format_datetime(item['reported_at']), item['reporter_name'],
