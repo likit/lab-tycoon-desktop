@@ -154,7 +154,6 @@ def create_user_list_window(access_token):
             elif event == '-TABLE- Double' and values['-TABLE-']:
                 username = data[values['-TABLE-'][0]][3]
                 updated = create_admin_user_role_window(access_token, username)
-                print(updated)
                 if updated:
                     data[values['-TABLE-'][0]][5] = ','.join([r for r, v in updated.items()
                                                               if v is True and r != '-ACTIVE-'])
@@ -185,10 +184,11 @@ def create_tmlt_test_window(access_token):
         [sg.Button('Submit'), sg.CloseButton('Close')],
         [sg.Table(values=[],
                   headings=['TMLT Code', 'TMLT Name', 'Specimens', 'Method', 'Unit'],
-                  key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)]
+                  key='-TABLE-', auto_size_columns=True, expand_x=True, expand_y=True, enable_events=True)]
     ]
 
-    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True)
+    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True)
+    window['-TABLE-'].bind("<Double-Button-1>", " Double")
 
     while True:
         event, values = window.read()
@@ -221,7 +221,7 @@ def create_tmlt_test_window(access_token):
                 window.refresh()
             else:
                 sg.popup_error('Error occurred. Could not fetch data from TMLT server.')
-        elif event == '-TABLE-':
+        elif event == '-TABLE- Double':
             try:
                 row = values['-TABLE-'][0]
             except IndexError:
@@ -321,7 +321,7 @@ def create_biosource_window(access_token):
         data.append(src.get('source'))
     layout = [
         [sg.Table(data, headings=['source'], enable_events=True, key='-TABLE-')],
-        [sg.Button('Add'), sg.CloseButton('Close')],
+        [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close')],
     ]
 
     window = sg.Window('Biological Sources', modal=True, layout=layout)
@@ -357,14 +357,13 @@ def create_tmlt_test_form_window(data, access_token):
         [sg.Text('Ref. Min', size=(8, 1)), sg.InputText(key='ref_min')],
         [sg.Text('Ref. Max', size=(8, 1)), sg.InputText(key='ref_max')],
         [sg.Text('Valuce Choices', size=(8, 1)), sg.Multiline(size=(45, 10), key='value_choices')],
-        [sg.CloseButton('Close', size=(8, 1)), sg.Button('Add')]
+        [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
     window = sg.Window('Test Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
-        print(event)
         if event in ['CloseButton', sg.WIN_CLOSED]:
             break
         elif event == 'Add':
@@ -413,7 +412,7 @@ def create_test_list_window(access_token):
                             'TMLT Code', 'TMLT Name', 'Specimens',
                             'Method', 'Unit', 'Price', 'Active'],
                   key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)],
-        [sg.Button('Add'), sg.CloseButton('Close')],
+        [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close')],
     ]
 
     window = sg.Window('All Tests', layout=layout, modal=True, resizable=True)
@@ -944,7 +943,6 @@ def create_customer_order_list_window(access_token, customer_id):
     else:
         treedata = sg.TreeData()
         data = resp.json().get('data')
-        print(data)
         for order in data['orders']:
             treedata.insert('', order['id'], order['id'], [format_datetime(order['received_at'])])
             for item in order['items']:
