@@ -346,7 +346,7 @@ class OrderItemResource(Resource):
         else:
             data = request.get_json()
             for key in data:
-                if key in ['cancelled_at', 'reported_at', 'approved_at']:
+                if key in ['cancelled_at', 'reported_at', 'approved_at', 'finished_at']:
                     setattr(item, key, datetime.datetime.fromisoformat(data[key]))
                     if key == 'cancelled_at':
                         message = 'The item has been cancelled.'

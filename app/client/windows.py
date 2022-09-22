@@ -823,7 +823,7 @@ def create_item_detail_window(access_token, item_id):
          ],
         [sg.Text('Value'), sg.Input(item['value'], key='-ITEM-VALUE-', disabled=is_item_cancelled)],
         [sg.Text('Comment')],
-        [sg.Multiline(item['comment'], key='-UPDATE-COMMENT-', size=(45, 10))],
+        [sg.Multiline(item['comment'], key='-UPDATE-COMMENT-', size=(45, 10), disabled=is_item_cancelled)],
         actions,
         [sg.Button('History'), sg.CloseButton('Close', button_color=('white', 'red'))],
     ]
@@ -872,6 +872,7 @@ def create_item_detail_window(access_token, item_id):
                                       headers=headers,
                                       json={'_value': values['-ITEM-VALUE-'],
                                             'comment': values['-UPDATE-COMMENT-'],
+                                            'finished_at': datetime.now().isoformat(),
                                             'reported_at': datetime.now().isoformat()})
                 if resp.status_code == 200:
                     sg.popup_ok(f'{resp.json().get("message")}')
