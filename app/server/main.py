@@ -32,7 +32,7 @@ dictConfig({
 })
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///data/app.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///app.db'
 app.config['SECRET_KEY'] = 'mumtmahidol'
 app.config['JWT_SECRET_KEY'] = 'mumtmahidol'
 db.init_app(app)

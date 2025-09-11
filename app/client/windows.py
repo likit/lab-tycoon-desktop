@@ -12,7 +12,7 @@ from tabulate import tabulate
 
 from http import HTTPStatus
 
-import PySimpleGUI as sg
+import FreeSimpleGUI as sg
 import requests
 
 logger = logging.getLogger('client')
@@ -196,8 +196,8 @@ def create_user_list_window(access_token):
         window.close()
 
 
-TMLT_ACCESS_TOKEN_URL = 'https://tmlt.this.or.th/tmltapi/api/TmltToken/GetToken'
-TMLT_SEARCH_URL = 'https://tmlt.this.or.th/tmltapi/10686/search'
+TMLT_ACCESS_TOKEN_URL = 'https://tmltconnect.this.or.th:7243/api/TmltToken/GetToken'
+TMLT_SEARCH_URL = 'https://tmltconnect.this.or.th:7243/10686/search'
 HOSPITAL_CODE = '10686'
 
 

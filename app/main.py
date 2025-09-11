@@ -21,7 +21,7 @@ fake = Faker()
 base_url = os.path.dirname(os.path.abspath(__file__))
 
 with app.app_context():
-    if not os.path.exists(os.path.join(base_url, 'server', 'data', 'app.db')):
+    if not os.path.exists(os.path.join(base_url, 'instance', 'app.db')):
         db.create_all()
         print('Populating a default admin account...')
         user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
