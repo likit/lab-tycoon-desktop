@@ -1,7 +1,12 @@
 import os.path
 import platform
 import FreeSimpleGUI as sg
-from server.models import initialize_db
+import jwt
+import keyring
+
+from app.auth.windows import create_signin_window
+from app.server.models import initialize_db
+from app.config import secret_key
 
 BASE_URL = os.getcwd()
 
@@ -45,6 +50,35 @@ window = sg.Window('Lab Tycoon Desktop!',
                    layout=layout,
                    element_justification='center').finalize()
 
+
+def get_token_and_decode_payload():
+    current_token = keyring.get_password('labtycoon', 'access_token')
+    current_user = None
+    if current_token:
+        try:
+            decoded_payload = jwt.decode(current_token.encode('utf-8'), secret_key, algorithms=['HS256'])
+        except jwt.exceptions.ExpiredSignatureError:
+            pass
+        else:
+            current_user = decoded_payload['username']
+
+    return current_user
+
+def toggle_buttons_after_log_in_out(action='login'):
+    if action == 'login':
+        window.find_element('-SIGNOUT-').update(visible=True)
+        window.find_element('-EDIT-PROFILE-').update(visible=True)
+        window.find_element('-SIGNIN-').update(visible=False)
+    else:
+        window.find_element('-SIGNOUT-').update(visible=False)
+        window.find_element('-EDIT-PROFILE-').update(visible=False)
+        window.find_element('-SIGNIN-').update(visible=True)
+
+current_user = get_token_and_decode_payload()
+if current_user:
+    toggle_buttons_after_log_in_out()
+
+
 while True:
     event, values = window.read()
     if event == sg.WINDOW_CLOSED or event == 'Exit':
@@ -55,24 +89,17 @@ while True:
     #     else:
     #         # create_register_window()
     #         print('foo')
-    # elif event == '-SIGNIN-':
-    #     access_token = None
-    #     if access_token:
-    #         window.find_element('-SIGNOUT-').update(visible=True)
-    #         window.find_element('-EDIT-PROFILE-').update(visible=True)
-    #         window.find_element('-SIGNIN-').update(visible=False)
-    # elif event == '-SIGNOUT-':
-    #     if sg.popup_yes_no('You sure want to sign out?') == 'Yes':
-    #         headers = {'Authorization': f'Bearer {access_token}'}
-    #         # resp = requests.delete('http://127.0.0.1:5000/auth/sign-out', headers=headers)
-    #         if resp.status_code == 200:
-    #             sg.popup_auto_close('You have logged out.')
-    #             # TODO: store current_user in the database so that it is accessible outside Flask
-    #             window.find_element('-SIGNOUT-').update(visible=False)
-    #             window.find_element('-SIGNIN-').update(visible=True)
-    #             window.find_element('-EDIT-PROFILE-').update(visible=True)
-    #         else:
-    #             sg.popup_error(resp.json().get('message'))
+    elif event == '-SIGNIN-':
+        if not current_user:
+            access_token = create_signin_window()
+            current_user = get_token_and_decode_payload()
+            if current_user:
+                toggle_buttons_after_log_in_out()
+    elif event == '-SIGNOUT-':
+        keyring.delete_password('labtycoon', 'access_token')
+        current_user = None
+        toggle_buttons_after_log_in_out('logout')
+        sg.popup_auto_close('You have logged out.')
     # elif event == '-EDIT-PROFILE-':
     #     if access_token:
     #         create_profile_window(access_token)
