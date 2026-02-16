@@ -1,5 +1,3 @@
-import secrets
-import token
 from logging.config import dictConfig
 
 dictConfig({
@@ -23,4 +21,4 @@ dictConfig({
 })
 
 # TODO: find a way to dynamically set the secret key when app is first launched.
-secret_key = secrets.token_hex(32)
+secret_key = '85015f158b2f8b050705aa6ec9fbd65c99966725eec0965a5ac0bd3564afd210'

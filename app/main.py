@@ -46,17 +46,13 @@ layout = [
      sg.Exit(button_color='white on red')]
 ]
 
-window = sg.Window('Lab Tycoon Desktop!',
-                   layout=layout,
-                   element_justification='center').finalize()
-
 
 def get_token_and_decode_payload():
     current_token = keyring.get_password('labtycoon', 'access_token')
     current_user = None
     if current_token:
         try:
-            decoded_payload = jwt.decode(current_token.encode('utf-8'), secret_key, algorithms=['HS256'])
+            decoded_payload = jwt.decode(current_token, secret_key, algorithms=['HS256'])
         except jwt.exceptions.ExpiredSignatureError:
             pass
         else:
@@ -64,87 +60,93 @@ def get_token_and_decode_payload():
 
     return current_user
 
-def toggle_buttons_after_log_in_out(action='login'):
-    if action == 'login':
-        window.find_element('-SIGNOUT-').update(visible=True)
-        window.find_element('-EDIT-PROFILE-').update(visible=True)
-        window.find_element('-SIGNIN-').update(visible=False)
-    else:
-        window.find_element('-SIGNOUT-').update(visible=False)
-        window.find_element('-EDIT-PROFILE-').update(visible=False)
-        window.find_element('-SIGNIN-').update(visible=True)
 
-current_user = get_token_and_decode_payload()
-if current_user:
-    toggle_buttons_after_log_in_out()
+def run_app():
+    window = sg.Window('Lab Tycoon Desktop!',
+                       layout=layout,
+                       element_justification='center').finalize()
+
+    current_user = get_token_and_decode_payload()
+
+    def toggle_buttons_after_log_in_out(action='login'):
+        if action == 'login':
+            window.find_element('-SIGNOUT-').update(visible=True)
+            window.find_element('-EDIT-PROFILE-').update(visible=True)
+            window.find_element('-SIGNIN-').update(visible=False)
+        else:
+            window.find_element('-SIGNOUT-').update(visible=False)
+            window.find_element('-EDIT-PROFILE-').update(visible=False)
+            window.find_element('-SIGNIN-').update(visible=True)
+
+    if current_user:
+        toggle_buttons_after_log_in_out()
+
+    while True:
+        event, values = window.read()
+        if event == sg.WINDOW_CLOSED or event == 'Exit':
+            break
+        # elif event == 'Register':
+        #     if not access_token:
+        #         sg.popup_error('Please sing in to access this section.')
+        #     else:
+        #         # create_register_window()
+        #         print('foo')
+        elif event == '-SIGNIN-':
+            if not current_user:
+                access_token = create_signin_window()
+                current_user = get_token_and_decode_payload()
+                if current_user:
+                    toggle_buttons_after_log_in_out()
+        elif event == '-SIGNOUT-':
+            keyring.delete_password('labtycoon', 'access_token')
+            current_user = None
+            toggle_buttons_after_log_in_out('logout')
+            sg.popup_auto_close('You have logged out.')
+        # elif event == '-EDIT-PROFILE-':
+        #     if access_token:
+        #         create_profile_window(access_token)
+        #     else:
+        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        # elif event == 'Program':
+        #     sg.popup_ok('This program is developed by Asst. Prof.Likit Preeyanon. '
+        #                 'Please contact likit.pre@mahidol.edu for more information.'
+        #                 , title='About')
+        # elif event == 'SQL Editor':
+        #     if not access_token:
+        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        #     else:
+        #         create_sql_window()
+        # elif event == '-ANALYZE-':
+        #     create_analysis_window(access_token)
+        # elif event == '-order-list-':
+        #     if not access_token:
+        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        #     else:
+        #         create_order_list_window(access_token)
+        # elif event == '-LOGGING-':
+        #     if not access_token:
+        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        #     else:
+        #         create_logging_window(access_token)
+        # elif event == 'Manage':
+        #     create_user_list_window(access_token)
+        # elif event == 'BioSource':
+        #     create_biosource_window(access_token)
+        # elif event == 'Add TMLT test':
+        #     if not access_token:
+        #         sg.popup_error('Please sign in to access this section.')
+        #     else:
+        #         create_tmlt_test_window(access_token)
+        # elif event == 'List':
+        #     if not access_token:
+        #         sg.popup_error('Please sign in to access this section.')
+        #     else:
+        #         create_test_list_window(access_token)
+        # elif event == '-PATIENT-':
+        #     if not access_token:
+        #         sg.popup_error('Please sign in to access this section.')
+        #     else:
+        #         create_customer_list_window(access_token)
 
 
-while True:
-    event, values = window.read()
-    if event == sg.WINDOW_CLOSED or event == 'Exit':
-        break
-    # elif event == 'Register':
-    #     if not access_token:
-    #         sg.popup_error('Please sing in to access this section.')
-    #     else:
-    #         # create_register_window()
-    #         print('foo')
-    elif event == '-SIGNIN-':
-        if not current_user:
-            access_token = create_signin_window()
-            current_user = get_token_and_decode_payload()
-            if current_user:
-                toggle_buttons_after_log_in_out()
-    elif event == '-SIGNOUT-':
-        keyring.delete_password('labtycoon', 'access_token')
-        current_user = None
-        toggle_buttons_after_log_in_out('logout')
-        sg.popup_auto_close('You have logged out.')
-    # elif event == '-EDIT-PROFILE-':
-    #     if access_token:
-    #         create_profile_window(access_token)
-    #     else:
-    #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
-    # elif event == 'Program':
-    #     sg.popup_ok('This program is developed by Asst. Prof.Likit Preeyanon. '
-    #                 'Please contact likit.pre@mahidol.edu for more information.'
-    #                 , title='About')
-    # elif event == 'SQL Editor':
-    #     if not access_token:
-    #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
-    #     else:
-    #         create_sql_window()
-    # elif event == '-ANALYZE-':
-    #     create_analysis_window(access_token)
-    # elif event == '-order-list-':
-    #     if not access_token:
-    #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
-    #     else:
-    #         create_order_list_window(access_token)
-    # elif event == '-LOGGING-':
-    #     if not access_token:
-    #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
-    #     else:
-    #         create_logging_window(access_token)
-    # elif event == 'Manage':
-    #     create_user_list_window(access_token)
-    # elif event == 'BioSource':
-    #     create_biosource_window(access_token)
-    # elif event == 'Add TMLT test':
-    #     if not access_token:
-    #         sg.popup_error('Please sign in to access this section.')
-    #     else:
-    #         create_tmlt_test_window(access_token)
-    # elif event == 'List':
-    #     if not access_token:
-    #         sg.popup_error('Please sign in to access this section.')
-    #     else:
-    #         create_test_list_window(access_token)
-    # elif event == '-PATIENT-':
-    #     if not access_token:
-    #         sg.popup_error('Please sign in to access this section.')
-    #     else:
-    #         create_customer_list_window(access_token)
-
-
-window.close()
+    window.close()
