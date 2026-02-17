@@ -43,7 +43,7 @@ layout = [
     [sg.Text('Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
     [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น '
              'ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
-    [sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=True),
+    [sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=False),
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Button('Analyze', key='-ANALYZE-'),

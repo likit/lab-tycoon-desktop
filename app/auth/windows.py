@@ -110,8 +110,11 @@ def create_profile_window():
         [sg.Text('Email', size=(8, 1)), sg.InputText(user.email, key='email')],
         [sg.Text('Position', size=(8, 1)), sg.InputText(user.position, key='position')],
         [sg.Text('License ID', size=(8, 1)), sg.InputText(user.license_id, key='license_id')],
-        [sg.Button('Submit'), sg.Button('Change Password', key='-PASSWORD-',
-                                        button_color=('white', 'red')), sg.CloseButton('Close')],
+        [
+            sg.Button('Change Password', key='-PASSWORD-', button_color=('white', 'red')),
+            sg.Button('Submit'),
+            sg.CloseButton('Close')
+         ],
     ]
 
     window = sg.Window('User Profile', layout=layout, modal=True)
