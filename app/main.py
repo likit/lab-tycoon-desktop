@@ -3,10 +3,15 @@ import platform
 import FreeSimpleGUI as sg
 import jwt
 import keyring
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.auth.windows import create_signin_window
-from app.server.models import initialize_db
-from app.config import secret_key
+from app.auth.windows import create_signin_window, create_profile_window
+from app.server.models import initialize_db, User, engine
+from app.config import secret_key, logger
+from app.auth.windows import SessionManager
+
+session_manager = SessionManager()
 
 BASE_URL = os.getcwd()
 
@@ -31,9 +36,10 @@ menu_def = [
 
 layout = [
     [sg.Menu(menu_def)],
-    [sg.Text('Lab Tycoon V.2022.1', font=('Arial', 34))],
+    [sg.Text('Lab Tycoon V.2029.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
-    [sg.Text('By Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
+    [sg.Text('By Likit Preeyanon, Ph.D.', font=('Arial', 16))],
+    [sg.Text('Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
     [sg.Text('โปรแกรมนี้พัฒนาสำหรับใช้ในการเรียนการสอนเท่านั้น '
              'ทางผู้พัฒนาไม่รับประกันความเสียหายที่อาจเกิดขึ้นหากนำไปใช้ในห้องปฏิบัติการจริง', font=('Arial', 14))],
     [sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=True),
@@ -49,16 +55,14 @@ layout = [
 
 def get_token_and_decode_payload():
     current_token = keyring.get_password('labtycoon', 'access_token')
-    current_user = None
     if current_token:
         try:
             decoded_payload = jwt.decode(current_token, secret_key, algorithms=['HS256'])
         except jwt.exceptions.ExpiredSignatureError:
             pass
         else:
-            current_user = decoded_payload['username']
-
-    return current_user
+            return decoded_payload
+    return None
 
 
 def run_app():
@@ -66,7 +70,14 @@ def run_app():
                        layout=layout,
                        element_justification='center').finalize()
 
-    current_user = get_token_and_decode_payload()
+    decoded_payload = get_token_and_decode_payload()
+    if decoded_payload:
+        with Session(engine) as session:
+            query = select(User).where(User.username == decoded_payload['username'])
+            user = session.scalars(query).first()
+            if user:
+                session_manager.login(user)
+                logger.info('USER %s SIGNED IN' % user.username)
 
     def toggle_buttons_after_log_in_out(action='login'):
         if action == 'login':
@@ -78,7 +89,7 @@ def run_app():
             window.find_element('-EDIT-PROFILE-').update(visible=False)
             window.find_element('-SIGNIN-').update(visible=True)
 
-    if current_user:
+    if session_manager.current_user:
         toggle_buttons_after_log_in_out()
 
     while True:
@@ -92,21 +103,23 @@ def run_app():
         #         # create_register_window()
         #         print('foo')
         elif event == '-SIGNIN-':
-            if not current_user:
-                access_token = create_signin_window()
+            if not session_manager.current_user:
+                create_signin_window()
                 current_user = get_token_and_decode_payload()
                 if current_user:
                     toggle_buttons_after_log_in_out()
+            else:
+                sg.popup_error('You are already logged in.', title='User Authentication')
         elif event == '-SIGNOUT-':
             keyring.delete_password('labtycoon', 'access_token')
-            current_user = None
+            session_manager.logout()
             toggle_buttons_after_log_in_out('logout')
             sg.popup_auto_close('You have logged out.')
-        # elif event == '-EDIT-PROFILE-':
-        #     if access_token:
-        #         create_profile_window(access_token)
-        #     else:
-        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
+        elif event == '-EDIT-PROFILE-':
+            if session_manager.current_user:
+                create_profile_window()
+            else:
+                sg.popup_error('Please sign in to access this section.', title='Access Denied')
         # elif event == 'Program':
         #     sg.popup_ok('This program is developed by Asst. Prof.Likit Preeyanon. '
         #                 'Please contact likit.pre@mahidol.edu for more information.'

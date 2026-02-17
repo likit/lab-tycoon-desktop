@@ -54,8 +54,8 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     firstname: Mapped[str] = mapped_column('firstname', String(255), nullable=False)
     lastname: Mapped[str] = mapped_column('lastname', String(255), nullable=False)
-    license_id: Mapped[int] = mapped_column('license_id', String(255), nullable=True)
-    position: Mapped[int] = mapped_column('position', String(255), nullable=True)
+    license_id: Mapped[str] = mapped_column('license_id', String(255), nullable=True)
+    position: Mapped[str] = mapped_column('position', String(255), nullable=True)
     roles: Mapped[List["UserRole"]] = relationship(secondary=user_roles)
     active: Mapped[bool] = mapped_column('active', Boolean(), default=True)
 
@@ -74,24 +74,15 @@ class User(Base):
     def check_password(self, password):
         return bcrypt.checkpw(password, self.hashed_password)
 
-    def to_dict(self):
-        return {
-            'username': self.username,
-            'email': self.email,
-            'firstname': self.firstname,
-            'lastname': self.lastname,
-            'license_id': self.license_id,
-            'position': self.position,
-            'roles': self.all_roles,
-            'active': self.active,
-        }
-
     @property
     def all_roles(self):
         return ','.join([r.role_need for r in self.roles])
 
     def has_role(self, role_need):
         return role_need in [r.role_need for r in self.roles]
+
+    def __str__(self):
+        return self.username
 
 
 class BioSource(Base):
@@ -312,7 +303,11 @@ configure_mappers()
 def initialize_db():
     Base.metadata.create_all(engine)
     print('Populating a default admin account...')
-    user = User(firstname='Jane', lastname='Doe', username='jane', email='jane@labtycoon.com')
+    user = User(firstname='Jane',
+                lastname='Doe',
+                username='jane',
+                position='Manager',
+                email='jane@labtycoon.com')
     user.password = '1234'
     for role in ['admin', 'approver', 'reporter']:
         r = UserRole(role_need=role)
