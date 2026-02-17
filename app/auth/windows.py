@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import bcrypt
 import jwt
 import keyring
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from app.config import secret_key, logger
@@ -171,4 +171,43 @@ def create_password_setting_window():
                     sg.popup_error('Incorrect old passwords.', title='Password Error')
             else:
                 sg.popup_error('Old password is required', title='Password Error')
+    window.close()
+
+@login_required
+def create_register_window():
+    layout = [
+        [sg.Text('First Name', size=(8, 1)), sg.InputText(key='firstname')],
+        [sg.Text('Last Name', size=(8, 1)), sg.InputText(key='lastname')],
+        [sg.Text('Email', size=(8, 1)), sg.InputText(key='email')],
+        [sg.Text('Position', size=(8, 1)), sg.InputText(key='position')],
+        [sg.Text('License ID', size=(8, 1)), sg.InputText(key='license_id')],
+        [sg.Text('Username', size=(8, 1)), sg.InputText(key='username')],
+        [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*', key='password')],
+        [sg.Button('Submit'), sg.Exit()],
+    ]
+
+    window = sg.Window('Register', layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['Exit', sg.WIN_CLOSED]:
+            break
+        else:
+            query = select(User).where(User.username == values['username'])
+            with Session(engine) as session:
+                _user = session.scalars(query).first()
+                if _user:
+                    sg.popup_error(f'Username {values["username"]} or email {values['email']} is already registered.')
+                else:
+                    user = User(firstname=values['firstname'],
+                                lastname=values['lastname'],
+                                email=values['email'],
+                                position=values['position'],
+                                license_id=values['license_id'],
+                                username=values['username'])
+                    user.password = values['password']
+                    session.add(user)
+                    session.commit()
+                    sg.popup_ok('New username has been registered.')
+                    break
     window.close()

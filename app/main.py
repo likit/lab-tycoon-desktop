@@ -6,7 +6,9 @@ import keyring
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.windows import create_signin_window, create_profile_window
+from app.auth.windows import (create_signin_window,
+                              create_profile_window,
+                              create_register_window)
 from app.system.models import initialize_db, User, engine
 from app.config import secret_key, logger
 from app.auth.windows import SessionManager
@@ -97,12 +99,8 @@ def run_app():
         event, values = window.read()
         if event == sg.WINDOW_CLOSED or event == 'Exit':
             break
-        # elif event == 'Register':
-        #     if not access_token:
-        #         sg.popup_error('Please sing in to access this section.')
-        #     else:
-        #         # create_register_window()
-        #         print('foo')
+        elif event == 'Register':
+            create_register_window()
         elif event == '-SIGNIN-':
             if not session_manager.current_user:
                 create_signin_window()
