@@ -10,7 +10,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity, current_user, ver
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
-from server.models import User, UserRole, BioSource, Test, Specimens, TestMethod, Customer, LabOrder, LabOrderItem
+from system.models import User, UserRole, BioSource, Test, Specimens, TestMethod, Customer, LabOrder, LabOrderItem
 from flask_restful import Resource
 
 from ..extensions import db

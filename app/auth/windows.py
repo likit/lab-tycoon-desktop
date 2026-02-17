@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import secret_key, logger
-from app.server.models import engine, User
+from app.system.models import engine, User
 
 
 class SessionManager:

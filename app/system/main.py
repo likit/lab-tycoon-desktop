@@ -1,35 +1,14 @@
 from flask import Flask, request
 
-from server.apis.views import (UserResource,
+from system.apis.views import (UserResource,
                                AdminUserListResource,
                                AdminUserRoleResource,
                                AdminBioSource,
                                TestListResource, SimulationResource, OrderListResource, OrderResource,
                                OrderItemResource, OrderItemListResource, AnalyzerResource, OrderItemVersionListResource,
                                CustomerListResource, CustomerResource)
-from server.extensions import db, flask_api, jwt
+from system.extensions import db, flask_api, jwt
 
-from logging.config import dictConfig
-
-dictConfig({
-    'version': 1,
-    'formatters': {'default': {
-        'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
-    }},
-    'handlers': {
-        'file': {
-            'class': 'logging.FileHandler',
-            'formatter': 'default',
-            'filename': 'run_log.txt'
-        }
-    },
-    'loggers': {
-        'client': {
-            'level': 'INFO',
-            'handlers': ['file']
-        },
-    },
-})
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///app.db'
@@ -38,11 +17,11 @@ app.config['JWT_SECRET_KEY'] = 'mumtmahidol'
 db.init_app(app)
 jwt.init_app(app)
 
-from server.auth import auth_bp
+from system.auth import auth_bp
 
 app.register_blueprint(auth_bp)
 
-from server.apis import api_bp
+from system.apis import api_bp
 
 flask_api.init_app(api_bp)
 
@@ -66,7 +45,7 @@ app.register_blueprint(api_bp)
 
 @app.route('/kill')
 def kill():
-    func = request.environ.get('werkzeug.server.shutdown')
+    func = request.environ.get('werkzeug.system.shutdown')
     if func is None:
         raise RuntimeError('Not running with the Werkzeug Server')
     func()

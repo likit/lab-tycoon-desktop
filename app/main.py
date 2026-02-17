@@ -7,9 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.windows import create_signin_window, create_profile_window
-from app.server.models import initialize_db, User, engine
+from app.system.models import initialize_db, User, engine
 from app.config import secret_key, logger
 from app.auth.windows import SessionManager
+from app.system.windows import create_logging_window
 
 session_manager = SessionManager()
 
@@ -136,11 +137,8 @@ def run_app():
         #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
         #     else:
         #         create_order_list_window(access_token)
-        # elif event == '-LOGGING-':
-        #     if not access_token:
-        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
-        #     else:
-        #         create_logging_window(access_token)
+        elif event == '-LOGGING-':
+            create_logging_window()
         # elif event == 'Manage':
         #     create_user_list_window(access_token)
         # elif event == 'BioSource':
