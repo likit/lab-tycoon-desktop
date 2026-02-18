@@ -1,4 +1,3 @@
-import os
 import random
 
 import bcrypt
@@ -6,22 +5,23 @@ from faker import Faker
 from typing import List
 
 from sqlalchemy_continuum import make_versioned
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy import (
     ForeignKey, String, Integer,
     Table, Column, Boolean,
     Text, Numeric, Date,
     DateTime
 )
-from sqlalchemy.orm import DeclarativeBase, configure_mappers, Session, dynamic_loader
+from sqlalchemy.orm import DeclarativeBase, configure_mappers, Session
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from datetime import datetime, date
 
+from app.config import DATABASE_URI
+
 make_versioned()
 
-engine = create_engine('sqlite:///:memory:')
-
+engine = create_engine(DATABASE_URI)
 
 class Base(DeclarativeBase):
     pass
@@ -59,9 +59,11 @@ class User(Base):
     roles: Mapped[List["UserRole"]] = relationship(secondary=user_roles)
     active: Mapped[bool] = mapped_column('active', Boolean(), default=True)
 
-    @classmethod
-    def get_user_by_username(cls, username):
-        return cls.query.filter_by(username=username).first()
+    # @classmethod
+    # def get_user_by_username(cls, username):
+    #     with Session(engine) as session:
+    #         query = select(cls).where(cls.username == username)
+    #         return session.scalar(query)
 
     @property
     def password(self):

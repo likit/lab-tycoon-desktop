@@ -9,7 +9,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from app.config import secret_key, logger
-from app.system.models import engine, User
+from app.system.models import engine, User, UserRole
 
 
 class SessionManager:
@@ -46,7 +46,10 @@ def login_required(func):
         # --- YOUR CHECK LOGIC GOES HERE ---
         # For this example, we'll check a mock global variable.
         # In a real app, you might check 'session.get("user")' or similar.
-        if not session_manager.is_logged_in() or not session_manager.current_user.active:
+        with Session(engine) as session:
+            query = select(User).where(User.username == session_manager.current_user)
+            user = session.scalar(query)
+        if not session_manager.is_logged_in() or not user.active:
             sg.popup_error("⛔ Access Denied: You must be logged in or activate your account.")
             return None  # Or redirect, or raise error
 
@@ -85,7 +88,7 @@ def create_signin_window():
                     except Exception as e:
                         sg.popup_error(f'{e}')
                     else:
-                        session_manager.login(user)
+                        session_manager.login(user.username)
                         logger.info('USER %s SIGNED IN' % values['username'])
                         keyring.set_password('labtycoon', 'access_token', access_token)
                         sg.popup_ok(f'Logged in as {values["username"]}')
@@ -102,41 +105,41 @@ def create_signin_window():
 
 @login_required
 def create_profile_window():
-    user = session_manager.current_user
-    layout = [
-        [sg.Text('Username', size=(8, 1)), sg.InputText(user.username, disabled=True, key='username')],
-        [sg.Text('First Name', size=(8, 1)), sg.InputText(user.firstname, key='firstname')],
-        [sg.Text('Last Name', size=(8, 1)), sg.InputText(user.lastname, key='lastname')],
-        [sg.Text('Email', size=(8, 1)), sg.InputText(user.email, key='email')],
-        [sg.Text('Position', size=(8, 1)), sg.InputText(user.position, key='position')],
-        [sg.Text('License ID', size=(8, 1)), sg.InputText(user.license_id, key='license_id')],
-        [
-            sg.Button('Change Password', key='-PASSWORD-', button_color=('white', 'red')),
-            sg.Button('Submit'),
-            sg.CloseButton('Close')
-         ],
-    ]
+    with Session(engine) as session:
+        query = select(User).where(User.username == session_manager.current_user)
+        user = session.scalar(query)
+        layout = [
+            [sg.Text('Username', size=(8, 1)), sg.InputText(user.username, disabled=True, key='username')],
+            [sg.Text('First Name', size=(8, 1)), sg.InputText(user.firstname, key='firstname')],
+            [sg.Text('Last Name', size=(8, 1)), sg.InputText(user.lastname, key='lastname')],
+            [sg.Text('Email', size=(8, 1)), sg.InputText(user.email, key='email')],
+            [sg.Text('Position', size=(8, 1)), sg.InputText(user.position, key='position')],
+            [sg.Text('License ID', size=(8, 1)), sg.InputText(user.license_id, key='license_id')],
+            [
+                sg.Button('Change Password', key='-PASSWORD-', button_color=('white', 'red')),
+                sg.Button('Save'),
+                sg.CloseButton('Close')
+             ],
+        ]
 
-    window = sg.Window('User Profile', layout=layout, modal=True)
+        window = sg.Window('User Profile', layout=layout, modal=True)
 
-    while True:
-        event, values = window.read()
-        if event in ['Exit', sg.WIN_CLOSED, 'Close']:
-            break
-        elif event == '-PASSWORD-':
-            create_password_setting_window()
-        else:
-            # resp = requests.patch('http://127.0.0.1:5000/api/users', json=values, headers=headers)
-            # message = resp.json().get('message')
-            user.firstname = values['firstname']
-            user.lastname = values['lastname']
-            user.email = values['email']
-            user.position = values['position']
-            user.license_id = values['license_id']
-            session.add(user)
-            session.commit()
-            sg.popup_ok(f'Data have been saved.')
-            break
+        while True:
+            event, values = window.read()
+            if event in ['Exit', sg.WIN_CLOSED, 'Close']:
+                break
+            elif event == '-PASSWORD-':
+                create_password_setting_window()
+            elif event == 'Save':
+                user.firstname = values['firstname']
+                user.lastname = values['lastname']
+                user.email = values['email']
+                user.position = values['position']
+                user.license_id = values['license_id']
+                session.add(user)
+                session.commit()
+                sg.popup_ok(f'Data have been saved.')
+                break
     window.close()
 
 
@@ -211,3 +214,92 @@ def create_register_window():
                     sg.popup_ok('New username has been registered.')
                     break
     window.close()
+
+@login_required
+def create_user_list_window():
+    with Session(engine) as session:
+        query = select(User)
+        data = []
+        for user in session.scalars(query):
+            data.append([
+                user.firstname, user.lastname, user.license_id, user.username, user.position,
+                user.all_roles, user.active
+            ])
+        layout = [
+            [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles', 'Active'],
+                      values=data, key='-TABLE-', enable_events=True)],
+            [sg.Exit('Close')]
+        ]
+
+        window = sg.Window('Users', layout=layout, resizable=True, modal=True, finalize=True)
+        window['-TABLE-'].bind("<Double-Button-1>", " Double")
+
+        while True:
+            event, values = window.read()
+            if event in ['Close', sg.WIN_CLOSED]:
+                break
+            elif event == '-TABLE- Double' and values['-TABLE-']:
+                username = data[values['-TABLE-'][0]][3]
+                updated = create_admin_user_role_window(username)
+                if updated:
+                    data[values['-TABLE-'][0]][5] = updated['roles']
+                    data[values['-TABLE-'][0]][6] = updated['-ACTIVE-']
+                window.find_element('-TABLE-').update(values=data)
+                window.refresh()
+        window.close()
+
+@login_required
+def create_admin_user_role_window(username):
+    with Session(engine) as session:
+        query = select(User).where(User.username == username)
+        user = session.scalar(query)
+        user_roles = [role.role_need for role in user.roles]
+        if user:
+            fullname = user.firstname + ' ' + user.lastname
+            layout = [
+                [sg.Text('Username:'), sg.Text(username),
+                 sg.Text('Name:'), sg.Text(fullname)],
+                [sg.Text('License ID:'), sg.Text(user.license_id),
+                 sg.Text('Position:'), sg.Text(user.position)],
+                [sg.Checkbox('Active',
+                             default=user.active,
+                             key='-ACTIVE-',
+                             enable_events=True)],
+                [sg.Text('Role:')],
+            ]
+
+            query = select(UserRole)
+            roles = [role for role in session.scalars(query)]
+            print(user_roles)
+            for role in roles:
+                if role.role_need in user_roles:
+                    layout.append([
+                        sg.Checkbox(role.role_need.title(), key=role.role_need, default=True, enable_events=True)
+                    ])
+                else:
+                    layout.append([
+                        sg.Checkbox(role.role_need.title(), key=role.role_need, default=False, enable_events=True)
+                    ])
+
+            layout.append(
+                [sg.Button('Update'), sg.CloseButton('Close')]
+            )
+        window = sg.Window('User Roles', layout, modal=True)
+        while True:
+            event, values = window.read()
+            if event in ['CloseButton', sg.WIN_CLOSED]:
+                break
+            elif event == 'Update':
+                # user = session.scalar(select(User).where(User.username==username))
+                user.roles = []
+                for role in roles:
+                    if values[role.role_need] == True:
+                        user.roles.append(role)
+                session.add(user)
+                session.commit()
+                sg.popup_ok("User has been updated.")
+                user_roles = user.all_roles
+                break
+        window.close()
+    return {'roles': user_roles, '-ACTIVE-': True}
+

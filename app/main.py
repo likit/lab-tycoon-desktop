@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.auth.windows import (create_signin_window,
                               create_profile_window,
-                              create_register_window)
+                              create_register_window,
+                              create_user_list_window)
 from app.system.models import initialize_db, User, engine
 from app.config import secret_key, logger
 from app.auth.windows import SessionManager
@@ -25,7 +26,8 @@ if any(platform.win32_ver()):
 
 base_url = os.path.dirname(os.path.abspath(__file__))
 
-if not os.path.exists(os.path.join(base_url, 'instance', 'app.db')):
+if not os.path.exists(os.path.join(base_url, 'labtycoon.db')):
+    print('database not exists.. in ' + os.path.join(base_url, 'app', 'labtycoon.db'))
     initialize_db()
 
 sg.theme('SystemDefault')
@@ -75,12 +77,8 @@ def run_app():
 
     decoded_payload = get_token_and_decode_payload()
     if decoded_payload:
-        with Session(engine) as session:
-            query = select(User).where(User.username == decoded_payload['username'])
-            user = session.scalars(query).first()
-            if user:
-                session_manager.login(user)
-                logger.info('USER %s SIGNED IN' % user.username)
+        session_manager.login(decoded_payload['username'])
+        logger.info('USER %s SIGNED IN' % decoded_payload['username'])
 
     def toggle_buttons_after_log_in_out(action='login'):
         if action == 'login':
@@ -137,8 +135,8 @@ def run_app():
         #         create_order_list_window(access_token)
         elif event == '-LOGGING-':
             create_logging_window()
-        # elif event == 'Manage':
-        #     create_user_list_window(access_token)
+        elif event == 'Manage':
+            create_user_list_window()
         # elif event == 'BioSource':
         #     create_biosource_window(access_token)
         # elif event == 'Add TMLT test':

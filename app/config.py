@@ -25,5 +25,7 @@ dictConfig({
 
 logger = logging.getLogger('client')
 
+DATABASE_URI = 'sqlite:///app/labtycoon.db'
+
 # TODO: find a way to dynamically set the secret key when app is first launched.
 secret_key = '85015f158b2f8b050705aa6ec9fbd65c99966725eec0965a5ac0bd3564afd210'
