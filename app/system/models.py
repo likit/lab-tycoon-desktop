@@ -87,19 +87,19 @@ class User(Base):
         return self.username
 
 
-class BioSource(Base):
-    __tablename__ = 'biosources'
-    id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
-    source: Mapped[str] = mapped_column('source', String(255), nullable=False)
-    specimens: Mapped[List["Specimens"]] = relationship(back_populates="source", cascade='all, delete-orphan')
+# class BioSource(Base):
+#     __tablename__ = 'biosources'
+#     id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
+#     source: Mapped[str] = mapped_column('source', String(255), nullable=False)
+#     specimens: Mapped[List["Specimens"]] = relationship(back_populates="source", cascade='all, delete-orphan')
 
 
 class Specimens(Base):
     __tablename__ = 'specimens'
     id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
     label: Mapped[str] = mapped_column('label', String(255), nullable=False)
-    source_id: Mapped[int] = mapped_column('source_id', ForeignKey('biosources.id'))
-    source: Mapped["BioSource"] = relationship(back_populates="specimens")
+    # source_id: Mapped[int] = mapped_column('source_id', ForeignKey('biosources.id'))
+    # source: Mapped["BioSource"] = relationship(back_populates="specimens")
     desc: Mapped[str] = mapped_column('desc', Text(), nullable=True)
     tests: Mapped[List["Test"]] = relationship(back_populates="specimens")
 
@@ -114,26 +114,26 @@ class TestMethod(Base):
 class Test(Base):
     __tablename__ = 'tests'
     id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
-    code: Mapped[int] = mapped_column('code', String(), nullable=False, unique=True, index=True)
-    tmlt_code: Mapped[int] = mapped_column('tmlt_code', String(), unique=True, index=True)
-    tmlt_name: Mapped[int] = mapped_column('tmlt_name', String())
-    loinc_no: Mapped[int] = mapped_column('loinc_no', String(), unique=True)
-    component: Mapped[int] = mapped_column('component', String())
-    label: Mapped[int] = mapped_column('label', String(), nullable=False)
-    scale: Mapped[int] = mapped_column('scale', String(), nullable=False)
+    code: Mapped[str] = mapped_column('code', String(), nullable=False, unique=True, index=True)
+    tmlt_code: Mapped[str] = mapped_column('tmlt_code', String(), unique=True, index=True)
+    tmlt_name: Mapped[str] = mapped_column('tmlt_name', String())
+    loinc_no: Mapped[str] = mapped_column('loinc_no', String(), unique=True)
+    component: Mapped[str] = mapped_column('component', String(), nullable=True)
+    label: Mapped[str] = mapped_column('label', String(), nullable=False)
+    scale: Mapped[str] = mapped_column('scale', String(), nullable=False)
     specimens_id: Mapped[int] = mapped_column(ForeignKey('specimens.id'))
     method_id: Mapped[int] = mapped_column(ForeignKey('test_methods.id'))
-    price: Mapped[int] = mapped_column('price', Numeric(), default=0.0, nullable=False)
-    desc: Mapped[int] = mapped_column('desc', Text())
-    unit: Mapped[int] = mapped_column('unit', String(), nullable=False)
-    order_type: Mapped[int] = mapped_column('order_type', String())
-    cgd_code: Mapped[int] = mapped_column('cgd_code', String(), unique=True)
-    cgd_name: Mapped[int] = mapped_column('cgd_name', String())
-    cgd_price: Mapped[int] = mapped_column('cgd_price', Numeric())
-    panel: Mapped[int] = mapped_column('panel', String())
-    ref_min: Mapped[int] = mapped_column('ref_min', Numeric())
-    ref_max: Mapped[int] = mapped_column('ref_max', Numeric())
-    value_choices: Mapped[int] = mapped_column('value_choices', String())
+    price: Mapped[float] = mapped_column('price', Numeric(), default=0.0)
+    desc: Mapped[str] = mapped_column('desc', Text(), nullable=True)
+    unit: Mapped[str] = mapped_column('unit', String(), nullable=False)
+    order_type: Mapped[str] = mapped_column('order_type', String())
+    cgd_code: Mapped[str] = mapped_column('cgd_code', String(), unique=True, nullable=True)
+    cgd_name: Mapped[str] = mapped_column('cgd_name', String(), nullable=True)
+    cgd_price: Mapped[float] = mapped_column('cgd_price', Numeric(), nullable=True)
+    panel: Mapped[str] = mapped_column('panel', String(), nullable=True)
+    ref_min: Mapped[float] = mapped_column('ref_min', Numeric(), nullable=True)
+    ref_max: Mapped[float] = mapped_column('ref_max', Numeric(), nullable=True)
+    value_choices: Mapped[str] = mapped_column('value_choices', String(), nullable=True)
     method: Mapped["TestMethod"] = relationship(back_populates="tests")
     specimens: Mapped["Specimens"] = relationship(back_populates="tests")
     active: Mapped[bool] = mapped_column('active', Boolean(), default=True)
@@ -141,7 +141,7 @@ class Test(Base):
 
     def __init__(self, code, tmlt_code, tmlt_name, loinc_no, specimens, method,
                  component, label, scale, price, desc, unit, order_type,
-                 cgd_code, cgd_name, cgd_price, panel, ref_min, ref_max, value_choices):
+                 cgd_code, cgd_name, cgd_price, panel, ref_min, ref_max, value_choices, active=True, **kwargs):
         self.code = code
         self.tmlt_code = tmlt_code
         self.tmlt_name = tmlt_name
@@ -159,10 +159,55 @@ class Test(Base):
         self.panel = panel
         self.ref_min = float(ref_min) if ref_min else None
         self.ref_max = float(ref_max) if ref_max else None
+        self.active = active
         self.value_choices = value_choices
+
+        with Session(engine) as session:
+            _method = session.scalar(select(TestMethod).where(TestMethod.method == method))
+            if _method:
+                self.method = _method
+            else:
+                new_method = TestMethod(method=method)
+                self.method = new_method
+            _specimens = session.scalar(select(Specimens).where(Specimens.label == specimens))
+            if _specimens:
+                self.specimens = _specimens
+            else:
+                new_specimens = Specimens(label=specimens)
+                self.specimens = new_specimens
+            session.add(self)
+            session.commit()
+
+    def __str__(self):
+        return f'{self.code}: {self.tmlt_name}'
+
+    def update_from_dict(self, data, session):
+        for attr in data:
+            if attr not in ['id', 'specimens', 'method']:
+                if attr in ['price', 'cgd_price', 'ref_min', 'ref_max']:
+                    if data[attr]:
+                        setattr(self, attr, float(data[attr]))
+                else:
+                    setattr(self, attr, data[attr])
+
+        _method = session.scalar(select(TestMethod).where(TestMethod.method == data['method']))
+        if _method:
+            self.method = _method
+        else:
+            new_method = TestMethod(method=data['method'])
+            self.method = new_method
+        _specimens = session.scalar(select(Specimens).where(Specimens.label == data['specimens']))
+        if _specimens:
+            self.specimens = _specimens
+        else:
+            new_specimens = Specimens(label=data['specimens'])
+            self.specimens = new_specimens
+        session.add(self)
+        session.commit()
 
     def to_dict(self):
         return {
+            'id': self.id,
             'code': self.code,
             'tmlt_code': self.tmlt_code,
             'tmlt_name': self.tmlt_name,

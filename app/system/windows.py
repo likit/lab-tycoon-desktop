@@ -1,10 +1,16 @@
+from http import HTTPStatus
+
 import FreeSimpleGUI as sg
 import pandas as pd
+import requests
 from sql_formatter.core import format_sql
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 from tabulate import tabulate
 
-from app.auth.windows import login_required
-from app.system.models import engine
+from app.auth.windows import login_required, SessionManager
+from app.system.models import engine, Test, TestMethod
+from app.config import logger
 
 
 @login_required
@@ -105,3 +111,215 @@ def show_save_query_dialog():
 
     dialog.close()
     return filepath
+
+
+def load_all_tests():
+    with Session(engine) as session:
+        query = select(Test)
+        tests = []
+        for t in session.scalars(query):
+            tests.append([
+                t.code,
+                t.label,
+                t.desc,
+                t.tmlt_code,
+                t.tmlt_name,
+                t.specimens.label,
+                t.method.method,
+                t.unit,
+                t.price,
+                t.active,
+            ])
+    return tests
+
+
+@login_required
+def create_test_list_window():
+    tests = load_all_tests()
+    layout = [
+        [sg.Table(values=tests,
+                  headings=['Code', 'Label', 'Description',
+                            'TMLT Code', 'TMLT Name', 'Specimens',
+                            'Method', 'Unit', 'Price', 'Active'],
+                  key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)],
+        [
+            sg.CloseButton('Close'),
+            sg.Button('Add', button_color=('white', 'green')),
+        ],
+    ]
+
+    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
+    window['-TABLE-'].bind("<Double-Button-1>", " Double")
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Add':
+            create_tmlt_test_window()
+            tests = load_all_tests()
+            window.find_element('-TABLE-').update(values=tests)
+            window.refresh()
+        elif event == '-TABLE- Double':
+            code = tests[values['-TABLE-'][0]][0]
+            with Session(engine) as session:
+                query = session.query(Test).filter(Test.code == code)
+                test = session.scalar(query)
+                create_tmlt_test_edit_form_window(test.to_dict())
+                tests = load_all_tests()
+                window.find_element('-TABLE-').update(values=tests)
+                window.refresh()
+    window.close()
+
+
+TMLT_ACCESS_TOKEN_URL = 'https://tmltconnect.this.or.th:7243/api/TmltToken/GetToken'
+TMLT_SEARCH_URL = 'https://tmltconnect.this.or.th:7243/10686/search'
+HOSPITAL_CODE = '10686'
+
+
+@login_required
+def create_tmlt_test_window():
+    resp = requests.post(TMLT_ACCESS_TOKEN_URL, json={'hospcode': HOSPITAL_CODE, 'provinceId': '12', 'amp': '01'})
+    if resp.status_code == 200:
+        tmlt_access_token = resp.json().get('token')
+    else:
+        sg.popup_error(resp.status_code)
+        return
+
+    layout = [
+        [sg.Text('Search Term'), sg.InputText(key='search')],
+        [sg.Button('Submit'), sg.CloseButton('Close')],
+        [sg.Table(values=[],
+                  headings=['TMLT Code', 'TMLT Name', 'Specimens', 'Method', 'Unit'],
+                  key='-TABLE-', auto_size_columns=True, expand_x=True, expand_y=True, enable_events=True)]
+    ]
+
+    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True)
+    window['-TABLE-'].bind("<Double-Button-1>", " Double")
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Submit':
+            search = values.get('search')
+            resp = requests.get(TMLT_SEARCH_URL,
+                                headers={'Authorization': f'Bearer {tmlt_access_token}', 'Accept': 'application/json'},
+                                params={'search': search}
+                                )
+            if resp.status_code == 200:
+                records = []
+                for rec in resp.json().get('tmltData'):
+                    records.append([rec['tmltCode'],
+                                    rec['tmltName'],
+                                    rec['specimen'],
+                                    rec['method'],
+                                    rec['unit'],
+                                    rec['cgdCode'],
+                                    rec['cgdName'],
+                                    rec['cgdPrice'],
+                                    rec['orderType'],
+                                    rec['scale'],
+                                    rec['loincNum'],
+                                    rec['panel'],
+                                    rec['component'],
+                                    ])
+                window.find_element('-TABLE-').update(values=records)
+                window.refresh()
+            else:
+                sg.popup_error('Error occurred. Could not fetch data from TMLT system.')
+        elif event == '-TABLE- Double':
+            try:
+                row = values['-TABLE-'][0]
+            except IndexError:
+                pass
+            else:
+                create_tmlt_test_form_window(records[row])
+    window.close()
+
+
+@login_required
+def create_tmlt_test_form_window(data):
+    layout = [
+        [sg.Text('Code', size=(16, 1)), sg.InputText(key='code')],
+        [sg.Text('Label', size=(16, 1)), sg.InputText(key='label')],
+        [sg.Text('Description', size=(16, 1)), sg.Multiline(data[1], size=(45, 5), key='desc')],
+        [sg.Text('Price', size=(16, 1)), sg.InputText(key='price')],
+        [sg.Text('TMLT Code', size=(16, 1)), sg.InputText(data[0], disabled=True, key='tmlt_code')],
+        [sg.Text('TMLT Name', size=(16, 1)), sg.InputText(data[1], disabled=True, key='tmlt_name')],
+        [sg.Text('Specimens', size=(16, 1)), sg.InputText(data[2], key='specimens')],
+        [sg.Text('Component', size=(16, 1)), sg.InputText(data[12], key='component')],
+        [sg.Text('Method', size=(16, 1)), sg.InputText(data[3], key='method')],
+        [sg.Text('Unit', size=(16, 1)), sg.InputText(data[4], key='unit')],
+        [sg.Text('CGD Code', size=(16, 1)), sg.InputText(data[5], disabled=True, key='cgd_code')],
+        [sg.Text('CGD Name', size=(16, 1)), sg.InputText(data[6], key='cgd_name')],
+        [sg.Text('CGD Price', size=(16, 1)), sg.InputText(data[7], key='cgd_price')],
+        [sg.Text('Order Type', size=(16, 1)), sg.InputText(data[8], key='order_type')],
+        [sg.Text('Scale', size=(16, 1)), sg.InputText(data[9], key='scale')],
+        [sg.Text('LOINC Code', size=(16, 1)), sg.InputText(data[10], disabled=True, key='loinc_no')],
+        [sg.Text('Panel', size=(16, 1)), sg.InputText(data[11], key='panel')],
+        [sg.Text('Ref. Min', size=(16, 1)), sg.InputText(key='ref_min')],
+        [sg.Text('Ref. Max', size=(16, 1)), sg.InputText(key='ref_max')],
+        [sg.Text('Valuce Choices', size=(16, 1)), sg.Multiline(size=(45, 5), key='value_choices')],
+        [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
+    ]
+
+    window = sg.Window('Test Form', layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Add':
+            new_test = Test(**values)
+            with Session(engine) as session:
+                session.add(new_test)
+                session.commit()
+                logger.info(f'ADD NEW TEST: {values["code"]}')
+                sg.popup_ok(f"{new_test} added.")
+                break
+    window.close()
+
+@login_required
+def create_tmlt_test_edit_form_window(data):
+    layout = [
+        [sg.Text('Code', size=(16, 1)), sg.InputText(data['code'], key='code')],
+        [sg.Text('Label', size=(16, 1)), sg.InputText(data['label'], key='label')],
+        [sg.Text('Description', size=(16, 1)), sg.Multiline(data['desc'], size=(45, 5), key='desc')],
+        [sg.Text('Price', size=(16, 1)), sg.InputText(data['price'], key='price')],
+        [sg.Text('TMLT Code', size=(16, 1)), sg.InputText(data['tmlt_code'], disabled=True, key='tmlt_code')],
+        [sg.Text('TMLT Name', size=(16, 1)), sg.InputText(data['tmlt_name'], disabled=True, key='tmlt_name')],
+        [sg.Text('Specimens', size=(16, 1)), sg.InputText(data['specimens'], key='specimens')],
+        [sg.Text('Component', size=(16, 1)), sg.InputText(data['component'], key='component')],
+        [sg.Text('Method', size=(16, 1)), sg.InputText(data['method'], key='method')],
+        [sg.Text('Unit', size=(16, 1)), sg.InputText(data['unit'], key='unit')],
+        [sg.Text('CGD Code', size=(16, 1)), sg.InputText(data['cgd_code'], disabled=True, key='cgd_code')],
+        [sg.Text('CGD Name', size=(16, 1)), sg.InputText(data['cgd_name'], key='cgd_name')],
+        [sg.Text('CGD Price', size=(16, 1)), sg.InputText(data['cgd_price'], key='cgd_price')],
+        [sg.Text('Order Type', size=(16, 1)), sg.InputText(data['order_type'], key='order_type')],
+        [sg.Text('Scale', size=(16, 1)), sg.InputText(data['scale'], key='scale')],
+        [sg.Text('LOINC Code', size=(16, 1)), sg.InputText(data['loinc_no'], disabled=True, key='loinc_no')],
+        [sg.Text('Panel', size=(16, 1)), sg.InputText(data['panel'], key='panel')],
+        [sg.Text('Ref. Min', size=(16, 1)), sg.InputText(data['ref_min'], key='ref_min')],
+        [sg.Text('Ref. Max', size=(16, 1)), sg.InputText(data['ref_max'], key='ref_max')],
+        [sg.Text('Valuce Choices', size=(16, 1)), sg.Multiline(data['value_choices'], size=(45, 5), key='value_choices')],
+        [sg.Checkbox('Active', default=data['active'], key='active')],
+        [sg.Button('Update', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
+    ]
+
+    window = sg.Window('Test Edit Form', layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Update':
+            with Session(engine) as session:
+                test = session.scalar(select(Test).where(Test.id == data['id']))
+                test.update_from_dict(values, session)
+                session.add(test)
+                session.commit()
+                logger.info(f'UPDATED TEST: {values["code"]}')
+                sg.popup_ok(f"{test} data has been saved.")
+                break
+    window.close()

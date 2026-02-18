@@ -11,7 +11,7 @@ from app.auth.windows import (create_signin_window,
 from app.system.models import initialize_db, User, engine
 from app.config import secret_key, logger
 from app.auth.windows import SessionManager
-from app.system.windows import create_logging_window, create_sql_window
+from app.system.windows import create_logging_window, create_sql_window, create_test_list_window
 
 session_manager = SessionManager()
 
@@ -139,11 +139,8 @@ def run_app():
         #         sg.popup_error('Please sign in to access this section.')
         #     else:
         #         create_tmlt_test_window(access_token)
-        # elif event == 'List':
-        #     if not access_token:
-        #         sg.popup_error('Please sign in to access this section.')
-        #     else:
-        #         create_test_list_window(access_token)
+        elif event == 'List':
+            create_test_list_window()
         # elif event == '-PATIENT-':
         #     if not access_token:
         #         sg.popup_error('Please sign in to access this section.')
