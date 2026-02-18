@@ -9,8 +9,8 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from tabulate import tabulate
 
-from app.auth.windows import login_required, SessionManager
-from app.system.models import engine, Test, TestMethod, LabOrder, Customer, LabOrderItem
+from app.auth.windows import login_required, SessionManager, session_manager
+from app.system.models import engine, Test, TestMethod, LabOrder, Customer, LabOrderItem, User
 from app.config import logger
 
 
@@ -310,7 +310,8 @@ def create_tmlt_test_edit_form_window(data):
         [sg.Text('Panel', size=(16, 1)), sg.InputText(data['panel'], key='panel')],
         [sg.Text('Ref. Min', size=(16, 1)), sg.InputText(data['ref_min'], key='ref_min')],
         [sg.Text('Ref. Max', size=(16, 1)), sg.InputText(data['ref_max'], key='ref_max')],
-        [sg.Text('Valuce Choices', size=(16, 1)), sg.Multiline(data['value_choices'], size=(45, 5), key='value_choices')],
+        [sg.Text('Valuce Choices', size=(16, 1)),
+         sg.Multiline(data['value_choices'], size=(45, 5), key='value_choices')],
         [sg.Checkbox('Active', default=data['active'], key='active')],
         [sg.Button('Update', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
@@ -343,7 +344,7 @@ def create_custom_test_form_window():
         [sg.Text('TMLT Code', size=(16, 1)), sg.InputText(key='tmlt_code')],
         [sg.Text('TMLT Name', size=(16, 1)), sg.InputText(key='tmlt_name')],
         [sg.Text('Specimens', size=(16, 1)), sg.InputText(key='specimens')],
-        [sg.Text('Component', size=(16, 1)), sg.InputText( key='component')],
+        [sg.Text('Component', size=(16, 1)), sg.InputText(key='component')],
         [sg.Text('Method', size=(16, 1)), sg.InputText(key='method')],
         [sg.Text('Unit', size=(16, 1)), sg.InputText(key='unit')],
         [sg.Text('CGD Code', size=(16, 1)), sg.InputText(key='cgd_code')],
@@ -376,12 +377,11 @@ def create_custom_test_form_window():
     window.close()
 
 
-def format_datetime(isodatetime, datetime_format='%d/%m/%Y %H:%M:%S'):
+def format_datetime(dt, datetime_format='%d/%m/%Y %H:%M:%S'):
     """A helper function that converts isodatetime to a datetime with a given format."""
-    try:
-        return datetime.fromisoformat(isodatetime).strftime(datetime_format)
-    except:
-        return isodatetime
+    if not dt:
+        return None
+    return dt.strftime(datetime_format)
 
 
 @login_required
@@ -391,16 +391,29 @@ def create_order_list_window():
         with Session(engine) as session:
             query = select(LabOrder)
             for order in session.scalars(query):
+                if order.approved_at:
+                    status = 'APPROVED'
+                    status_datetime = format_datetime(order.approved_at)
+                elif order.rejected_at:
+                    status = 'REJECTED'
+                    status_datetime = format_datetime(order.rejected_at)
+                elif order.cancelled_at:
+                    status = 'CANCELLED'
+                    status_datetime = format_datetime(order.cancelled_at)
+                elif order.received_at:
+                    status = 'RECEIVED'
+                    status_datetime = format_datetime(order.received_at)
+                else:
+                    status = 'PENDING'
+                    status_datetime = ''
+
                 data.append([
                     order.id,
                     order.customer.hn,
                     order.customer.fullname,
-                    format_datetime(order.order_datetime),
-                    format_datetime(order.received_at),
-                    format_datetime(order.rejected_at),
-                    order.rejector,
-                    format_datetime(order.cancelled_at),
-                    order.canceller,
+                    format_datetime(order.order_datetime) or '',
+                    status,
+                    status_datetime,
                     len(order.order_items),
                 ])
         return data
@@ -408,8 +421,8 @@ def create_order_list_window():
     data = load_orders()
 
     layout = [
-        [sg.Table(values=data, headings=['ID', 'HN', 'Customer', 'Ordered At', 'Received At',
-                                         'Rejected At', 'Rejected By', 'Cancelled At', 'Cancelled By',
+        [sg.Table(values=data, headings=['ID', 'HN', 'Customer', 'Ordered At',
+                                         'Status', 'Time',
                                          'Items'],
                   key="-ORDER-TABLE-", auto_size_columns=True,
                   expand_x=True, expand_y=True,
@@ -426,10 +439,9 @@ def create_order_list_window():
         if event in ('Exit', sg.WIN_CLOSED):
             break
         elif event == '-ORDER-TABLE- Double' and values['-ORDER-TABLE-']:
-            # create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
-            # data = load_orders()
-            # window.find_element('-ORDER-TABLE-').update(values=data)
-            pass
+            create_order_item_list_window(data[values['-ORDER-TABLE-'][0]][0])
+            data = load_orders()
+            window.find_element('-ORDER-TABLE-').update(values=data)
         elif event == '-GET-ORDER-':
             # TODO: add code to check if the simulations run successfully
             with Session(engine) as session:
@@ -454,6 +466,250 @@ def create_order_list_window():
             window.find_element('-ORDER-TABLE-').update(values=data)
             window.refresh()
     window.close()
+
+
+@login_required
+def create_order_item_list_window(lab_order_id):
+    def load_item_list():
+        with Session(engine) as session:
+            query = select(LabOrder).where(LabOrder.id == lab_order_id)
+            order = session.scalar(query)
+            items = []
+            for item in order.order_items:
+                items.append([
+                    item.id,
+                    item.test.code,
+                    item.test.tmlt_name,
+                    item.value_string,
+                    format_datetime(item.reported_at),
+                    item.reporter,
+                    format_datetime(item.approved_at),
+                    item.approver,
+                    format_datetime(item.finished_at),
+                    format_datetime(item.cancelled_at),
+                ])
+            return items
+
+    items = load_item_list()
+    with Session(engine) as session:
+        query = select(LabOrder).where(LabOrder.id == lab_order_id)
+        order = session.scalar(query)
+
+        is_order_rejected = order.rejected_at is not None
+        is_order_cancelled = order.cancelled_at is not None
+        is_order_received = order.received_at is not None
+        is_order_approved = order.approved_at is not None
+
+        desc = """
+        The table displays a list of items in the order. Click the Reject button to reject the order or click the Cancel button to cancel the order.
+        """
+        layout = [
+            [sg.Text('HN:'), sg.Text(order.customer.hn),
+             sg.Text('Name:'), sg.Text(f"{order.customer.fullname}"),
+             sg.Text('Ordered At:'), sg.Text(f"{format_datetime(order.order_datetime)}"),
+             ],
+            [sg.Table(values=items, headings=['Item ID', 'Code', 'Name', 'Result', 'Reported At',
+                                              'Reporter', 'Approved At', 'Approver', 'Finished At', 'Cancelled At'],
+                      key="-ORDER-ITEM-TABLE-",
+                      auto_size_columns=True,
+                      expand_y=True,
+                      expand_x=True,
+                      enable_events=True,
+                      )
+             ],
+            [
+                sg.Button('Accept', button_color=('white', 'green'),
+                          disabled_button_color=('white', 'lightgrey'),
+                          disabled=is_order_received or is_order_rejected or is_order_cancelled),
+                sg.Button('Approve', button_color=('white', 'green'),
+                          disabled_button_color=('white', 'lightgrey'),
+                          disabled=not is_order_received or is_order_rejected or is_order_cancelled or is_order_approved),
+                sg.Button('Reject', button_color=('white', 'red'),
+                       disabled_button_color=('white', 'lightgrey'),
+                       disabled=is_order_rejected or is_order_cancelled),
+                sg.Button('Cancel', button_color=('white', 'red'),
+                       disabled_button_color=('white', 'lightgrey'),
+                       disabled=is_order_cancelled or is_order_rejected),
+                sg.CloseButton('Close')
+            ],
+        ]
+        received_datetime = [sg.Text(f'RECEIVED at {format_datetime(order.received_at)} by {order.receiver}',
+                                     pad=(5, 5))]
+        approved_datetime = [sg.Text(f'APPROVED at {format_datetime(order.approved_at)} by {order.approver}',
+                                     background_color='green', text_color='white', pad=(5, 5)),]
+        rejected_reason = [sg.Text(f'REJECTED at {format_datetime(order.rejected_at)}: {order.reason}',
+                                   background_color='red', text_color='white', pad=(5,5)),]
+        if order.rejected_at:
+            layout.append(rejected_reason)
+        elif order.approved_at:
+            layout.append(approved_datetime)
+        elif order.received_at:
+            layout.append(received_datetime)
+
+    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
+    window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+        elif event == '-ORDER-ITEM-TABLE- Double' and values['-ORDER-ITEM-TABLE-']:
+            create_item_detail_window(items[values['-ORDER-ITEM-TABLE-'][0]][0])
+            items = load_item_list()
+            window.find_element('-ORDER-ITEM-TABLE-').update(values=items)
+            window.refresh()
+        elif event == 'Reject':
+            resp = sg.popup_ok_cancel('Are you sure want to reject this order?', title='Order Rejection')
+            if resp == 'OK':
+                with Session(engine) as session:
+                    current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                    order = session.scalar(select(LabOrder).where(LabOrder.id == lab_order_id))
+                    order.rejected_at = datetime.datetime.now()
+                    order.rejecter = current_user
+                    order.reason, order.comment = create_reject_reason_window()
+                    session.add(order)
+                    session.commit()
+                    sg.popup_ok('Order has been rejected.')
+                break
+        elif event == 'Accept':
+            resp = sg.popup_ok_cancel('Are you sure want to accept this order?', title='Order Rejection')
+            if resp == 'OK':
+                with Session(engine) as session:
+                    current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                    order = session.scalar(select(LabOrder).where(LabOrder.id == lab_order_id))
+                    order.received_at = datetime.datetime.now()
+                    order.receiver = current_user
+                    session.add(order)
+                    session.commit()
+                    sg.popup_ok('Order has been received.')
+                break
+        elif event == 'Approve':
+            resp = sg.popup_ok_cancel('Are you sure want to approve this order?', title='Order Rejection')
+            if resp == 'OK':
+                with Session(engine) as session:
+                    current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                    order = session.scalar(select(LabOrder).where(LabOrder.id == lab_order_id))
+                    proceed = True
+                    for item in order.order_items:
+                        if not item.reported_at:
+                            resp = sg.popup_ok_cancel('Some tests have not been reported. Do you want to proceed?', title='Order Approval')
+                            if resp != 'OK':
+                                proceed = False
+                            break
+                    if proceed:
+                        order.approved_at = datetime.datetime.now()
+                        order.approver = current_user
+                        session.add(order)
+                        session.commit()
+                        sg.popup_ok('Order has been approved.')
+        elif event == 'Cancel':
+            resp = sg.popup_ok_cancel('Are you sure want to cancel this order?', title='Order Cancellation')
+            if resp == 'OK':
+                with Session(engine) as session:
+                    current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                    order = session.scalar(select(LabOrder).where(LabOrder.id == lab_order_id))
+                    order.cencelled_at = datetime.datetime.now()
+                    order.canceller = current_user
+                    session.add(order)
+                    session.commit()
+                    sg.popup_ok('Order has been cancelled.')
+                break
+    window.close()
+
+
+@login_required
+def create_item_detail_window(item_id):
+    with Session(engine) as session:
+        item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+        actions = [
+            sg.Button('Update', button_color=('white', 'green')),
+            sg.Cancel(button_color=('white', 'red')),
+            sg.Help()
+        ]
+        if item.reported_at:
+            actions.insert(0, sg.Button('Approve', button_color=('white', 'green')))
+        elif item.finished_at:
+            actions.insert(0, sg.Button('Report', button_color=('white', 'green')))
+
+        if item.cancelled_at:
+            is_item_cancelled = True
+            actions = []
+        else:
+            is_item_cancelled = False
+
+        layout = [
+            [sg.Text('ID', size=(8, 1)), sg.Text(item_id),
+             sg.Text('Code', size=(8, 1)), sg.Text(item.test.code),
+             sg.Text('HN: '), sg.Text(item.order.customer.hn),
+             sg.Text('Customer: '), sg.Text(item.order.customer.fullname),
+             ],
+            [sg.Text('Value'), sg.Input(item.value, key='-ITEM-VALUE-', disabled=is_item_cancelled)],
+            [sg.Text('Comment')],
+            [sg.Multiline(item.comment, key='-UPDATE-COMMENT-', size=(45, 10), disabled=is_item_cancelled)],
+            actions,
+            [sg.Button('History'), sg.CloseButton('Close', button_color=('white', 'red'))],
+        ]
+    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+        elif event == 'Cancel':
+            response = sg.popup_ok_cancel('Are you sure want to cancel this item?')
+            if response == 'OK':
+                with Session(engine) as session:
+                    current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                    item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+                    item.cancelled_at = datetime.datetime.now()
+                    item.canceller = current_user
+                    session.add(item)
+                    session.commit()
+                break
+        elif event == 'Report':
+            with Session(engine) as session:
+                current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                if current_user.has_role('reporter'):
+                    response = sg.popup_ok_cancel('Are you sure want to report this item?')
+                    if response == 'OK':
+                        item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+                        item.reported_at = datetime.datetime.now()
+                        item.reporter = current_user
+                        session.add(item)
+                        session.commit()
+                else:
+                    sg.popup_error(f'{current_user.username} has no permission to report.')
+                break
+        elif event == 'Approve':
+            with Session(engine) as session:
+                current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                if current_user.has_role('approver'):
+                    response = sg.popup_ok_cancel('Are you sure want to approve this item?')
+                    if response == 'OK':
+                        item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+                        item.approved_at = datetime.datetime.now()
+                        item.approver = current_user
+                        session.add(item)
+                        session.commit()
+                else:
+                    sg.popup_error(f'{current_user.username} has no permission to approve.')
+                break
+        elif event == 'Update':
+            response = sg.popup_ok_cancel('Are you sure want to update this item?')
+            if response == 'OK':
+                with Session(engine) as session:
+                    item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+                    item._value = values['-ITEM-VALUE-']
+                    item.comment = values['-UPDATE-COMMENT-']
+                    item.finished_at = datetime.datetime.now()
+                    item.reported_at = datetime.datetime.now()
+                    session.add(item)
+                    session.commit()
+                    sg.popup_ok('Results have been updated.')
+                break
+        elif event == 'History':
+            pass
+            # create_lab_order_item_version_list_window(access_token, item)
+    window.close()
+
 
 @login_required
 def create_customer_list_window():
@@ -530,3 +786,20 @@ def create_customer_order_list_window(customer_id):
             if event in ['Exit', sg.WIN_CLOSED]:
                 break
         window.close()
+
+
+@login_required
+def create_reject_reason_window():
+    layout = [
+        [sg.Text('Please select the reason:')],
+        [sg.Combo(['Improper specimens collection', 'Not enough specimens', 'Tests not available'], key='-REASON-')],
+        [sg.Multiline(size=(40, 10), key='-COMMENT-')],
+        [sg.Ok('Submit'), sg.Cancel('Cancel')]
+    ]
+    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED, 'Cancel', 'Submit'):
+            break
+    window.close()
+    return values.get('-REASON-'), values.get('-COMMENT-')
