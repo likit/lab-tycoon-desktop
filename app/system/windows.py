@@ -526,28 +526,28 @@ def create_order_item_list_window(lab_order_id):
                           disabled=not is_order_received or is_order_rejected or is_order_cancelled or is_order_approved),
                 sg.Button('Reject', button_color=('white', 'red'),
                        disabled_button_color=('white', 'lightgrey'),
-                       disabled=is_order_rejected or is_order_cancelled),
+                       disabled=is_order_approved or is_order_rejected or is_order_cancelled),
                 sg.Button('Cancel', button_color=('white', 'red'),
                        disabled_button_color=('white', 'lightgrey'),
-                       disabled=is_order_cancelled or is_order_rejected),
+                       disabled=is_order_cancelled or is_order_rejected or is_order_approved),
                 sg.CloseButton('Close')
             ],
+            [sg.Text(f'RECEIVED at {format_datetime(order.received_at)} by {order.receiver}',
+                     key='receive-banner', pad=(5, 5), visible=False)],
+            [sg.Text(f'APPROVED at {format_datetime(order.approved_at)} by {order.approver}',
+                     background_color='green', text_color='white', pad=(5, 5), key='approve-banner', visible=False)],
+            [sg.Text(f'REJECTED at {format_datetime(order.rejected_at)}: {order.reason}',
+                     background_color='red', text_color='white', pad=(5,5), key='reject-banner', visible=False)],
         ]
-        received_datetime = [sg.Text(f'RECEIVED at {format_datetime(order.received_at)} by {order.receiver}',
-                                     pad=(5, 5))]
-        approved_datetime = [sg.Text(f'APPROVED at {format_datetime(order.approved_at)} by {order.approver}',
-                                     background_color='green', text_color='white', pad=(5, 5)),]
-        rejected_reason = [sg.Text(f'REJECTED at {format_datetime(order.rejected_at)}: {order.reason}',
-                                   background_color='red', text_color='white', pad=(5,5)),]
-        if order.rejected_at:
-            layout.append(rejected_reason)
-        elif order.approved_at:
-            layout.append(approved_datetime)
-        elif order.received_at:
-            layout.append(received_datetime)
 
-    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
-    window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
+        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
+        window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
+        if order.rejected_at:
+            window['reject-banner'].update(visible=True)
+        elif order.approved_at:
+            window['approve-banner'].update(visible=True)
+        elif order.received_at:
+            window['receive-banner'].update(visible=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -569,7 +569,14 @@ def create_order_item_list_window(lab_order_id):
                     session.add(order)
                     session.commit()
                     sg.popup_ok('Order has been rejected.')
-                break
+                    window.find_element('Reject').update(disabled=True)
+                    window.find_element('Approve').update(disabled=True)
+                    window.find_element('Accept').update(disabled=True)
+                    window.find_element('Cancel').update(disabled=True)
+                    window.find_element('reject-banner').update(f'REJECTED at {format_datetime(order.rejected_at)} by {order.rejector}',
+                                                                visible=True)
+                    window.find_element('approve-banner').update(visible=False)
+                    window.find_element('receive-banner').update(visible=False)
         elif event == 'Accept':
             resp = sg.popup_ok_cancel('Are you sure want to accept this order?', title='Order Rejection')
             if resp == 'OK':
@@ -581,7 +588,11 @@ def create_order_item_list_window(lab_order_id):
                     session.add(order)
                     session.commit()
                     sg.popup_ok('Order has been received.')
-                break
+                    window.find_element('Accept').update(disabled=True)
+                    window.find_element('reject-banner').update(visible=False)
+                    window.find_element('approve-banner').update(visible=False)
+                    window.find_element('receive-banner').update(f'RECEIVED at {format_datetime(order.received_at)} by {order.receiver}',
+                                                                 visible=True)
         elif event == 'Approve':
             resp = sg.popup_ok_cancel('Are you sure want to approve this order?', title='Order Rejection')
             if resp == 'OK':
@@ -601,6 +612,14 @@ def create_order_item_list_window(lab_order_id):
                         session.add(order)
                         session.commit()
                         sg.popup_ok('Order has been approved.')
+                        window.find_element('Reject').update(disabled=True)
+                        window.find_element('Approve').update(disabled=True)
+                        window.find_element('Accept').update(disabled=True)
+                        window.find_element('Cancel').update(disabled=True)
+                        window.find_element('reject-banner').update(visible=False)
+                        window.find_element('approve-banner').update(f'APPROVED at {format_datetime(order.approved_at)} by {order.approver}',
+                                                                     visible=True)
+                        window.find_element('receive-banner').update(visible=False)
         elif event == 'Cancel':
             resp = sg.popup_ok_cancel('Are you sure want to cancel this order?', title='Order Cancellation')
             if resp == 'OK':
