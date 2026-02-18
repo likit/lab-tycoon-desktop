@@ -1,16 +1,16 @@
-from datetime import datetime
-from http import HTTPStatus
+import random
+import datetime
 
 import FreeSimpleGUI as sg
 import pandas as pd
 import requests
 from sql_formatter.core import format_sql
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from tabulate import tabulate
 
 from app.auth.windows import login_required, SessionManager
-from app.system.models import engine, Test, TestMethod, LabOrder
+from app.system.models import engine, Test, TestMethod, LabOrder, Customer, LabOrderItem
 from app.config import logger
 
 
@@ -392,26 +392,25 @@ def create_order_list_window():
             query = select(LabOrder)
             for order in session.scalars(query):
                 data.append([
-                    order['id'],
-                    order['hn'],
-                    format_datetime(order['order_datetime']),
-                    format_datetime(order['received_datetime']),
-                    format_datetime(order['rejected_datetime']),
-                    order['rejected_by'],
-                    format_datetime(order['cancelled_datetime']),
-                    order['cancelled_by'],
-                    order['firstname'],
-                    order['lastname'],
-                    order['items'],
+                    order.id,
+                    order.customer.hn,
+                    order.customer.fullname,
+                    format_datetime(order.order_datetime),
+                    format_datetime(order.received_at),
+                    format_datetime(order.rejected_at),
+                    order.rejector,
+                    format_datetime(order.cancelled_at),
+                    order.canceller,
+                    len(order.order_items),
                 ])
         return data
 
     data = load_orders()
 
     layout = [
-        [sg.Table(values=data, headings=['ID', 'HN', 'Order At', 'Received At',
+        [sg.Table(values=data, headings=['ID', 'HN', 'Patient Name', 'Ordered At', 'Received At',
                                          'Rejected At', 'Rejected By', 'Cancelled At', 'Cancelled By',
-                                         'Firstname', 'Lastname', 'Items'],
+                                         'Items'],
                   key="-ORDER-TABLE-", auto_size_columns=True,
                   expand_x=True, expand_y=True,
                   enable_events=True,
@@ -433,9 +432,25 @@ def create_order_list_window():
             pass
         elif event == '-GET-ORDER-':
             # TODO: add code to check if the simulations run successfully
-            # resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
-            # resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
-            # data = load_orders()
-            # window.find_element('-ORDER-TABLE-').update(values=data)
-            pass
+            with Session(engine) as session:
+                query = select(Customer).order_by(func.random())
+                customer = session.scalar(query)
+                tests = session.scalars(select(Test)).all()
+                if len(tests) == 0:
+                    sg.popup_ok(f"Add some tests first.")
+                    break
+                order = LabOrder(customer=customer,
+                                 order_datetime=datetime.datetime.now())
+                n = random.randint(0, len(tests))
+                for test in random.choices(tests, k=n):
+                    order_item = LabOrderItem(test=test)
+                    order.order_items.append(order_item)
+
+                # order.received_at = order.order_datetime + datetime.timedelta(minutes=mins)
+                # logger.info(f'LAB ORDER ID={order.id} RECEIVED AT {order.received_at}')
+                session.add(order)
+                session.commit()
+            data = load_orders()
+            window.find_element('-ORDER-TABLE-').update(values=data)
+            window.refresh()
     window.close()
