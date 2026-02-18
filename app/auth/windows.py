@@ -78,6 +78,10 @@ def create_signin_window():
             query = select(User).where(User.username == values['username'])
             user = session.scalars(query).one()
             if user:
+                if not user.active:
+                    logger.info(f'USER {values["username"]} ATTEMPTED TO SIGN IN WITH INACTIVE ACCOUNT.')
+                    sg.popup_ok(f'The account with username {user.username} has been deactivated.')
+                    break
                 if bcrypt.checkpw(values['password'].encode('utf-8'), user.hashed_password):
                     payload = {
                         'username': values['username'],
@@ -270,7 +274,6 @@ def create_admin_user_role_window(username):
 
             query = select(UserRole)
             roles = [role for role in session.scalars(query)]
-            print(user_roles)
             for role in roles:
                 if role.role_need in user_roles:
                     layout.append([
@@ -295,11 +298,12 @@ def create_admin_user_role_window(username):
                 for role in roles:
                     if values[role.role_need] == True:
                         user.roles.append(role)
+                user.active = values['-ACTIVE-']
                 session.add(user)
                 session.commit()
                 sg.popup_ok("User has been updated.")
                 user_roles = user.all_roles
                 break
         window.close()
-    return {'roles': user_roles, '-ACTIVE-': True}
+    return {'roles': user_roles, '-ACTIVE-': values['-ACTIVE-']}
 
