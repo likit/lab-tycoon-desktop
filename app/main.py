@@ -32,7 +32,7 @@ sg.theme('SystemDefault')
 sg.set_options(font=('Helvetica', 12))
 menu_def = [
     ['Users', ['Register', 'Manage']],
-    ['Tests', ['List', 'Add TMLT test']],
+    ['Tests', ['List']],
     ['Tools', ['SQL Editor']],
     ['About', ['Program']],
 ]

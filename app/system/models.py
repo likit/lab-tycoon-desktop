@@ -115,7 +115,7 @@ class Test(Base):
     __tablename__ = 'tests'
     id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
     code: Mapped[str] = mapped_column('code', String(), nullable=False, unique=True, index=True)
-    tmlt_code: Mapped[str] = mapped_column('tmlt_code', String(), unique=True, index=True)
+    tmlt_code: Mapped[str] = mapped_column('tmlt_code', String(), unique=True, index=True, nullable=True)
     tmlt_name: Mapped[str] = mapped_column('tmlt_name', String())
     loinc_no: Mapped[str] = mapped_column('loinc_no', String(), unique=True)
     component: Mapped[str] = mapped_column('component', String(), nullable=True)
@@ -143,7 +143,7 @@ class Test(Base):
                  component, label, scale, price, desc, unit, order_type,
                  cgd_code, cgd_name, cgd_price, panel, ref_min, ref_max, value_choices, active=True, **kwargs):
         self.code = code
-        self.tmlt_code = tmlt_code
+        self.tmlt_code = tmlt_code or None
         self.tmlt_name = tmlt_name
         self.loinc_no = loinc_no
         self.component = component

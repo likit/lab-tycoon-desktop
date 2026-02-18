@@ -144,7 +144,8 @@ def create_test_list_window():
                   key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)],
         [
             sg.CloseButton('Close'),
-            sg.Button('Add', button_color=('white', 'green')),
+            sg.Button('Add TMLT Test', button_color=('white', 'green')),
+            sg.Button('Add Custom Test', button_color=('white', 'green')),
         ],
     ]
 
@@ -155,7 +156,7 @@ def create_test_list_window():
         event, values = window.read()
         if event in ['CloseButton', sg.WIN_CLOSED]:
             break
-        elif event == 'Add':
+        elif event == 'Add TMLT Test':
             create_tmlt_test_window()
             tests = load_all_tests()
             window.find_element('-TABLE-').update(values=tests)
@@ -169,6 +170,11 @@ def create_test_list_window():
                 tests = load_all_tests()
                 window.find_element('-TABLE-').update(values=tests)
                 window.refresh()
+        elif event == 'Add Custom Test':
+            create_custom_test_form_window()
+            tests = load_all_tests()
+            window.find_element('-TABLE-').update(values=tests)
+            window.refresh()
     window.close()
 
 
@@ -275,10 +281,11 @@ def create_tmlt_test_form_window(data):
             with Session(engine) as session:
                 session.add(new_test)
                 session.commit()
-                logger.info(f'ADD NEW TEST: {values["code"]}')
+                logger.info(f'ADD NEW TMLT TEST: {values["code"]}')
                 sg.popup_ok(f"{new_test} added.")
                 break
     window.close()
+
 
 @login_required
 def create_tmlt_test_edit_form_window(data):
@@ -321,5 +328,48 @@ def create_tmlt_test_edit_form_window(data):
                 session.commit()
                 logger.info(f'UPDATED TEST: {values["code"]}')
                 sg.popup_ok(f"{test} data has been saved.")
+                break
+    window.close()
+
+
+@login_required
+def create_custom_test_form_window():
+    layout = [
+        [sg.Text('Code', size=(16, 1)), sg.InputText(key='code')],
+        [sg.Text('Label', size=(16, 1)), sg.InputText(key='label')],
+        [sg.Text('Description', size=(16, 1)), sg.Multiline(size=(45, 5), key='desc')],
+        [sg.Text('Price', size=(16, 1)), sg.InputText(key='price')],
+        [sg.Text('TMLT Code', size=(16, 1)), sg.InputText(key='tmlt_code')],
+        [sg.Text('TMLT Name', size=(16, 1)), sg.InputText(key='tmlt_name')],
+        [sg.Text('Specimens', size=(16, 1)), sg.InputText(key='specimens')],
+        [sg.Text('Component', size=(16, 1)), sg.InputText( key='component')],
+        [sg.Text('Method', size=(16, 1)), sg.InputText(key='method')],
+        [sg.Text('Unit', size=(16, 1)), sg.InputText(key='unit')],
+        [sg.Text('CGD Code', size=(16, 1)), sg.InputText(key='cgd_code')],
+        [sg.Text('CGD Name', size=(16, 1)), sg.InputText(key='cgd_name')],
+        [sg.Text('CGD Price', size=(16, 1)), sg.InputText(key='cgd_price')],
+        [sg.Text('Order Type', size=(16, 1)), sg.InputText(key='order_type')],
+        [sg.Text('Scale', size=(16, 1)), sg.InputText(key='scale')],
+        [sg.Text('LOINC Code', size=(16, 1)), sg.InputText(key='loinc_no')],
+        [sg.Text('Panel', size=(16, 1)), sg.InputText(key='panel')],
+        [sg.Text('Ref. Min', size=(16, 1)), sg.InputText(key='ref_min')],
+        [sg.Text('Ref. Max', size=(16, 1)), sg.InputText(key='ref_max')],
+        [sg.Text('Valuce Choices', size=(16, 1)), sg.Multiline(size=(45, 5), key='value_choices')],
+        [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
+    ]
+
+    window = sg.Window('Custom Test Form', layout=layout, modal=True)
+
+    while True:
+        event, values = window.read()
+        if event in ['CloseButton', sg.WIN_CLOSED]:
+            break
+        elif event == 'Add':
+            new_test = Test(**values)
+            with Session(engine) as session:
+                session.add(new_test)
+                session.commit()
+                logger.info(f'ADD NEW CUSTOM TEST: {values["code"]}')
+                sg.popup_ok(f"{new_test} added.")
                 break
     window.close()
