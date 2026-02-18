@@ -1,3 +1,4 @@
+from datetime import datetime
 from http import HTTPStatus
 
 import FreeSimpleGUI as sg
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 from tabulate import tabulate
 
 from app.auth.windows import login_required, SessionManager
-from app.system.models import engine, Test, TestMethod
+from app.system.models import engine, Test, TestMethod, LabOrder
 from app.config import logger
 
 
@@ -372,4 +373,69 @@ def create_custom_test_form_window():
                 logger.info(f'ADD NEW CUSTOM TEST: {values["code"]}')
                 sg.popup_ok(f"{new_test} added.")
                 break
+    window.close()
+
+
+def format_datetime(isodatetime, datetime_format='%d/%m/%Y %H:%M:%S'):
+    """A helper function that converts isodatetime to a datetime with a given format."""
+    try:
+        return datetime.fromisoformat(isodatetime).strftime(datetime_format)
+    except:
+        return isodatetime
+
+
+@login_required
+def create_order_list_window():
+    def load_orders():
+        data = []
+        with Session(engine) as session:
+            query = select(LabOrder)
+            for order in session.scalars(query):
+                data.append([
+                    order['id'],
+                    order['hn'],
+                    format_datetime(order['order_datetime']),
+                    format_datetime(order['received_datetime']),
+                    format_datetime(order['rejected_datetime']),
+                    order['rejected_by'],
+                    format_datetime(order['cancelled_datetime']),
+                    order['cancelled_by'],
+                    order['firstname'],
+                    order['lastname'],
+                    order['items'],
+                ])
+        return data
+
+    data = load_orders()
+
+    layout = [
+        [sg.Table(values=data, headings=['ID', 'HN', 'Order At', 'Received At',
+                                         'Rejected At', 'Rejected By', 'Cancelled At', 'Cancelled By',
+                                         'Firstname', 'Lastname', 'Items'],
+                  key="-ORDER-TABLE-", auto_size_columns=True,
+                  expand_x=True, expand_y=True,
+                  enable_events=True,
+                  num_rows=20,
+                  )],
+        [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')]
+    ]
+
+    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
+    window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+        elif event == '-ORDER-TABLE- Double' and values['-ORDER-TABLE-']:
+            # create_order_item_list_window(access_token, data[values['-ORDER-TABLE-'][0]][0])
+            # data = load_orders()
+            # window.find_element('-ORDER-TABLE-').update(values=data)
+            pass
+        elif event == '-GET-ORDER-':
+            # TODO: add code to check if the simulations run successfully
+            # resp = requests.get(f'http://127.0.0.1:5000/api/simulations', headers=headers)
+            # resp = requests.get(f'http://127.0.0.1:5000/api/orders', headers=headers)
+            # data = load_orders()
+            # window.find_element('-ORDER-TABLE-').update(values=data)
+            pass
     window.close()

@@ -11,7 +11,8 @@ from app.auth.windows import (create_signin_window,
 from app.system.models import initialize_db, User, engine
 from app.config import secret_key, logger
 from app.auth.windows import SessionManager
-from app.system.windows import create_logging_window, create_sql_window, create_test_list_window
+from app.system.windows import create_logging_window, create_sql_window, create_test_list_window, \
+    create_order_list_window
 
 session_manager = SessionManager()
 
@@ -123,22 +124,12 @@ def run_app():
             create_sql_window()
         # elif event == '-ANALYZE-':
         #     create_analysis_window(access_token)
-        # elif event == '-order-list-':
-        #     if not access_token:
-        #         sg.popup_error('Please sign in to access this section.', title='Access Denied')
-        #     else:
-        #         create_order_list_window(access_token)
+        elif event == '-order-list-':
+            create_order_list_window()
         elif event == '-LOGGING-':
             create_logging_window()
         elif event == 'Manage':
             create_user_list_window()
-        # elif event == 'BioSource':
-        #     create_biosource_window(access_token)
-        # elif event == 'Add TMLT test':
-        #     if not access_token:
-        #         sg.popup_error('Please sign in to access this section.')
-        #     else:
-        #         create_tmlt_test_window(access_token)
         elif event == 'List':
             create_test_list_window()
         # elif event == '-PATIENT-':
