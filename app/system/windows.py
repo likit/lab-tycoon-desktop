@@ -433,6 +433,7 @@ def create_order_list_window():
                   enable_events=True,
                   num_rows=20,
                   )],
+        [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
         [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')]
     ]
 
@@ -450,25 +451,24 @@ def create_order_list_window():
             # TODO: add code to check if the simulations run successfully
             with Session(engine) as session:
                 query = select(Customer).order_by(func.random())
-                customer = session.scalar(query)
-                tests = session.scalars(select(Test)).all()
-                if len(tests) == 0:
-                    sg.popup_ok(f"Add some tests first.")
-                    break
-                order = LabOrder(customer=customer,
-                                 order_datetime=datetime.datetime.now())
-                n = random.randint(1, len(tests))
-                ordered_items = set()
-                for test in random.choices(tests, k=n):
-                    if test not in ordered_items:
-                        order_item = LabOrderItem(test=test)
-                        order.order_items.append(order_item)
-                        ordered_items.add(test)
-
-                # order.received_at = order.order_datetime + datetime.timedelta(minutes=mins)
-                # logger.info(f'LAB ORDER ID={order.id} RECEIVED AT {order.received_at}')
-                session.add(order)
-                session.commit()
+                for i in range(int(values['-NUM-ORDERS-'])):
+                    customer = session.scalar(query)
+                    tests = session.scalars(select(Test)).all()
+                    if len(tests) == 0:
+                        sg.popup_ok(f"Add some tests first.")
+                        break
+                    order = LabOrder(customer=customer,
+                                     order_datetime=datetime.datetime.now())
+                    n = random.randint(1, len(tests))
+                    ordered_items = set()
+                    for test in random.choices(tests, k=n):
+                        if test not in ordered_items:
+                            order_item = LabOrderItem(test=test)
+                            order.order_items.append(order_item)
+                            ordered_items.add(test)
+                    session.add(order)
+                    session.commit()
+                    logger.info(f'LAB ORDER ID={order.id} ORDERED AT {order.order_datetime}')
             data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
             window.refresh()
@@ -923,6 +923,7 @@ def create_analysis_window():
                   enable_events=True)],
         [sg.Text('Analysis Log', font=('Arial', 16, 'bold'))],
         [sg.Output(key='-OUTPUT-',size=(75, 15))],
+        [sg.Text('Number of Analyzers:'), sg.Input('1', key='-NUM-INSTRUMENT-')],
         [sg.Button('Run', button_color=('white', 'green')),
          sg.CloseButton('Close'),
          sg.Help()],
@@ -944,7 +945,7 @@ def create_analysis_window():
                 start_time = datetime.datetime.now()
 
                 env = simpy.rt.RealtimeEnvironment(factor=0.1, strict=False)
-                instrument = simpy.Resource(env, capacity=1)
+                instrument = simpy.Resource(env, capacity=int(values['-NUM-INSTRUMENT-']))
                 records = {}
                 for item in session.scalars(query):
                     if item.order.received_at:
