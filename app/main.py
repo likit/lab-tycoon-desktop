@@ -22,8 +22,10 @@ base_url = os.path.dirname(os.path.abspath(__file__))
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(base_url, relative_path)
+        base_path = sys._MEIPASS
+    else:
+        base_path = base_url
+    return os.path.join(base_path, relative_path)
 
 if any(platform.win32_ver()):
     from ctypes import windll
@@ -31,7 +33,7 @@ if any(platform.win32_ver()):
     windll.shcore.SetProcessDpiAwareness(1)
 
 if not os.path.exists(resource_path('labtycoon.db')):
-    print('database not exists.. in ' + os.path.join(base_url, 'app', 'labtycoon.db'))
+    print('database not exists.. in ' + resource_path('labtycoon.db'))
     initialize_db()
 
 sg.theme('SystemDefault')
