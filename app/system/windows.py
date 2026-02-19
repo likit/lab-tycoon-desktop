@@ -922,7 +922,7 @@ def create_analysis_window():
                   key='-TABLE-',
                   enable_events=True)],
         [sg.Text('Analysis Log', font=('Arial', 16, 'bold'))],
-        # [sg.Output(key='-OUTPUT-',size=(75, 15))],
+        [sg.Output(key='-OUTPUT-',size=(75, 15), background_color='lightgrey', font=('Arial', 15))],
         [sg.Text('Number of Analyzers:'), sg.Input(config_dict['num_analyzers'], key='-NUM-INSTRUMENT-')],
         [sg.Button('Run', button_color=('white', 'green')),
          sg.CloseButton('Close'),
