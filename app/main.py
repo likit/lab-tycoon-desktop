@@ -40,6 +40,7 @@ menu_def = [
 
 layout = [
     [sg.Menu(menu_def)],
+    [sg.Image(filename=os.path.join(base_url, 'logo.png'))],
     [sg.Text('Lab Tycoon V.2029.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
     [sg.Text('By Likit Preeyanon, Ph.D.', font=('Arial', 16))],
@@ -72,6 +73,7 @@ def get_token_and_decode_payload():
 def run_app():
     window = sg.Window('Lab Tycoon Desktop!',
                        layout=layout,
+                       resizable=True,
                        element_justification='center').finalize()
 
     decoded_payload = get_token_and_decode_payload()

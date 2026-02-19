@@ -187,12 +187,14 @@ HOSPITAL_CODE = '10686'
 
 @login_required
 def create_tmlt_test_window():
-    resp = requests.post(TMLT_ACCESS_TOKEN_URL, json={'hospcode': HOSPITAL_CODE, 'provinceId': '12', 'amp': '01'})
-    if resp.status_code == 200:
-        tmlt_access_token = resp.json().get('token')
-    else:
-        sg.popup_error(resp.status_code)
+    try:
+        resp = requests.post(TMLT_ACCESS_TOKEN_URL, json={'hospcode': HOSPITAL_CODE, 'provinceId': '12', 'amp': '01'})
+    except requests.exceptions.ConnectionError as e:
+        sg.popup_error(f'Connection Error: {e}')
         return
+    else:
+        if resp.status_code == 200:
+            tmlt_access_token = resp.json().get('token')
 
     layout = [
         [sg.Text('Search Term'), sg.InputText(key='search')],
@@ -434,11 +436,15 @@ def create_order_list_window():
                   num_rows=20,
                   )],
         [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
-        [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')]
+        [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
+        [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')],
+        [sg.Text('Activity Log', font=('Arial', 15, 'bold'))],
+        [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
     ]
 
     window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
+    window.maximize()
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -450,7 +456,13 @@ def create_order_list_window():
         elif event == '-GET-ORDER-':
             # TODO: add code to check if the simulations run successfully
             with Session(engine) as session:
+                current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                query = select(func.count(User.id)).where(User.active == True)
+                num_staff = session.scalar(query)
                 query = select(Customer).order_by(func.random())
+                env = simpy.rt.RealtimeEnvironment(factor=0.1, strict=False)
+                staff = simpy.Resource(env, capacity=num_staff)
+                records = {}
                 for i in range(int(values['-NUM-ORDERS-'])):
                     customer = session.scalar(query)
                     tests = session.scalars(select(Test)).all()
@@ -459,6 +471,8 @@ def create_order_list_window():
                         break
                     order = LabOrder(customer=customer,
                                      order_datetime=datetime.datetime.now())
+                    if values['-AUTO-RECEIVE-']:
+                        env.process(run_order_receive(env, order, staff, 1, 5, records))
                     n = random.randint(1, len(tests))
                     ordered_items = set()
                     for test in random.choices(tests, k=n):
@@ -469,6 +483,22 @@ def create_order_list_window():
                     session.add(order)
                     session.commit()
                     logger.info(f'LAB ORDER ID={order.id} ORDERED AT {order.order_datetime}')
+                env.run()
+                print('Done.')
+                for order, value in records.items():
+                    t, rejected = value
+                    if not rejected:
+                        order.received_at = order.order_datetime + datetime.timedelta(minutes=t)
+                        order.receiver = current_user
+                        logger.info(f'LAB ORDER ID={order.id} RECEIVED AT {order.received_at}')
+                    else:
+                        order.reason = random.choice(['Improper specimens collection', 'Not enough specimens', 'Tests not available'])
+                        order.rejected_at = order.order_datetime + datetime.timedelta(minutes=t)
+                        order.rejecter = current_user
+                        print(f'Rejected {order.id} because {order.reason}.')
+                        logger.info(f'LAB ORDER ID={order.id} REJECTED AT {order.rejected_at}')
+                    session.add(order)
+                session.commit()
             data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
             window.refresh()
@@ -577,6 +607,7 @@ def create_order_item_list_window(lab_order_id):
                     order.reason, order.comment = create_reject_reason_window()
                     session.add(order)
                     session.commit()
+                    logger.info(f'LAB ORDER ID={order.id} REJECTED AT {order.rejected_at}')
                     sg.popup_ok('Order has been rejected.')
                     window.find_element('Reject').update(disabled=True)
                     window.find_element('Approve').update(disabled=True)
@@ -596,6 +627,7 @@ def create_order_item_list_window(lab_order_id):
                     order.receiver = current_user
                     session.add(order)
                     session.commit()
+                    logger.info(f'LAB ORDER ID={order.id} RECEIVED AT {order.received_at}')
                     sg.popup_ok('Order has been received.')
                     window.find_element('Accept').update(disabled=True)
                     window.find_element('reject-banner').update(visible=False)
@@ -624,6 +656,7 @@ def create_order_item_list_window(lab_order_id):
                             session.add(item)
                         session.add(order)
                         session.commit()
+                        logger.info(f'LAB ORDER ID={order.id} APPROVED AT {order.approved_at}')
                         sg.popup_ok('Order has been approved.')
                         items = load_item_list()
                         window.find_element('-ORDER-ITEM-TABLE-').update(values=items)
@@ -645,6 +678,7 @@ def create_order_item_list_window(lab_order_id):
                     order.canceller = current_user
                     session.add(order)
                     session.commit()
+                    logger.info(f'LAB ORDER ID={order.id} CANCELLED AT {order.cancelled_at}')
                     sg.popup_ok('Order has been cancelled.')
                 break
     window.close()
@@ -676,13 +710,13 @@ def create_item_detail_window(item_id):
             is_item_cancelled = False
 
         layout = [
-            [sg.Text('ID: ', size=(8, 1), font=('Arial', 16, 'bold')), sg.Text(item_id, font=('Arial', 16, 'bold')),
-             sg.Text('Code: ', size=(8, 1), font=('Arial', 16, 'bold')), sg.Text(item.test.code, font=('Arial', 16, 'bold')),
-             sg.Text('HN: ', font=('Arial', 16, 'bold')), sg.Text(item.order.customer.hn, font=('Arial', 16, 'bold')),
-             sg.Text('Customer: ', font=('Arial', 16, 'bold')), sg.Text(item.order.customer.fullname, font=('Arial', 16, 'bold')),
+            [
+                sg.Text('HN: ', font=('Arial', 16, 'bold')), sg.Text(item.order.customer.hn, font=('Arial', 16, 'bold')),
+                sg.Text('Name: ', font=('Arial', 16, 'bold')), sg.Text(item.order.customer.fullname, font=('Arial', 16, 'bold')),
              ],
-            [sg.Text('Value'), sg.Input(item.value, key='-ITEM-VALUE-', disabled=is_item_cancelled)],
-            [sg.Text('Comment')],
+            [sg.Text('Code', font=('Arial', 14)), sg.InputText(item.test.code, disabled=True)],
+            [sg.Text('Value', font=('Arial', 14)), sg.Input(item.value, key='-ITEM-VALUE-', disabled=is_item_cancelled)],
+            [sg.Text('Comment', font=('Arial', 14))],
             [sg.Multiline(item.comment, key='-UPDATE-COMMENT-', size=(45, 10), disabled=is_item_cancelled)],
             actions,
             [sg.Button('Audit Trail'), sg.CloseButton('Close', button_color=('white', 'red'))],
@@ -702,6 +736,7 @@ def create_item_detail_window(item_id):
                     item.canceller = current_user
                     session.add(item)
                     session.commit()
+                    logger.info(f'LAB ORDER ITEM ID={item.id} CANCELLED AT {item.cancelled_at}')
                 break
         elif event == 'Report':
             with Session(engine) as session:
@@ -714,6 +749,7 @@ def create_item_detail_window(item_id):
                         item.reporter = current_user
                         session.add(item)
                         session.commit()
+                        logger.info(f'LAB ORDER ITEM ID={item.id} REPORTED AT {item.reported_at}')
                 else:
                     sg.popup_error(f'{current_user.username} has no permission to report.')
                 break
@@ -728,6 +764,7 @@ def create_item_detail_window(item_id):
                         item.approver = current_user
                         session.add(item)
                         session.commit()
+                        logger.info(f'LAB ORDER ITEM ID={item.id} APPROVED AT {item.approved_at}')
                         window.find_element('Approve').update(disabled=True)
                 else:
                     sg.popup_error(f'{current_user.username} has no permission to approve.')
@@ -745,6 +782,7 @@ def create_item_detail_window(item_id):
                     item.approved_at = None
                     session.add(item)
                     session.commit()
+                    logger.info(f'LAB ORDER ITEM ID={item.id} UPDATED AT {item.updated_at}')
                     sg.popup_ok('Results have been updated.')
                     window.find_element('Approve').update(disabled=False)
                 break
@@ -958,6 +996,7 @@ def create_analysis_window():
                     item.finished_at = finished_at
                     item.updated_at = finished_at
                     session.add(item)
+                    logger.info(f'LAB ORDER ID={item.id} FINISHED AT {item.finished_at}')
                 session.commit()
                 if int(config_dict['num_analyzers']) != int(values['-NUM-INSTRUMENT-']):
                     update_config_yaml(num_analyzers=int(values['-NUM-INSTRUMENT-']))
@@ -967,10 +1006,6 @@ def create_analysis_window():
                         ' If you click run, all tests will be sent to virtual analyzers.')
     window.close()
 
-def print_stats(res):
-    print(f'{res.count} of {res.capacity} slots are allocated.')
-    print(f'  Users: {res.users}')
-    print(f'  Queued events: {res.queue}')
 
 def run_test(env, item, instrument, min_duration, max_duration, records):
     with instrument.request() as req:
@@ -981,3 +1016,12 @@ def run_test(env, item, instrument, min_duration, max_duration, records):
         print(f'ID={item.id} {item.test.code} Done.')
         # print(print_stats(instrument))
     records[item] = env.now
+
+
+def run_order_receive(env, order, staff, min_duration, max_duration, records):
+    with staff.request() as req:
+        yield req
+        rejected = random.choices([True, False], weights=[0.05, 0.95], k=1)
+        print(f'Receiving order {order.id}...')
+        yield env.timeout(random.randint(min_duration, max_duration))
+    records[order] = (env.now, rejected[0])
