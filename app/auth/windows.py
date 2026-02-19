@@ -285,15 +285,15 @@ def create_admin_user_role_window(username):
                     ])
 
             layout.append(
-                [sg.Button('Update'), sg.CloseButton('Close')]
+                [sg.Button('Update'), sg.Button('Close')]
             )
         window = sg.Window('User Roles', layout, modal=True)
         while True:
             event, values = window.read()
-            if event in ['CloseButton', sg.WIN_CLOSED]:
+            if event in ['Close', sg.WIN_CLOSED]:
+                updates = None
                 break
             elif event == 'Update':
-                # user = session.scalar(select(User).where(User.username==username))
                 user.roles = []
                 for role in roles:
                     if values[role.role_need] == True:
@@ -303,7 +303,8 @@ def create_admin_user_role_window(username):
                 session.commit()
                 sg.popup_ok("User has been updated.")
                 user_roles = user.all_roles
+                updates = {'roles': user_roles, '-ACTIVE-': values['-ACTIVE-']}
                 break
         window.close()
-    return {'roles': user_roles, '-ACTIVE-': values['-ACTIVE-']}
+    return updates
 

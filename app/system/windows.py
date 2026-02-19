@@ -268,7 +268,7 @@ def create_tmlt_test_form_window(data):
         [sg.Text('Panel', size=(16, 1)), sg.InputText(data[11], key='panel')],
         [sg.Text('Ref. Min', size=(16, 1)), sg.InputText(key='ref_min')],
         [sg.Text('Ref. Max', size=(16, 1)), sg.InputText(key='ref_max')],
-        [sg.Text('Valuce Choices', size=(16, 1)), sg.Multiline(size=(45, 5), key='value_choices')],
+        [sg.Text('Value Choices', size=(16, 1)), sg.Multiline(size=(45, 5), key='value_choices')],
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
@@ -311,7 +311,7 @@ def create_tmlt_test_edit_form_window(data):
         [sg.Text('Panel', size=(16, 1)), sg.InputText(data['panel'], key='panel')],
         [sg.Text('Ref. Min', size=(16, 1)), sg.InputText(data['ref_min'], key='ref_min')],
         [sg.Text('Ref. Max', size=(16, 1)), sg.InputText(data['ref_max'], key='ref_max')],
-        [sg.Text('Valuce Choices', size=(16, 1)),
+        [sg.Text('Value Choices', size=(16, 1)),
          sg.Multiline(data['value_choices'], size=(45, 5), key='value_choices')],
         [sg.Checkbox('Active', default=data['active'], key='active')],
         [sg.Button('Update', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
@@ -457,10 +457,13 @@ def create_order_list_window():
                     break
                 order = LabOrder(customer=customer,
                                  order_datetime=datetime.datetime.now())
-                n = random.randint(0, len(tests))
+                n = random.randint(1, len(tests))
+                ordered_items = set()
                 for test in random.choices(tests, k=n):
-                    order_item = LabOrderItem(test=test)
-                    order.order_items.append(order_item)
+                    if test not in ordered_items:
+                        order_item = LabOrderItem(test=test)
+                        order.order_items.append(order_item)
+                        ordered_items.add(test)
 
                 # order.received_at = order.order_datetime + datetime.timedelta(minutes=mins)
                 # logger.info(f'LAB ORDER ID={order.id} RECEIVED AT {order.received_at}')
@@ -918,6 +921,8 @@ def create_analysis_window():
                   font=('Arial', 16),
                   key='-TABLE-',
                   enable_events=True)],
+        [sg.Text('Analysis Log', font=('Arial', 16, 'bold'))],
+        [sg.Output(key='-OUTPUT-',size=(75, 15))],
         [sg.Button('Run', button_color=('white', 'green')),
          sg.CloseButton('Close'),
          sg.Help()],
@@ -942,10 +947,10 @@ def create_analysis_window():
                 instrument = simpy.Resource(env, capacity=1)
                 records = {}
                 for item in session.scalars(query):
-                    env.process(run_test(env, item, instrument, 5, 10, records))
+                    if item.order.received_at:
+                        env.process(run_test(env, item, instrument, 5, 10, records))
                 # staff = simpy.Resource(env, capacity=staff_count)
                 env.run()
-                print(records)
                 for item, t in records.items():
                     item.random_value()
                     finished_at = start_time + datetime.timedelta(minutes=t)
@@ -965,9 +970,11 @@ def print_stats(res):
     print(f'  Queued events: {res.queue}')
 
 def run_test(env, item, instrument, min_duration, max_duration, records):
-    print(f'Testing {item.test.code} {item.finished_at}...')
     with instrument.request() as req:
+        print(f'ID={item.id} {item.test.code} waiting to be analyzed...')
         yield req
+        print(f'Analyzing ID={item.id} {item.test.code}...')
         yield env.timeout(random.randint(min_duration, max_duration))
+        print(f'ID={item.id} {item.test.code} Done.')
         # print(print_stats(instrument))
     records[item] = env.now

@@ -313,7 +313,7 @@ class LabOrderItem(Base):
             self._value = str(_value)
         else:
             if self.test.value_choices:
-                _value = random.choice(self.test.value_choices.split(','))
+                self._value = random.choice(self.test.value_choices.split(','))
 
     @property
     def value(self):
