@@ -1,5 +1,10 @@
 import logging
+import os
 from logging.config import dictConfig
+
+import yaml
+
+base_url = os.path.dirname(os.path.abspath(__file__))
 
 current_user = None
 
@@ -29,3 +34,21 @@ DATABASE_URI = 'sqlite:///app/labtycoon.db'
 
 # TODO: find a way to dynamically set the secret key when app is first launched.
 secret_key = '85015f158b2f8b050705aa6ec9fbd65c99966725eec0965a5ac0bd3564afd210'
+
+
+if not os.path.exists(os.path.join(base_url, 'config.yaml')):
+    config_dict = {
+        'num_analyzers': 1,
+    }
+    with open(os.path.join(base_url, 'config.yaml'), 'w') as f:
+        yaml.dump(config_dict, f)
+else:
+    with open(os.path.join(base_url, 'config.yaml'), 'r') as f:
+        config_dict = yaml.safe_load(f)
+
+
+def update_config_yaml(**kwargs):
+    config_dict.update(kwargs)
+    with open(os.path.join(base_url, 'config.yaml'), 'w') as f:
+        yaml.dump(config_dict, f)
+    print('The app config has been updated.')

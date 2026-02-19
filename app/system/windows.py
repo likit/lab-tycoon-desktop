@@ -12,7 +12,7 @@ from tabulate import tabulate
 
 from app.auth.windows import login_required, session_manager
 from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User
-from app.config import logger
+from app.config import logger, config_dict, update_config_yaml
 
 
 @login_required
@@ -922,8 +922,8 @@ def create_analysis_window():
                   key='-TABLE-',
                   enable_events=True)],
         [sg.Text('Analysis Log', font=('Arial', 16, 'bold'))],
-        [sg.Output(key='-OUTPUT-',size=(75, 15))],
-        [sg.Text('Number of Analyzers:'), sg.Input('1', key='-NUM-INSTRUMENT-')],
+        # [sg.Output(key='-OUTPUT-',size=(75, 15))],
+        [sg.Text('Number of Analyzers:'), sg.Input(config_dict['num_analyzers'], key='-NUM-INSTRUMENT-')],
         [sg.Button('Run', button_color=('white', 'green')),
          sg.CloseButton('Close'),
          sg.Help()],
@@ -959,6 +959,8 @@ def create_analysis_window():
                     item.updated_at = finished_at
                     session.add(item)
                 session.commit()
+                if int(config_dict['num_analyzers']) != int(values['-NUM-INSTRUMENT-']):
+                    update_config_yaml(num_analyzers=int(values['-NUM-INSTRUMENT-']))
 
         elif event == 'Help':
             sg.popup_ok('The list shows all test that waiting to be analyzed.'
