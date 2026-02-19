@@ -425,6 +425,8 @@ def create_order_list_window():
                                          'Status', 'Time',
                                          'Items'],
                   key="-ORDER-TABLE-", auto_size_columns=True,
+                  alternating_row_color='lightblue',
+                  font=('Arial', 16),
                   expand_x=True, expand_y=True,
                   enable_events=True,
                   num_rows=20,
@@ -480,13 +482,13 @@ def create_order_item_list_window(lab_order_id):
                     item.id,
                     item.test.code,
                     item.test.tmlt_name,
-                    item.value_string,
-                    format_datetime(item.reported_at),
-                    item.reporter,
-                    format_datetime(item.approved_at),
-                    item.approver,
-                    format_datetime(item.finished_at),
-                    format_datetime(item.cancelled_at),
+                    item.value_string or '',
+                    format_datetime(item.reported_at) or '',
+                    item.reporter or '',
+                    format_datetime(item.approved_at) or '',
+                    item.approver or '',
+                    format_datetime(item.finished_at) or '',
+                    format_datetime(item.cancelled_at) or '',
                 ])
             return items
 
@@ -512,6 +514,8 @@ def create_order_item_list_window(lab_order_id):
                                               'Reporter', 'Approved At', 'Approver', 'Finished At', 'Cancelled At'],
                       key="-ORDER-ITEM-TABLE-",
                       auto_size_columns=True,
+                      alternating_row_color='lightgrey',
+                      font=('Arial', 16),
                       expand_y=True,
                       expand_x=True,
                       enable_events=True,
@@ -640,14 +644,20 @@ def create_item_detail_window(item_id):
     with Session(engine) as session:
         item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
         actions = [
+            sg.Button('Approve',
+                      button_color=('white', 'green'),
+                      disabled_button_color=('white', 'lightgrey'),
+                      disabled=item.approved_at is not None),
+            sg.Button('Report',
+                      button_color=('white', 'green'),
+                      disabled_button_color=('white', 'lightgrey'),
+                      disabled=item.reported_at is not None),
             sg.Button('Update', button_color=('white', 'green')),
-            sg.Cancel(button_color=('white', 'red')),
+            sg.Button('Cancel', button_color=('white', 'red'),
+                      disabled_button_color=('white', 'lightgrey'),
+                      disabled=item.cancelled_at is not None),
             sg.Help()
         ]
-        if item.reported_at:
-            actions.insert(0, sg.Button('Approve', button_color=('white', 'green')))
-        elif item.finished_at:
-            actions.insert(0, sg.Button('Report', button_color=('white', 'green')))
 
         if item.cancelled_at:
             is_item_cancelled = True
@@ -656,16 +666,16 @@ def create_item_detail_window(item_id):
             is_item_cancelled = False
 
         layout = [
-            [sg.Text('ID', size=(8, 1)), sg.Text(item_id),
-             sg.Text('Code', size=(8, 1)), sg.Text(item.test.code),
-             sg.Text('HN: '), sg.Text(item.order.customer.hn),
-             sg.Text('Customer: '), sg.Text(item.order.customer.fullname),
+            [sg.Text('ID: ', size=(8, 1), font=('Arial', 16, 'bold')), sg.Text(item_id, font=('Arial', 16, 'bold')),
+             sg.Text('Code: ', size=(8, 1), font=('Arial', 16, 'bold')), sg.Text(item.test.code, font=('Arial', 16, 'bold')),
+             sg.Text('HN: ', font=('Arial', 16, 'bold')), sg.Text(item.order.customer.hn, font=('Arial', 16, 'bold')),
+             sg.Text('Customer: ', font=('Arial', 16, 'bold')), sg.Text(item.order.customer.fullname, font=('Arial', 16, 'bold')),
              ],
             [sg.Text('Value'), sg.Input(item.value, key='-ITEM-VALUE-', disabled=is_item_cancelled)],
             [sg.Text('Comment')],
             [sg.Multiline(item.comment, key='-UPDATE-COMMENT-', size=(45, 10), disabled=is_item_cancelled)],
             actions,
-            [sg.Button('History'), sg.CloseButton('Close', button_color=('white', 'red'))],
+            [sg.Button('Audit Trail'), sg.CloseButton('Close', button_color=('white', 'red'))],
         ]
     window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
@@ -708,6 +718,7 @@ def create_item_detail_window(item_id):
                         item.approver = current_user
                         session.add(item)
                         session.commit()
+                        window.find_element('Approve').update(disabled=True)
                 else:
                     sg.popup_error(f'{current_user.username} has no permission to approve.')
                 break
@@ -718,15 +729,17 @@ def create_item_detail_window(item_id):
                     item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
                     item._value = values['-ITEM-VALUE-']
                     item.comment = values['-UPDATE-COMMENT-']
-                    item.finished_at = datetime.datetime.now()
-                    item.reported_at = datetime.datetime.now()
+                    if not item.update_at:
+                        item.finished_at = datetime.datetime.now()
+                    item.updated_at = datetime.datetime.now()
+                    item.approved_at = None
                     session.add(item)
                     session.commit()
                     sg.popup_ok('Results have been updated.')
+                    window.find_element('Approve').update(disabled=False)
                 break
-        elif event == 'History':
-            pass
-            # create_lab_order_item_version_list_window(access_token, item)
+        elif event == 'Audit Trail':
+            create_lab_order_item_version_list_window(item_id)
     window.close()
 
 
@@ -822,3 +835,46 @@ def create_reject_reason_window():
             break
     window.close()
     return values.get('-REASON-'), values.get('-COMMENT-')
+
+
+@login_required
+def create_lab_order_item_version_list_window(item_id):
+    versions = []
+    with Session(engine) as session:
+        item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+        for n, ver in enumerate(item.versions, start=1):
+            if ver._value:
+                value = ver._value if ver.test.scale != 'Quantitative' else float(ver._value),
+            else:
+                value = None
+            versions.append([
+                n,
+                value or '',
+                format_datetime(ver.reported_at) or '',
+                ver.reporter or '',
+                format_datetime(ver.approved_at) or '',
+                ver.approver or '',
+                ver.comment,
+                format_datetime(ver.updated_at) or '',
+                ver.updater or '',
+            ])
+
+        layout = [
+            [sg.Text('ID: '), sg.Text(item.id),
+             sg.Text('Label: '), sg.Text(item.test.label),
+             sg.Text('HN: '), sg.Text(item.order.customer.hn),
+             sg.Text('Patient: '), sg.Text(item.order.customer.fullname),
+             ],
+            [sg.Table(values=versions, headings=['Version', 'Value', 'Reported At',
+                                                 'Reporter', 'Approved At', 'Approver', 'Comment',
+                                                 'Updated At', 'Updater'],
+                      key="-VERSION-TABLE-", enable_events=True)
+             ],
+            [sg.CloseButton('Close')]
+        ]
+        window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+    window.close()
