@@ -307,6 +307,14 @@ class LabOrderItem(Base):
     _value: Mapped[str] = Column('value', String(), nullable=True)
     reject_records: Mapped[List["LabRejectRecord"]] = relationship(back_populates="order_item", cascade="all, delete-orphan")
 
+    def random_value(self):
+        if self.test.scale == 'Quantitative':
+            _value = random.randint(1, 300)
+            self._value = str(_value)
+        else:
+            if self.test.value_choices:
+                _value = random.choice(self.test.value_choices.split(','))
+
     @property
     def value(self):
         if self._value and self.test.scale == 'Quantitative':

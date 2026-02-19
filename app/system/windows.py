@@ -4,13 +4,14 @@ import datetime
 import FreeSimpleGUI as sg
 import pandas as pd
 import requests
+import simpy
 from sql_formatter.core import format_sql
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import Session
 from tabulate import tabulate
 
-from app.auth.windows import login_required, SessionManager, session_manager
-from app.system.models import engine, Test, TestMethod, LabOrder, Customer, LabOrderItem, User
+from app.auth.windows import login_required, session_manager
+from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User
 from app.config import logger
 
 
@@ -323,6 +324,7 @@ def create_tmlt_test_edit_form_window(data):
         if event in ['CloseButton', sg.WIN_CLOSED]:
             break
         elif event == 'Update':
+            #TODO: add updater
             with Session(engine) as session:
                 test = session.scalar(select(Test).where(Test.id == data['id']))
                 test.update_from_dict(values, session)
@@ -613,9 +615,15 @@ def create_order_item_list_window(lab_order_id):
                     if proceed:
                         order.approved_at = datetime.datetime.now()
                         order.approver = current_user
+                        for item in order.order_items:
+                            item.approved_at = order.approved_at
+                            item.approver = current_user
+                            session.add(item)
                         session.add(order)
                         session.commit()
                         sg.popup_ok('Order has been approved.')
+                        items = load_item_list()
+                        window.find_element('-ORDER-ITEM-TABLE-').update(values=items)
                         window.find_element('Reject').update(disabled=True)
                         window.find_element('Approve').update(disabled=True)
                         window.find_element('Accept').update(disabled=True)
@@ -656,7 +664,6 @@ def create_item_detail_window(item_id):
             sg.Button('Cancel', button_color=('white', 'red'),
                       disabled_button_color=('white', 'lightgrey'),
                       disabled=item.cancelled_at is not None),
-            sg.Help()
         ]
 
         if item.cancelled_at:
@@ -868,7 +875,11 @@ def create_lab_order_item_version_list_window(item_id):
             [sg.Table(values=versions, headings=['Version', 'Value', 'Reported At',
                                                  'Reporter', 'Approved At', 'Approver', 'Comment',
                                                  'Updated At', 'Updater'],
-                      key="-VERSION-TABLE-", enable_events=True)
+                      key="-VERSION-TABLE-",
+                      auto_size_columns=True,
+                      alternating_row_color='lightyellow',
+                      font=('Arial', 16),
+                      enable_events=True)
              ],
             [sg.CloseButton('Close')]
         ]
@@ -878,3 +889,85 @@ def create_lab_order_item_version_list_window(item_id):
         if event in ('Exit', sg.WIN_CLOSED):
             break
     window.close()
+
+
+@login_required
+def create_analysis_window():
+    items = []
+    with Session(engine) as session:
+        query = select(LabOrderItem).where(and_(
+            LabOrderItem.finished_at == None,
+            LabOrderItem.cancelled_at == None)
+        )
+        for item in session.scalars(query):
+            if item.order.received_at:
+                items.append([
+                    item.id,
+                    item.test.code,
+                    item.test.label,
+                    item.test.tmlt_name,
+                    format_datetime(item.order.received_at) or '',
+                    item.order.customer.hn,
+                    item.order.customer.fullname,
+                ])
+    layout = [
+        [sg.Table(headings=['ID', 'Code', 'Label', 'TMLT Name', 'Received At', 'HN', 'Patient'],
+                  values=items,
+                  alternating_row_color='lightgrey',
+                  auto_size_columns=True,
+                  font=('Arial', 16),
+                  key='-TABLE-',
+                  enable_events=True)],
+        [sg.Button('Run', button_color=('white', 'green')),
+         sg.CloseButton('Close'),
+         sg.Help()],
+    ]
+
+    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True)
+
+    while True:
+        event, values = window.read()
+        if event in ('Exit', sg.WIN_CLOSED):
+            break
+        elif event == 'Run':
+            with Session(engine) as session:
+                query = select(LabOrderItem).where(and_(
+                    LabOrderItem.finished_at == None,
+                    LabOrderItem.cancelled_at == None)
+                )
+
+                start_time = datetime.datetime.now()
+
+                env = simpy.rt.RealtimeEnvironment(factor=0.1, strict=False)
+                instrument = simpy.Resource(env, capacity=1)
+                records = {}
+                for item in session.scalars(query):
+                    env.process(run_test(env, item, instrument, 5, 10, records))
+                # staff = simpy.Resource(env, capacity=staff_count)
+                env.run()
+                print(records)
+                for item, t in records.items():
+                    item.random_value()
+                    finished_at = start_time + datetime.timedelta(minutes=t)
+                    item.finished_at = finished_at
+                    item.updated_at = finished_at
+                    session.add(item)
+                session.commit()
+
+        elif event == 'Help':
+            sg.popup_ok('The list shows all test that waiting to be analyzed.'
+                        ' If you click run, all tests will be sent to virtual analyzers.')
+    window.close()
+
+def print_stats(res):
+    print(f'{res.count} of {res.capacity} slots are allocated.')
+    print(f'  Users: {res.users}')
+    print(f'  Queued events: {res.queue}')
+
+def run_test(env, item, instrument, min_duration, max_duration, records):
+    print(f'Testing {item.test.code} {item.finished_at}...')
+    with instrument.request() as req:
+        yield req
+        yield env.timeout(random.randint(min_duration, max_duration))
+        # print(print_stats(instrument))
+    records[item] = env.now
