@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from logging.config import dictConfig
 
 import yaml
@@ -36,14 +37,19 @@ DATABASE_URI = 'sqlite:///app/labtycoon.db'
 secret_key = '85015f158b2f8b050705aa6ec9fbd65c99966725eec0965a5ac0bd3564afd210'
 
 
-if not os.path.exists(os.path.join(base_url, 'config.yaml')):
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(base_url, relative_path)
+
+if not os.path.exists(resource_path('config.yaml')):
     config_dict = {
         'num_analyzers': 1,
     }
-    with open(os.path.join(base_url, 'config.yaml'), 'w') as f:
+    with open(os.path.join(resource_path('config.yaml')), 'w') as f:
         yaml.dump(config_dict, f)
 else:
-    with open(os.path.join(base_url, 'config.yaml'), 'r') as f:
+    with open(os.path.join(resource_path('config.yaml')), 'r') as f:
         config_dict = yaml.safe_load(f)
 
 

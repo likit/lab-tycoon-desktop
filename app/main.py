@@ -1,5 +1,7 @@
 import os.path
 import platform
+import sys
+
 import FreeSimpleGUI as sg
 import jwt
 import keyring
@@ -16,16 +18,19 @@ from app.system.windows import create_logging_window, create_sql_window, create_
 
 session_manager = SessionManager()
 
-BASE_URL = os.getcwd()
+base_url = os.path.dirname(os.path.abspath(__file__))
+
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(base_url, relative_path)
 
 if any(platform.win32_ver()):
     from ctypes import windll
 
     windll.shcore.SetProcessDpiAwareness(1)
 
-base_url = os.path.dirname(os.path.abspath(__file__))
-
-if not os.path.exists(os.path.join(base_url, 'labtycoon.db')):
+if not os.path.exists(resource_path('labtycoon.db')):
     print('database not exists.. in ' + os.path.join(base_url, 'app', 'labtycoon.db'))
     initialize_db()
 
@@ -40,7 +45,7 @@ menu_def = [
 
 layout = [
     [sg.Menu(menu_def)],
-    [sg.Image(filename=os.path.join(base_url, 'logo.png'))],
+    [sg.Image(filename=resource_path('logo.png'))],
     [sg.Text('Lab Tycoon V.2029.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
     [sg.Text('By Likit Preeyanon, Ph.D.', font=('Arial', 16))],
