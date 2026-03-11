@@ -23,6 +23,7 @@ make_versioned()
 
 engine = create_engine(DATABASE_URI)
 
+
 class Base(DeclarativeBase):
     pass
 
@@ -127,7 +128,7 @@ class Test(Base):
     desc: Mapped[str] = mapped_column('desc', Text(), nullable=True)
     unit: Mapped[str] = mapped_column('unit', String(), nullable=False)
     order_type: Mapped[str] = mapped_column('order_type', String())
-    cgd_code: Mapped[str] = mapped_column('cgd_code', String(), unique=True, nullable=True)
+    cgd_code: Mapped[str] = mapped_column('cgd_code', String(), nullable=True)
     cgd_name: Mapped[str] = mapped_column('cgd_name', String(), nullable=True)
     cgd_price: Mapped[float] = mapped_column('cgd_price', Numeric(), nullable=True)
     panel: Mapped[str] = mapped_column('panel', String(), nullable=True)
@@ -305,7 +306,8 @@ class LabOrderItem(Base):
     reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id])
     canceller: Mapped["User"] = relationship(foreign_keys=[canceller_id])
     _value: Mapped[str] = Column('value', String(), nullable=True)
-    reject_records: Mapped[List["LabRejectRecord"]] = relationship(back_populates="order_item", cascade="all, delete-orphan")
+    reject_records: Mapped[List["LabRejectRecord"]] = relationship(back_populates="order_item",
+                                                                   cascade="all, delete-orphan")
 
     def random_value(self):
         if self.test.scale == 'Quantitative':
@@ -359,6 +361,7 @@ class LabRejectRecord(Base):
 
 configure_mappers()
 
+
 def initialize_db():
     Base.metadata.create_all(engine)
     print('Populating a default admin account...')
@@ -397,3 +400,72 @@ def initialize_db():
     with Session(engine) as session:
         session.add_all(customers)
         session.commit()
+
+    print('Populating lab tests...')
+    test_attribues = [
+        "code", "tmlt_code", "tmlt_name", "loinc_no", "component", "label", "scale", "specimens", "method",
+        "price", "desc", "unit", "order_type", "cgd_code", "cgd_name", "cgd_price", "panel", "ref_min", "ref_max",
+        "value_choices", "active"
+    ]
+    test_data = [
+        [
+            "TG", "320072", "Triglyceride [mg/dL] in Serum or Plasma", "2571-8", "Triglyceride", "Triglyceride",
+            "Quantitative", "Serum or Plasma", "", "100", "Triglyceride [mg/dL] in Serum or Plasma", "mg/dL", "ITEM", "32502.0",
+            "Lipid - TG (Triglyceride)", "60", "", "", "150.0", "", True
+        ],
+        [
+            "HDL", "320071", "Cholesterol in HDL [mg/dL] in Serum or Plasma", "2085-9", "Cholesterol in HDL", "",
+            "Quantitative", "Serum or Plasma", "", "130", "Cholesterol in HDL [mg/dL] in Serum or Plasma",
+            "mg/dL", "ITEM", "32503.0", "Lipid - HDL - cholesterol Cholesterol in HDL", "100", "", "50.0",
+            "", "", True
+        ],
+        [
+            "CHOL", "320070", "Cholesterol [mg/dL] in Serum or Plasma", "2093-3", "Cholesterol", "Cholesterol",
+            "Quantitative", "Serum or Plasma", "1", "90", "Cholesterol [mg/dL] in Serum or Plasma", "mg/dL", "ITEM", "32501.0",
+            "Lipid - Cholesterol ", "60", "", "", "200.0", "", True
+        ],
+        [
+            "LDL-C", "320293", "Cholesterol in LDL [mg/dL] in Serum or Plasma by calculation",
+            "13457-7", "Cholesterol in LDL", "LDL-C", "Quantitative", "Serum or Plasma", "Calculation", "0",
+            "Cholesterol in LDL [mg/dL] in Serum or Plasma by calculation", "mg/dL", "ITEM", "", "", "0", "", "", "150.0",
+            "", True],
+        [
+            "LDL-Direct", "320073", "Cholesterol in LDL [mg/dL] in Serum or Plasma by Direct assay", "18262-6",
+            "Cholesterol in LDL", "LDL-Direct", "Quantitative", "Serum or Plasma", "Direct assay", "200",
+            "Cholesterol in LDL [mg/dL] in Serum or Plasma by Direct assay", "mg/dL", "ITEM", "32504.0",
+            "Lipid - LDL - chol (direct) Cholesterol in LDL, Direct assay  สั่งรายการเดียว", "150", "", "", "150.0", "",
+            True
+        ],
+        [
+            "ALT", "320151", "Alanine aminotransferase [U/L] in Serum or Plasma", "1742-6",
+            "Alanine aminotransferase", "ALT", "Quantitative", "Serum or Plasma", "", "100",
+            "Alanine aminotransferase [U/L] in Serum or Plasma", "U/L", "ITEM", "32311.0",
+            "SGPT (ALT Alanine aminotransferase)", "40", "", "", "", "", True
+        ],
+        [
+            "AST", "320150", "Aspartate aminotransferase [U/L] in Serum or Plasma", "1920-8",
+            "Aspartate aminotransferase", "AST", "Quantitative", "Serum or Plasma", "", "100",
+            "Aspartate aminotransferase [U/L] in Serum or Plasma", "U/L", "ITEM", "32310.0",
+            "SGOT (AST Aspartate aminotransferase)", "40", "", "", "", "", True
+         ],
+        [
+            "CREATININE", "320055", "Creatinine [mg/dL] in Serum or Plasma", "2160-0",
+            "Creatinine", "Serun Creatinine", "Quantitative", "Serum or Plasma", "", "60", "Creatinine [mg/dL] in Serum or Plasma",
+            "mg/dL", "ITEM", "32202.0", "Creatinine ", "40", "", "", "", "", True,
+        ],
+        [
+            "HbA1c", "320131", "Hemoglobin A1c/Hemoglobin.total [%] in Blood", "4548-4",
+            "Hemoglobin A1c/Hemoglobin.total", "HbA1c", "Quantitative", "Blood", "1", "200",
+            "Hemoglobin A1c/Hemoglobin.total [%] in Blood", "%", "ITEM", "32401.0", "Hb A1C",
+            "150", "", "", "7.0", "", True,
+         ]
+    ]
+    test_objs = []
+    for test in test_data:
+        test_dict = dict(zip(test_attribues, test))
+        new_test = Test(**test_dict)
+        test_objs.append(new_test)
+    with Session(engine) as session:
+        session.add_all(test_objs)
+        session.commit()
+
