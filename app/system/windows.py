@@ -776,7 +776,7 @@ def create_item_detail_window(item_id):
                     item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
                     item._value = values['-ITEM-VALUE-']
                     item.comment = values['-UPDATE-COMMENT-']
-                    if not item.update_at:
+                    if not item.updated_at:
                         item.finished_at = datetime.datetime.now()
                     item.updated_at = datetime.datetime.now()
                     item.approved_at = None
