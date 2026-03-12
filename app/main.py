@@ -10,11 +10,10 @@ from app.auth.windows import (create_signin_window,
                               create_profile_window,
                               create_register_window,
                               create_user_list_window)
-from app.system.models import initialize_db, User, engine
-from app.config import secret_key, logger
+from app.system.models import initialize_db
+from app.config import secret_key
 from app.auth.windows import SessionManager
-from app.system.windows import create_logging_window, create_sql_window, create_test_list_window, \
-    create_order_list_window, create_customer_list_window, create_analysis_window
+from app.system.windows import *
 
 session_manager = SessionManager()
 
@@ -57,6 +56,7 @@ layout = [
     [sg.Button('Edit profile', key='-EDIT-PROFILE-', visible=False),
      sg.Button('Sign In', key='-SIGNIN-'),
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
+     sg.Button('Tests', key='-TESTS-'),
      sg.Button('Analyze', key='-ANALYZE-'),
      sg.Button('Orders', key='-ORDERS-'),
      sg.Button('Customers', key='-CUSTOMER-'),
@@ -139,10 +139,9 @@ def run_app():
             create_logging_window()
         elif event == 'Manage':
             create_user_list_window()
-        elif event == 'List':
+        elif event == 'List' or event == '-TESTS-':
             create_test_list_window()
         elif event == '-CUSTOMER-':
             create_customer_list_window()
-
 
     window.close()
