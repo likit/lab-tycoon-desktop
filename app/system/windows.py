@@ -143,7 +143,11 @@ def create_test_list_window():
                   headings=['Code', 'Label', 'Description',
                             'TMLT Code', 'TMLT Name', 'Specimens',
                             'Method', 'Unit', 'Price', 'Active'],
-                  key='-TABLE-', expand_x=True, expand_y=True, enable_events=True)],
+                  key='-TABLE-', expand_x=True, expand_y=True, enable_events=True,
+                  alternating_row_color='lightblue',
+                  font=('Arial', 16),
+                  )
+         ],
         [
             sg.CloseButton('Close'),
             sg.Button('Add TMLT Test', button_color=('white', 'green')),
@@ -153,6 +157,7 @@ def create_test_list_window():
 
     window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
+    window.maximize()
 
     while True:
         event, values = window.read()
@@ -465,7 +470,7 @@ def create_order_list_window():
                 records = {}
                 for i in range(int(values['-NUM-ORDERS-'])):
                     customer = session.scalar(query)
-                    tests = session.scalars(select(Test)).all()
+                    tests = session.scalars(select(Test).where(Test.active==True)).all()
                     if len(tests) == 0:
                         sg.popup_ok(f"Add some tests first.")
                         break
@@ -697,7 +702,7 @@ def create_item_detail_window(item_id):
                       button_color=('white', 'green'),
                       disabled_button_color=('white', 'lightgrey'),
                       disabled=item.reported_at is not None),
-            sg.Button('Update', button_color=('white', 'green')),
+            sg.Button('Save', button_color=('white', 'green')),
             sg.Button('Cancel', button_color=('white', 'red'),
                       disabled_button_color=('white', 'lightgrey'),
                       disabled=item.cancelled_at is not None),
@@ -739,20 +744,35 @@ def create_item_detail_window(item_id):
                     logger.info(f'LAB ORDER ITEM ID={item.id} CANCELLED AT {item.cancelled_at}')
                 break
         elif event == 'Report':
-            with Session(engine) as session:
-                current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
-                if current_user.has_role('reporter'):
-                    response = sg.popup_ok_cancel('Are you sure want to report this item?')
-                    if response == 'OK':
-                        item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
-                        item.reported_at = datetime.datetime.now()
-                        item.reporter = current_user
-                        session.add(item)
-                        session.commit()
-                        logger.info(f'LAB ORDER ITEM ID={item.id} REPORTED AT {item.reported_at}')
-                else:
-                    sg.popup_error(f'{current_user.username} has no permission to report.')
-                break
+            ready_to_report = False
+            if values['-ITEM-VALUE-']:
+                with Session(engine) as session:
+                    item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
+                    if values['-ITEM-VALUE-'] != item.value:
+                        if not item.value:
+                            sg.popup_error('Please save the result before reporting.')
+                        else:
+                            choice = sg.popup_ok_cancel(f'The results has changed but not saved. The current value is {item.value}. Do you want to report the new value?')
+                            if choice == 'OK':
+                                ready_to_report = True
+                                value = values['-ITEM-VALUE-']
+                    else:
+                        value = item.value
+                    if ready_to_report:
+                        current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
+                        if current_user.has_role('reporter'):
+                            response = sg.popup_ok_cancel('Are you sure want to report this item?')
+                            if response == 'OK':
+                                item.reported_at = datetime.datetime.now()
+                                item._value = value
+                                item.reporter = current_user
+                                session.add(item)
+                                session.commit()
+                                logger.info(f'LAB ORDER ITEM ID={item.id} REPORTED AT {item.reported_at}')
+                        else:
+                            sg.popup_error(f'{current_user.username} has no permission to report.')
+            else:
+                sg.popup_error(f'The result is empty.')
         elif event == 'Approve':
             with Session(engine) as session:
                 current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
@@ -769,8 +789,8 @@ def create_item_detail_window(item_id):
                 else:
                     sg.popup_error(f'{current_user.username} has no permission to approve.')
                 break
-        elif event == 'Update':
-            response = sg.popup_ok_cancel('Are you sure want to update this item?')
+        elif event == 'Save':
+            response = sg.popup_ok_cancel('Are you sure want to update the data?')
             if response == 'OK':
                 with Session(engine) as session:
                     item = session.scalar(select(LabOrderItem).where(LabOrderItem.id == item_id))
