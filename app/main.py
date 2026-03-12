@@ -114,13 +114,14 @@ def run_app():
                 current_user = get_token_and_decode_payload()
                 if current_user:
                     toggle_buttons_after_log_in_out()
+                    sg.popup_quick_message(f"👍You have logged in.", background_color='lightgreen')
             else:
-                sg.popup_error('You are already logged in.', title='User Authentication')
+                sg.popup_quick_message('You are already logged in.')
         elif event == '-SIGNOUT-':
             keyring.delete_password('labtycoon', 'access_token')
             session_manager.logout()
             toggle_buttons_after_log_in_out('logout')
-            sg.popup_auto_close('You have logged out.')
+            sg.popup_quick_message(f"You have logged out.🙌", background_color='lightgreen')
         elif event == '-EDIT-PROFILE-':
             if session_manager.current_user:
                 create_profile_window()

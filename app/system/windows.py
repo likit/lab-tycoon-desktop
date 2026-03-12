@@ -5,6 +5,7 @@ import FreeSimpleGUI as sg
 import pandas as pd
 import requests
 import simpy
+from FreeSimpleGUI import popup_quick_message
 from sql_formatter.core import format_sql
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import Session
@@ -512,6 +513,7 @@ def create_order_list_window():
             data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
             window.refresh()
+            popup_quick_message("Order(s) have arrived.", background_color='lightgreen')
     window.close()
 
 
@@ -1036,6 +1038,7 @@ def create_analysis_window():
                 session.commit()
                 if int(config_dict['num_analyzers']) != int(values['-NUM-INSTRUMENT-']):
                     update_config_yaml(num_analyzers=int(values['-NUM-INSTRUMENT-']))
+            popup_quick_message("All analyses have finished.", background_color='lightgreen')
 
         elif event == 'Help':
             sg.popup_ok('The list shows all test that waiting to be analyzed.'
