@@ -88,11 +88,12 @@ class User(Base):
         return self.username
 
 
-# class BioSource(Base):
-#     __tablename__ = 'biosources'
-#     id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
-#     source: Mapped[str] = mapped_column('source', String(255), nullable=False)
-#     specimens: Mapped[List["Specimens"]] = relationship(back_populates="source", cascade='all, delete-orphan')
+class Doctor(Base):
+    __tablename__ = 'doctors'
+    id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
+    fullname: Mapped[str] = mapped_column('fullname', String(255), nullable=False)
+    license_number: Mapped[str] = mapped_column('license_number', String(255), nullable=False)
+    gender: Mapped[str] = mapped_column('gender', String(255), nullable=False)
 
 
 class Specimens(Base):
@@ -281,6 +282,8 @@ class LabOrder(Base):
     rejector_id: Mapped[int] = mapped_column('rejector_id', ForeignKey('users.id'), nullable=True)
     rejector: Mapped["User"] = relationship(foreign_keys=[rejector_id])
     order_items: Mapped[List["LabOrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    doctor_id: Mapped[int] = mapped_column('doctor_id', ForeignKey('doctors.id'), nullable=True)
+    doctor: Mapped["Doctor"] = relationship(foreign_keys=[doctor_id])
 
 
 class LabOrderItem(Base):
@@ -399,6 +402,21 @@ def initialize_db():
                          )
     with Session(engine) as session:
         session.add_all(customers)
+        session.commit()
+
+    print('Populating doctors...')
+    doctors = []
+    for i in range(10):
+        license_number = fake.random_number(digits=8)
+        gender = random.choice(['male', 'female'])
+        fullname = fake.name()
+
+        doctors.append(Doctor(license_number=str(license_number),
+                              gender=gender,
+                              fullname=fullname)
+                         )
+    with Session(engine) as session:
+        session.add_all(doctors)
         session.commit()
 
     print('Populating lab tests...')
