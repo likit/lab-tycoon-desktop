@@ -61,6 +61,7 @@ layout = [
      sg.Button('Orders', key='-ORDERS-'),
      sg.Button('Customers', key='-CUSTOMER-'),
      sg.Button('Logs', key='-LOGGING-'),
+     sg.Button('SQL Editor', key='-SQL-EDITOR-'),
      sg.Exit(button_color='white on red')]
 ]
 
@@ -129,7 +130,7 @@ def run_app():
             sg.popup_ok('This program is developed by Asst. Prof.Likit Preeyanon. '
                         'Please contact likit.pre@mahidol.edu for more information.'
                         , title='About')
-        elif event == 'SQL Editor':
+        elif event == 'SQL Editor' or event == '-SQL-EDITOR-':
             create_sql_window()
         elif event == '-ANALYZE-':
             create_analysis_window()
