@@ -149,9 +149,9 @@ def create_test_list_window():
                   )
          ],
         [
-            sg.CloseButton('Close'),
             sg.Button('Add TMLT Test', button_color=('white', 'green')),
             sg.Button('Add Custom Test', button_color=('white', 'green')),
+            sg.CloseButton('Close'),
         ],
     ]
 
@@ -987,7 +987,8 @@ def create_analysis_window():
          sg.Help()],
     ]
 
-    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True)
+    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True, finalize=True)
+    window.maximize()
 
     while True:
         event, values = window.read()
