@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from tabulate import tabulate
 
 from app.auth.windows import login_required, session_manager
-from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User
+from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User, Doctor
 from app.config import logger, config_dict, update_config_yaml
 
 
@@ -23,7 +23,7 @@ def create_logging_window():
                       font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
         [sg.CloseButton('Close')],
     ]
-    window = sg.Window('Program Logs', layout=layout, modal=True, resizable=True)
+    window = sg.Window('Program Logs', layout=layout, modal=True, resizable=True, keep_on_top=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -47,7 +47,7 @@ def create_sql_window():
         [sg.Multiline(key='-console-', size=(80, 5), font='Courier 13 bold', expand_x=True, expand_y=True)]
     ]
 
-    window = sg.Window('SQL Tools', layout=layout, modal=True, resizable=True)
+    window = sg.Window('SQL Tools', layout=layout, modal=True, resizable=True, keep_on_top=True)
 
     df = pd.DataFrame()
 
@@ -101,7 +101,7 @@ def show_save_query_dialog():
         [sg.Input(key='-filepath-'), sg.FileSaveAs('Browse', file_types=(('Excel', 'xlsx'),))],
         [sg.Ok()]
     ]
-    dialog = sg.Window('Save As', layout, modal=True)
+    dialog = sg.Window('Save As', layout, modal=True, keep_on_top=True,)
     filepath = ''
     while True:
         event, values = dialog.read()
@@ -155,7 +155,7 @@ def create_test_list_window():
         ],
     ]
 
-    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
+    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
     window.maximize()
 
@@ -209,7 +209,7 @@ def create_tmlt_test_window():
                   key='-TABLE-', auto_size_columns=True, expand_x=True, expand_y=True, enable_events=True)]
     ]
 
-    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True)
+    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
 
     while True:
@@ -279,7 +279,7 @@ def create_tmlt_test_form_window(data):
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
-    window = sg.Window('Test Form', layout=layout, modal=True)
+    window = sg.Window('Test Form', layout=layout, modal=True, keep_on_top=True)
 
     while True:
         event, values = window.read()
@@ -324,7 +324,7 @@ def create_tmlt_test_edit_form_window(data):
         [sg.Button('Update', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
-    window = sg.Window('Test Edit Form', layout=layout, modal=True)
+    window = sg.Window('Test Edit Form', layout=layout, modal=True, keep_on_top=True)
 
     while True:
         event, values = window.read()
@@ -369,7 +369,7 @@ def create_custom_test_form_window():
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
-    window = sg.Window('Custom Test Form', layout=layout, modal=True)
+    window = sg.Window('Custom Test Form', layout=layout, modal=True, keep_on_top=True)
 
     while True:
         event, values = window.read()
@@ -421,6 +421,7 @@ def create_order_list_window():
                     order.customer.hn,
                     order.customer.fullname,
                     format_datetime(order.order_datetime) or '',
+                    order.doctor.fullname,
                     status,
                     status_datetime,
                     len(order.order_items),
@@ -431,7 +432,7 @@ def create_order_list_window():
 
     layout = [
         [sg.Table(values=data, headings=['ID', 'HN', 'Customer', 'Ordered At',
-                                         'Status', 'Time',
+                                         'Doctor', 'Status', 'Time',
                                          'Items'],
                   key="-ORDER-TABLE-", auto_size_columns=True,
                   alternating_row_color='lightblue',
@@ -444,10 +445,10 @@ def create_order_list_window():
         [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
         [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')],
         [sg.Text('Activity Log', font=('Arial', 15, 'bold'))],
-        [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
+        # [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
     ]
 
-    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
+    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     window.maximize()
     while True:
@@ -463,18 +464,22 @@ def create_order_list_window():
             with Session(engine) as session:
                 current_user = session.scalar(select(User).where(User.username == session_manager.current_user))
                 query = select(func.count(User.id)).where(User.active == True)
+                doctor_query = select(Doctor).order_by(func.random())
                 num_staff = session.scalar(query)
                 query = select(Customer).order_by(func.random())
                 env = simpy.rt.RealtimeEnvironment(factor=0.1, strict=False)
                 staff = simpy.Resource(env, capacity=num_staff)
+                doctors = session.scalars(select(Doctor)).all()
+                tests = session.scalars(select(Test).where(Test.active == True)).all()
                 records = {}
                 for i in range(int(values['-NUM-ORDERS-'])):
                     customer = session.scalar(query)
-                    tests = session.scalars(select(Test).where(Test.active==True)).all()
+                    doctor = random.choice(doctors)
                     if len(tests) == 0:
                         sg.popup_ok(f"Add some tests first.")
                         break
                     order = LabOrder(customer=customer,
+                                     doctor=doctor,
                                      order_datetime=datetime.datetime.now())
                     if values['-AUTO-RECEIVE-']:
                         env.process(run_order_receive(env, order, staff, 1, 5, records))
@@ -584,7 +589,7 @@ def create_order_item_list_window(lab_order_id):
                      background_color='red', text_color='white', pad=(5,5), key='reject-banner', visible=False)],
         ]
 
-        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
+        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True, keep_on_top=True)
         window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
         if order.rejected_at:
             window['reject-banner'].update(visible=True)
@@ -726,7 +731,7 @@ def create_item_detail_window(item_id):
             actions,
             [sg.Button('Audit Trail'), sg.CloseButton('Close', button_color=('white', 'red'))],
         ]
-    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True, keep_on_top=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -828,7 +833,12 @@ def create_customer_list_window():
     ]
 
     flt_data = data
-    window = sg.Window('Users', layout=layout, resizable=True, modal=True, finalize=True)
+    window = sg.Window('Users',
+                       layout=layout,
+                       resizable=True,
+                       modal=True,
+                       finalize=True,
+                       keep_on_top=True)
     window['-CUSTOMER-TABLE-'].bind("<Double-Button-1>", " Double")
 
     while True:
@@ -880,7 +890,12 @@ def create_customer_order_list_window(customer_id):
             [sg.CloseButton('Close')]
         ]
 
-        window = sg.Window('Customer Orders', layout=layout, resizable=True, modal=True, finalize=True)
+        window = sg.Window('Customer Orders',
+                           layout=layout,
+                           resizable=True,
+                           keep_on_top=True,
+                           modal=True,
+                           finalize=True)
         while True:
             event, values = window.read()
             if event in ['Exit', sg.WIN_CLOSED]:
@@ -896,7 +911,7 @@ def create_reject_reason_window():
         [sg.Multiline(size=(40, 10), key='-COMMENT-')],
         [sg.Ok('Submit'), sg.Cancel('Cancel')]
     ]
-    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
+    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, keep_on_top=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED, 'Cancel', 'Submit'):
@@ -944,7 +959,7 @@ def create_lab_order_item_version_list_window(item_id):
              ],
             [sg.CloseButton('Close')]
         ]
-        window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+        window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True, keep_on_top=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -978,6 +993,7 @@ def create_analysis_window():
                   auto_size_columns=True,
                   font=('Arial', 16),
                   key='-TABLE-',
+                  expand_x=True,
                   enable_events=True)],
         [sg.Text('Analysis Log', font=('Arial', 16, 'bold'))],
         [sg.Output(key='-OUTPUT-',size=(75, 15), background_color='lightgrey', font=('Arial', 15))],
@@ -987,7 +1003,7 @@ def create_analysis_window():
          sg.Help()],
     ]
 
-    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True, finalize=True)
+    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
     window.maximize()
 
     while True:
