@@ -1,5 +1,6 @@
 import os.path
 import platform
+import shutil
 import sys
 
 import FreeSimpleGUI as sg
@@ -11,7 +12,7 @@ from app.auth.windows import (create_signin_window,
                               create_register_window,
                               create_user_list_window)
 from app.system.models import initialize_db
-from app.config import secret_key
+from app.config import DATABASE_PATH, secret_key
 from app.auth.windows import SessionManager
 from app.system.windows import *
 
@@ -31,8 +32,13 @@ if any(platform.win32_ver()):
 
     windll.shcore.SetProcessDpiAwareness(1)
 
-if not os.path.exists('labtycoon.db'):
-    print('database not exists.. in ' + 'labtycoon.db')
+legacy_database_path = os.path.join(os.getcwd(), 'labtycoon.db')
+if not DATABASE_PATH.exists() and os.path.exists(legacy_database_path):
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(legacy_database_path, DATABASE_PATH)
+
+if not DATABASE_PATH.exists():
+    print('database not exists.. in ' + str(DATABASE_PATH))
     initialize_db()
 
 sg.theme('SystemDefault')
@@ -40,6 +46,7 @@ sg.set_options(font=('Helvetica', 12))
 menu_def = [
     ['Users', ['Register', 'Manage']],
     ['Tests', ['List']],
+    ['Simulation', ['Workflow Editor']],
     ['Tools', ['SQL Editor']],
     ['About', ['Program']],
 ]
@@ -58,6 +65,7 @@ layout = [
      sg.Button('Sign Out', key='-SIGNOUT-', visible=False),
      sg.Button('Tests', key='-TESTS-'),
      sg.Button('Analyze', key='-ANALYZE-'),
+     sg.Button('Workflow', key='-WORKFLOW-'),
      sg.Button('Orders', key='-ORDERS-'),
      sg.Button('Customers', key='-CUSTOMER-'),
      sg.Button('Logs', key='-LOGGING-'),
@@ -132,6 +140,8 @@ def run_app():
                         , title='About')
         elif event == 'SQL Editor' or event == '-SQL-EDITOR-':
             create_sql_window()
+        elif event == 'Workflow Editor' or event == '-WORKFLOW-':
+            create_workflow_window()
         elif event == '-ANALYZE-':
             create_analysis_window()
         elif event == '-ORDERS-':

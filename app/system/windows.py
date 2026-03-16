@@ -12,7 +12,173 @@ from tabulate import tabulate
 
 from app.auth.windows import login_required, session_manager
 from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User, Doctor
+from app.system.model import Scenario, Workflow
+from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.config import logger, config_dict, update_config_yaml
+
+_workflow_repository = WorkflowRepository()
+_current_workflow_document: WorkflowDocument | None = None
+_workflow_counter = 0
+
+
+def create_workflow_window():
+    """Open a minimal workflow editor window.
+
+    This first version provides a dedicated entry point for the new workflow
+    system and supports creating an empty in-memory workflow model from the UI.
+    More advanced graph editing can be layered onto this window later.
+    """
+
+    def refresh_view(window: sg.Window) -> None:
+        documents = _workflow_repository.list_documents()
+        window["-WF-DOCS-"].update(
+            values=[
+                [document.workflow_id, document.name, len(document.workflow.widgets), len(document.workflow.scenarios)]
+                for document in documents
+            ]
+        )
+
+        if _current_workflow_document is None:
+            window["-WF-NAME-"].update("No workflow loaded")
+            window["-WF-SUMMARY-"].update("Create a workflow to begin.")
+            window["-WF-SCENARIOS-"].update(values=[])
+            window["-WF-WIDGETS-"].update(values=[])
+            return
+
+        workflow = _current_workflow_document.workflow
+        widget_rows = [[widget.name, widget.service_time, len(widget.downstream_widgets)]
+                       for widget in workflow.widgets]
+        scenario_rows = [
+            [scenario.name, scenario.description or "-", len(scenario.widget_service_times)]
+            for scenario in workflow.scenarios
+        ]
+        window["-WF-NAME-"].update(_current_workflow_document.name)
+        window["-WF-SUMMARY-"].update(
+            f"Widgets: {len(workflow.widgets)} | Scenarios: {len(workflow.scenarios)}"
+        )
+        window["-WF-SCENARIOS-"].update(values=scenario_rows)
+        window["-WF-WIDGETS-"].update(values=widget_rows)
+
+    layout = [
+        [sg.Text("Workflow Editor", font=("Arial", 20, "bold"))],
+        [sg.Text("Current workflow:"), sg.Text("No workflow loaded", key="-WF-NAME-")],
+        [sg.Text("Create and inspect workflow models for the simulation engine.")],
+        [sg.Text(f"Storage: {_workflow_repository.base_dir}", key="-WF-STORAGE-", size=(80, 1))],
+        [sg.Text("Create a workflow to begin.", key="-WF-SUMMARY-")],
+        [
+            sg.Button("New Workflow", key="-WF-NEW-", button_color=("white", "green")),
+            sg.Button("Load Selected", key="-WF-LOAD-"),
+            sg.Button("Save Current", key="-WF-SAVE-"),
+            sg.Button("Add Scenario", key="-WF-ADD-SCENARIO-"),
+            sg.CloseButton("Close"),
+        ],
+        [sg.Text("Saved workflows", font=("Arial", 14, "bold"))],
+        [
+            sg.Table(
+                values=[],
+                headings=["ID", "Name", "Widgets", "Scenarios"],
+                key="-WF-DOCS-",
+                auto_size_columns=True,
+                expand_x=True,
+                num_rows=6,
+                alternating_row_color="lightyellow",
+                font=("Arial", 12),
+                enable_events=True,
+            )
+        ],
+        [sg.Text("Scenarios", font=("Arial", 14, "bold"))],
+        [
+            sg.Table(
+                values=[],
+                headings=["Scenario", "Description", "Overrides"],
+                key="-WF-SCENARIOS-",
+                auto_size_columns=True,
+                expand_x=True,
+                num_rows=4,
+                alternating_row_color="lightgreen",
+                font=("Arial", 12),
+            )
+        ],
+        [sg.Text("Widgets", font=("Arial", 14, "bold"))],
+        [
+            sg.Table(
+                values=[],
+                headings=["Widget", "Service Time", "Outputs"],
+                key="-WF-WIDGETS-",
+                auto_size_columns=True,
+                expand_x=True,
+                expand_y=True,
+                num_rows=10,
+                alternating_row_color="lightblue",
+                font=("Arial", 14),
+            )
+        ],
+    ]
+
+    window = sg.Window(
+        "Workflow Editor",
+        layout=layout,
+        modal=True,
+        resizable=True,
+        finalize=True,
+        keep_on_top=True,
+    )
+    refresh_view(window)
+
+    global _current_workflow_document, _workflow_counter
+
+    while True:
+        event, values = window.read()
+        if event in ("Exit", sg.WIN_CLOSED):
+            break
+        elif event == "-WF-NEW-":
+            _workflow_counter += 1
+            workflow_name = f"Workflow {_workflow_counter}"
+            _current_workflow_document = WorkflowDocument.create(name=workflow_name)
+            logger.info("CREATED NEW WORKFLOW: %s", workflow_name)
+            refresh_view(window)
+            sg.popup_auto_close(
+                f"{workflow_name} created.",
+                title="Workflow",
+                auto_close_duration=1,
+            )
+        elif event == "-WF-SAVE-":
+            if _current_workflow_document is None:
+                sg.popup_error("Create or load a workflow before saving.", title="Workflow")
+                continue
+            saved_path = _workflow_repository.save(_current_workflow_document)
+            logger.info("SAVED WORKFLOW: %s", _current_workflow_document.name)
+            refresh_view(window)
+            sg.popup_auto_close(
+                f"{_current_workflow_document.name} saved to {saved_path}.",
+                title="Workflow",
+                auto_close_duration=1,
+            )
+        elif event == "-WF-LOAD-" and values["-WF-DOCS-"]:
+            selected_row = values["-WF-DOCS-"][0]
+            documents = _workflow_repository.list_documents()
+            selected_id = documents[selected_row].workflow_id
+            _current_workflow_document = _workflow_repository.load(selected_id)
+            logger.info("LOADED WORKFLOW: %s", _current_workflow_document.name)
+            refresh_view(window)
+        elif event == "-WF-ADD-SCENARIO-":
+            if _current_workflow_document is None:
+                sg.popup_error("Create or load a workflow before adding scenarios.", title="Workflow")
+                continue
+            scenario_name = f"Scenario {len(_current_workflow_document.workflow.scenarios) + 1}"
+            scenario = Scenario(
+                name=scenario_name,
+                description="Alternative run configuration",
+            )
+            _current_workflow_document.workflow.add_scenario(scenario)
+            refresh_view(window)
+            sg.popup_auto_close(
+                f"{scenario_name} added.",
+                title="Workflow",
+                auto_close_duration=1,
+            )
+
+    window.close()
 
 
 @login_required
