@@ -76,12 +76,12 @@ def create_signin_window():
         else:
             session = Session(engine)
             query = select(User).where(User.username == values['username'])
-            user = session.scalars(query).one()
+            user = session.scalar(query)
             if user:
                 if not user.active:
                     logger.info(f'USER {values["username"]} ATTEMPTED TO SIGN IN WITH INACTIVE ACCOUNT.')
-                    sg.popup_ok(f'The account with username {user.username} has been deactivated.')
-                    break
+                    sg.popup_quick_message(f'😢 The account with username {user.username} has been deactivated.',
+                                    icon=sg.SYSTEM_TRAY_MESSAGE_ICON_CRITICAL)
                 if bcrypt.checkpw(values['password'].encode('utf-8'), user.hashed_password):
                     payload = {
                         'username': values['username'],
@@ -95,14 +95,13 @@ def create_signin_window():
                         session_manager.login(user.username)
                         logger.info('USER %s SIGNED IN' % values['username'])
                         keyring.set_password('labtycoon', 'access_token', access_token)
-                        sg.popup_ok(f'Logged in as {values["username"]}')
                         break
                 else:
                     logger.info(f'USER {values["username"]} ATTEMPTED TO SIGN IN WITH INVALID PASSWORD.')
-                    sg.popup_error('Invalid password.')
+                    sg.popup_quick_message(f"⛔ Invalid password", background_color='lightgreen')
             else:
                 logger.info(f'USER {values["username"]} ATTEMPTED TO SIGN IN WITH INVALID USERNAME.')
-                sg.popup_error('Invalid username.')
+                sg.popup_quick_message(f"⛔ Invalid username", background_color='lightgreen')
     window.close()
     return access_token
 

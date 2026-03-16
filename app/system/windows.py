@@ -5,6 +5,7 @@ import FreeSimpleGUI as sg
 import pandas as pd
 import requests
 import simpy
+from FreeSimpleGUI import popup_quick_message
 from sql_formatter.core import format_sql
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import Session
@@ -189,7 +190,7 @@ def create_logging_window():
                       font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
         [sg.CloseButton('Close')],
     ]
-    window = sg.Window('Program Logs', layout=layout, modal=True, resizable=True, keep_on_top=True)
+    window = sg.Window('Program Logs', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -213,7 +214,7 @@ def create_sql_window():
         [sg.Multiline(key='-console-', size=(80, 5), font='Courier 13 bold', expand_x=True, expand_y=True)]
     ]
 
-    window = sg.Window('SQL Tools', layout=layout, modal=True, resizable=True, keep_on_top=True)
+    window = sg.Window('SQL Tools', layout=layout, modal=True, resizable=True)
 
     df = pd.DataFrame()
 
@@ -267,7 +268,7 @@ def show_save_query_dialog():
         [sg.Input(key='-filepath-'), sg.FileSaveAs('Browse', file_types=(('Excel', 'xlsx'),))],
         [sg.Ok()]
     ]
-    dialog = sg.Window('Save As', layout, modal=True, keep_on_top=True,)
+    dialog = sg.Window('Save As', layout, modal=True)
     filepath = ''
     while True:
         event, values = dialog.read()
@@ -321,7 +322,7 @@ def create_test_list_window():
         ],
     ]
 
-    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
+    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
     window.maximize()
 
@@ -375,7 +376,7 @@ def create_tmlt_test_window():
                   key='-TABLE-', auto_size_columns=True, expand_x=True, expand_y=True, enable_events=True)]
     ]
 
-    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
+    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
 
     while True:
@@ -445,7 +446,7 @@ def create_tmlt_test_form_window(data):
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
-    window = sg.Window('Test Form', layout=layout, modal=True, keep_on_top=True)
+    window = sg.Window('Test Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -490,7 +491,7 @@ def create_tmlt_test_edit_form_window(data):
         [sg.Button('Update', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
-    window = sg.Window('Test Edit Form', layout=layout, modal=True, keep_on_top=True)
+    window = sg.Window('Test Edit Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -535,7 +536,7 @@ def create_custom_test_form_window():
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1))]
     ]
 
-    window = sg.Window('Custom Test Form', layout=layout, modal=True, keep_on_top=True)
+    window = sg.Window('Custom Test Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -614,7 +615,7 @@ def create_order_list_window():
         # [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
     ]
 
-    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
+    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     window.maximize()
     while True:
@@ -678,6 +679,7 @@ def create_order_list_window():
             data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
             window.refresh()
+            popup_quick_message("Order(s) have arrived.", background_color='lightgreen')
     window.close()
 
 
@@ -755,7 +757,7 @@ def create_order_item_list_window(lab_order_id):
                      background_color='red', text_color='white', pad=(5,5), key='reject-banner', visible=False)],
         ]
 
-        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True, keep_on_top=True)
+        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
         window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
         if order.rejected_at:
             window['reject-banner'].update(visible=True)
@@ -897,7 +899,7 @@ def create_item_detail_window(item_id):
             actions,
             [sg.Button('Audit Trail'), sg.CloseButton('Close', button_color=('white', 'red'))],
         ]
-    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True, keep_on_top=True)
+    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -1004,7 +1006,7 @@ def create_customer_list_window():
                        resizable=True,
                        modal=True,
                        finalize=True,
-                       keep_on_top=True)
+                       )
     window['-CUSTOMER-TABLE-'].bind("<Double-Button-1>", " Double")
 
     while True:
@@ -1059,7 +1061,6 @@ def create_customer_order_list_window(customer_id):
         window = sg.Window('Customer Orders',
                            layout=layout,
                            resizable=True,
-                           keep_on_top=True,
                            modal=True,
                            finalize=True)
         while True:
@@ -1077,7 +1078,7 @@ def create_reject_reason_window():
         [sg.Multiline(size=(40, 10), key='-COMMENT-')],
         [sg.Ok('Submit'), sg.Cancel('Cancel')]
     ]
-    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, keep_on_top=True)
+    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED, 'Cancel', 'Submit'):
@@ -1125,7 +1126,7 @@ def create_lab_order_item_version_list_window(item_id):
              ],
             [sg.CloseButton('Close')]
         ]
-        window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True, keep_on_top=True)
+        window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -1169,7 +1170,7 @@ def create_analysis_window():
          sg.Help()],
     ]
 
-    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True, finalize=True, keep_on_top=True)
+    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True, finalize=True)
     window.maximize()
 
     while True:
@@ -1203,6 +1204,7 @@ def create_analysis_window():
                 session.commit()
                 if int(config_dict['num_analyzers']) != int(values['-NUM-INSTRUMENT-']):
                     update_config_yaml(num_analyzers=int(values['-NUM-INSTRUMENT-']))
+            popup_quick_message("All analyses have finished.", background_color='lightgreen')
 
         elif event == 'Help':
             sg.popup_ok('The list shows all test that waiting to be analyzed.'
