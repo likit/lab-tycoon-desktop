@@ -1,5 +1,6 @@
 import random
 import datetime
+import json
 
 import FreeSimpleGUI as sg
 import pandas as pd
@@ -12,14 +13,352 @@ from sqlalchemy.orm import Session
 from tabulate import tabulate
 
 from app.auth.windows import login_required, session_manager
+from app.system.events import DomainEventName, publish_domain_event
 from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User, Doctor
 from app.system.model import Scenario, Workflow
+from app.system.orchestration.rule_preview_ui import (
+    build_order_preview_context_json,
+    DEFAULT_CONTEXT_JSON,
+    DEFAULT_RULE_NAME,
+    build_stewardship_ai_summary,
+    create_preview_snapshot,
+    list_orders_flagged_by_current_rule,
+    list_rule_drafts,
+    load_default_candidate_rule_text,
+    load_rule_draft_text,
+    promote_rule_draft,
+    preview_rule_draft,
+    preview_rule_text,
+    save_rule_draft_text,
+    transition_rule_draft,
+)
+from app.system.signals.duplicate import detect_duplicate_candidate
+from app.system.signals.repository import find_prior_orders_for_duplicate_check
 from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.config import logger, config_dict, update_config_yaml
 
 _workflow_repository = WorkflowRepository()
 _current_workflow_document: WorkflowDocument | None = None
 _workflow_counter = 0
+DUPLICATE_TRUE_ICON = "🔴"
+DUPLICATE_FALSE_ICON = "🟢"
+
+
+def create_rule_preview_window():
+    """Open a developer-facing read-only workflow rule preview window."""
+
+    def refresh_drafts(window: sg.Window) -> None:
+        drafts = list_rule_drafts(window["-RULE-NAME-"].get())
+        window["-DRAFTS-"].update(
+            values=[
+                [draft["draft_id"], draft["state"], draft["created_at"], draft["description"]]
+                for draft in drafts
+            ]
+        )
+
+    help_text = (
+        "Preview only: this tool compares baseline and candidate rule behavior "
+        "for a compact JSON context. It does not deploy rules, start workflows, "
+        "or create live flags/notes."
+    )
+    left_panel = [
+        [sg.Text("Rule name"), sg.Input(DEFAULT_RULE_NAME, key="-RULE-NAME-", size=(40, 1))],
+        [
+            sg.Text("Draft description"),
+            sg.Input(key="-DRAFT-DESC-", size=(50, 1)),
+            sg.Button("Save Draft", key="-SAVE-DRAFT-"),
+            sg.Button("Refresh Drafts", key="-REFRESH-DRAFTS-"),
+        ],
+        [
+            sg.Text("Approval snapshot id"),
+            sg.Input(key="-SNAPSHOT-ID-", size=(40, 1)),
+            sg.Button("Save Preview Snapshot", key="-SAVE-SNAPSHOT-"),
+        ],
+        [
+            sg.Table(
+                values=[],
+                headings=["Draft ID", "State", "Created", "Description"],
+                key="-DRAFTS-",
+                num_rows=5,
+                auto_size_columns=True,
+                expand_x=True,
+                enable_events=True,
+            )
+        ],
+        [
+            sg.Button("Load Selected Draft", key="-LOAD-DRAFT-"),
+            sg.Button("Preview Selected Draft", key="-PREVIEW-DRAFT-"),
+            sg.Button("Mark Reviewed", key="-MARK-REVIEWED-"),
+            sg.Button("Approve Draft", key="-APPROVE-DRAFT-"),
+            sg.Button(
+                "Promote Selected Draft",
+                key="-PROMOTE-DRAFT-",
+                button_color=("white", "firebrick"),
+            ),
+        ],
+        [
+            sg.Text("Candidate YAML file"),
+            sg.Input(key="-CANDIDATE-FILE-", size=(50, 1)),
+            sg.FileBrowse("Browse", file_types=(("YAML", "*.yaml *.yml"),)),
+            sg.Button("Load File", key="-LOAD-CANDIDATE-"),
+        ],
+        [sg.Text("Candidate rule YAML")],
+        [
+            sg.Multiline(
+                load_default_candidate_rule_text(),
+                key="-CANDIDATE-YAML-",
+                size=(72, 18),
+                font=("Courier", 11),
+                expand_x=True,
+            )
+        ],
+        [sg.Text("Test context JSON")],
+        [
+            sg.Text("Order ID"),
+            sg.Input(key="-ORDER-CONTEXT-ID-", size=(16, 1)),
+            sg.Button("Use Order Context", key="-USE-ORDER-CONTEXT-"),
+        ],
+        [
+            sg.Multiline(
+                DEFAULT_CONTEXT_JSON,
+                key="-CONTEXT-JSON-",
+                size=(72, 10),
+                font=("Courier", 11),
+                expand_x=True,
+            )
+        ],
+        [
+            sg.Button("Run Preview", key="-RUN-PREVIEW-", button_color=("white", "green")),
+            sg.Button("Reset Example", key="-RESET-PREVIEW-"),
+            sg.CloseButton("Close"),
+        ],
+    ]
+
+    right_panel = [
+        [
+            sg.Button("List Flagged Orders", key="-LIST-FLAGGED-"),
+            sg.Text("Current baseline rule", font=("Arial", 11)),
+        ],
+        [
+            sg.Table(
+                values=[],
+                headings=["Order ID", "HN", "Patient", "Ordered At", "Priority", "Test", "Reason"],
+                key="-FLAGGED-ORDERS-",
+                num_rows=8,
+                auto_size_columns=True,
+                expand_x=True,
+                enable_events=True,
+            )
+        ],
+        [sg.Text("Preview result")],
+        [
+            sg.Multiline(
+                "",
+                key="-PREVIEW-RESULT-",
+                size=(76, 38),
+                font=("Courier", 11),
+                disabled=True,
+                expand_x=True,
+                expand_y=True,
+            )
+        ],
+    ]
+
+    layout = [
+        [sg.Text("Workflow Rule Preview", font=("Arial", 20, "bold"))],
+        [sg.Text(help_text, size=(130, 2))],
+        [
+            sg.Column(
+                left_panel,
+                vertical_alignment="top",
+                expand_x=True,
+                expand_y=True,
+                scrollable=True,
+            ),
+            sg.VerticalSeparator(),
+            sg.Column(
+                right_panel,
+                vertical_alignment="top",
+                expand_x=True,
+                expand_y=True,
+            ),
+        ],
+    ]
+
+    window = sg.Window(
+        "Workflow Rule Preview",
+        layout=layout,
+        modal=True,
+        resizable=True,
+        size=(1400, 820),
+        finalize=True,
+        keep_on_top=True,
+    )
+    refresh_drafts(window)
+
+    while True:
+        event, values = window.read()
+        if event in ("Exit", sg.WIN_CLOSED):
+            break
+        elif event == "-LOAD-CANDIDATE-":
+            candidate_path = values.get("-CANDIDATE-FILE-")
+            if not candidate_path:
+                sg.popup_error("Choose a candidate YAML file first.", title="Rule Preview")
+                continue
+            try:
+                window["-CANDIDATE-YAML-"].update(open(candidate_path, encoding="utf-8").read())
+            except OSError as exc:
+                sg.popup_error(f"Could not load candidate file: {exc}", title="Rule Preview")
+        elif event == "-SAVE-DRAFT-":
+            result = save_rule_draft_text(
+                values["-RULE-NAME-"],
+                window["-CANDIDATE-YAML-"].get(),
+                values["-DRAFT-DESC-"],
+            )
+            if not result["ok"]:
+                sg.popup_error(result["error"], title="Rule Preview")
+                continue
+            refresh_drafts(window)
+            sg.popup_auto_close("Draft saved. It has not been promoted to baseline.", title="Rule Preview")
+        elif event == "-REFRESH-DRAFTS-":
+            refresh_drafts(window)
+        elif event == "-LOAD-DRAFT-":
+            if not values["-DRAFTS-"]:
+                sg.popup_error("Select a draft first.", title="Rule Preview")
+                continue
+            drafts = list_rule_drafts(values["-RULE-NAME-"])
+            draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
+            result = load_rule_draft_text(values["-RULE-NAME-"], draft_id)
+            if not result["ok"]:
+                sg.popup_error(result["error"], title="Rule Preview")
+                continue
+            window["-CANDIDATE-YAML-"].update(result["content"])
+        elif event == "-PREVIEW-DRAFT-":
+            if not values["-DRAFTS-"]:
+                sg.popup_error("Select a draft first.", title="Rule Preview")
+                continue
+            drafts = list_rule_drafts(values["-RULE-NAME-"])
+            draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
+            result = preview_rule_draft(
+                values["-RULE-NAME-"],
+                window["-CONTEXT-JSON-"].get(),
+                draft_id,
+            )
+            window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+        elif event == "-SAVE-SNAPSHOT-":
+            if not values["-DRAFTS-"]:
+                sg.popup_error("Select a draft first.", title="Rule Preview")
+                continue
+            drafts = list_rule_drafts(values["-RULE-NAME-"])
+            draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
+            result = create_preview_snapshot(
+                values["-RULE-NAME-"],
+                draft_id,
+                window["-CONTEXT-JSON-"].get(),
+                note=values["-DRAFT-DESC-"],
+            )
+            if not result["ok"]:
+                sg.popup_error(result["error"], title="Rule Preview")
+                window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+                continue
+            window["-SNAPSHOT-ID-"].update(result["snapshot"]["snapshot_id"])
+            window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+        elif event in ("-MARK-REVIEWED-", "-APPROVE-DRAFT-"):
+            if not values["-DRAFTS-"]:
+                sg.popup_error("Select a draft first.", title="Rule Preview")
+                continue
+            drafts = list_rule_drafts(values["-RULE-NAME-"])
+            draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
+            target_state = "reviewed" if event == "-MARK-REVIEWED-" else "approved"
+            result = transition_rule_draft(
+                values["-RULE-NAME-"],
+                draft_id,
+                target_state,
+                note=values["-DRAFT-DESC-"],
+                snapshot_id=(
+                    values["-SNAPSHOT-ID-"].strip()
+                    if target_state == "approved" and values["-SNAPSHOT-ID-"].strip()
+                    else None
+                ),
+            )
+            refresh_drafts(window)
+            window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+            if not result["ok"]:
+                sg.popup_error(result["message"], title="Rule Preview")
+                continue
+        elif event == "-PROMOTE-DRAFT-":
+            if not values["-DRAFTS-"]:
+                sg.popup_error("Select a draft first.", title="Rule Preview")
+                continue
+            confirmed = sg.popup_yes_no(
+                "Promote this draft to the active baseline rule?\n\n"
+                "This changes the baseline artifact used by future rule evaluation. "
+                "It does not start workflows or create live flags/notes.",
+                title="Confirm Rule Promotion",
+            )
+            if confirmed != "Yes":
+                continue
+            drafts = list_rule_drafts(values["-RULE-NAME-"])
+            draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
+            result = promote_rule_draft(
+                values["-RULE-NAME-"],
+                draft_id,
+                confirmation=True,
+                note=values["-DRAFT-DESC-"],
+            )
+            if not result["ok"]:
+                sg.popup_error(result["message"], title="Rule Preview")
+                window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+                continue
+            refresh_drafts(window)
+            window["-CANDIDATE-YAML-"].update(load_default_candidate_rule_text())
+            window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+            sg.popup_auto_close("Draft promoted to baseline.", title="Rule Preview")
+        elif event == "-RESET-PREVIEW-":
+            window["-RULE-NAME-"].update(DEFAULT_RULE_NAME)
+            window["-CANDIDATE-YAML-"].update(load_default_candidate_rule_text())
+            window["-CONTEXT-JSON-"].update(DEFAULT_CONTEXT_JSON)
+            window["-SNAPSHOT-ID-"].update("")
+            window["-PREVIEW-RESULT-"].update("")
+            refresh_drafts(window)
+        elif event == "-USE-ORDER-CONTEXT-":
+            order_id = values["-ORDER-CONTEXT-ID-"].strip()
+            if not order_id:
+                sg.popup_error("Enter an order id first.", title="Rule Preview")
+                continue
+            result = build_order_preview_context_json(order_id)
+            if not result["ok"]:
+                sg.popup_error(result["error"], title="Rule Preview")
+                continue
+            window["-CONTEXT-JSON-"].update(result["context_json"])
+        elif event == "-LIST-FLAGGED-":
+            result = list_orders_flagged_by_current_rule(values["-RULE-NAME-"])
+            if not result["ok"]:
+                sg.popup_error(result["error"], title="Rule Preview")
+                continue
+            flagged_rows = [
+                [
+                    order["order_id"],
+                    order["hn"],
+                    order["patient_name"],
+                    order["ordered_at"],
+                    order["priority"],
+                    order["test_code"],
+                    order["reason"],
+                ]
+                for order in result["orders"]
+            ]
+            window["-FLAGGED-ORDERS-"].update(values=flagged_rows)
+            window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+        elif event == "-RUN-PREVIEW-":
+            result = preview_rule_text(
+                values["-RULE-NAME-"],
+                window["-CONTEXT-JSON-"].get(),
+                window["-CANDIDATE-YAML-"].get(),
+            )
+            window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
+
+    window.close()
 
 
 def create_workflow_window():
@@ -562,11 +901,50 @@ def format_datetime(dt, datetime_format='%d/%m/%Y %H:%M:%S'):
 
 @login_required
 def create_order_list_window():
+    order_headings = ['ID', 'HN', 'Customer', 'Ordered At', 'Priority', 'Duplicate',
+                      'Doctor', 'Status', 'Time', 'Items']
+    flagged_order_headings = ['Order ID', 'HN', 'Patient', 'Ordered At', 'Priority', 'Test', 'Reason']
+
+    def flagged_order_rows(flagged_orders):
+        return [
+            [
+                order["order_id"],
+                order["hn"],
+                order["patient_name"],
+                order["ordered_at"],
+                order["priority"],
+                order["test_code"],
+                order["reason"],
+            ]
+            for order in flagged_orders
+        ]
+
+    def show_stewardship_summary(order):
+        summary = build_stewardship_ai_summary(order)
+        layout = [
+            [sg.Text("Stewardship Queue", font=("Arial", 18, "bold"))],
+            [sg.Multiline(summary, size=(92, 18), font=("Arial", 13), disabled=True)],
+            [sg.Button("Open Order", key="-OPEN-ORDER-"), sg.CloseButton("Close")],
+        ]
+        popup = sg.Window(
+            f"Duplicate Review - Order {order['order_id']}",
+            layout,
+            modal=True,
+            resizable=True,
+            finalize=True,
+        )
+        event, _values = popup.read()
+        popup.close()
+        if event == "-OPEN-ORDER-":
+            create_order_item_list_window(order["order_id"])
+
     def load_orders():
         data = []
         with Session(engine) as session:
             query = select(LabOrder)
             for order in session.scalars(query):
+                prior_orders = find_prior_orders_for_duplicate_check(session, order)
+                duplicate_candidate = detect_duplicate_candidate(order, prior_orders)
                 if order.approved_at:
                     status = 'APPROVED'
                     status_datetime = format_datetime(order.approved_at)
@@ -588,6 +966,8 @@ def create_order_list_window():
                     order.customer.hn,
                     order.customer.fullname,
                     format_datetime(order.order_datetime) or '',
+                    order.priority,
+                    DUPLICATE_TRUE_ICON if duplicate_candidate else DUPLICATE_FALSE_ICON,
                     order.doctor.fullname,
                     status,
                     status_datetime,
@@ -595,19 +975,49 @@ def create_order_list_window():
                 ])
         return data
 
+    def load_flagged_orders():
+        result = list_orders_flagged_by_current_rule()
+        if not result["ok"]:
+            sg.popup_error(result["error"], title="Stewardship Queue")
+            return []
+        return result["orders"]
+
     data = load_orders()
+    flagged_orders = load_flagged_orders()
+    flagged_data = flagged_order_rows(flagged_orders)
 
     layout = [
-        [sg.Table(values=data, headings=['ID', 'HN', 'Customer', 'Ordered At',
-                                         'Doctor', 'Status', 'Time',
-                                         'Items'],
-                  key="-ORDER-TABLE-", auto_size_columns=True,
-                  alternating_row_color='lightblue',
-                  font=('Arial', 16),
-                  expand_x=True, expand_y=True,
-                  enable_events=True,
-                  num_rows=20,
-                  )],
+        [sg.TabGroup(
+            [
+                [
+                    sg.Tab(
+                        'Order List',
+                        [[sg.Table(values=data, headings=order_headings,
+                                   key="-ORDER-TABLE-", auto_size_columns=True,
+                                   alternating_row_color='lightblue',
+                                   font=('Arial', 16),
+                                   expand_x=True, expand_y=True,
+                                   enable_events=True,
+                                   num_rows=20,
+                                   )]],
+                    ),
+                    sg.Tab(
+                        'Stewardship Queue',
+                        [[sg.Table(values=flagged_data, headings=flagged_order_headings,
+                                   key="-STEWARD-TABLE-", auto_size_columns=True,
+                                   alternating_row_color='misty rose',
+                                   font=('Arial', 16),
+                                   expand_x=True, expand_y=True,
+                                   enable_events=True,
+                                   num_rows=20,
+                                   )]],
+                    ),
+                ]
+            ],
+            key="-ORDER-TABS-",
+            expand_x=True,
+            expand_y=True,
+        )],
         [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
         [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
         [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')],
@@ -617,6 +1027,7 @@ def create_order_list_window():
 
     window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
+    window['-STEWARD-TABLE-'].bind("<Double-Button-1>", " Double")
     window.maximize()
     while True:
         event, values = window.read()
@@ -626,6 +1037,16 @@ def create_order_list_window():
             create_order_item_list_window(data[values['-ORDER-TABLE-'][0]][0])
             data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
+            flagged_orders = load_flagged_orders()
+            flagged_data = flagged_order_rows(flagged_orders)
+            window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
+        elif event == '-STEWARD-TABLE- Double' and values['-STEWARD-TABLE-']:
+            show_stewardship_summary(flagged_orders[values['-STEWARD-TABLE-'][0]])
+            data = load_orders()
+            window.find_element('-ORDER-TABLE-').update(values=data)
+            flagged_orders = load_flagged_orders()
+            flagged_data = flagged_order_rows(flagged_orders)
+            window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
         elif event == '-GET-ORDER-':
             # TODO: add code to check if the simulations run successfully
             with Session(engine) as session:
@@ -647,6 +1068,7 @@ def create_order_list_window():
                         break
                     order = LabOrder(customer=customer,
                                      doctor=doctor,
+                                     priority=random.choice(('routine', 'urgent')),
                                      order_datetime=datetime.datetime.now())
                     if values['-AUTO-RECEIVE-']:
                         env.process(run_order_receive(env, order, staff, 1, 5, records))
@@ -659,6 +1081,13 @@ def create_order_list_window():
                             ordered_items.add(test)
                     session.add(order)
                     session.commit()
+                    publish_domain_event(
+                        DomainEventName.ORDER_CREATED,
+                        {
+                            "order_id": str(order.id),
+                            "customer_id": str(customer.id),
+                        },
+                    )
                     logger.info(f'LAB ORDER ID={order.id} ORDERED AT {order.order_datetime}')
                 env.run()
                 print('Done.')
@@ -678,6 +1107,9 @@ def create_order_list_window():
                 session.commit()
             data = load_orders()
             window.find_element('-ORDER-TABLE-').update(values=data)
+            flagged_orders = load_flagged_orders()
+            flagged_data = flagged_order_rows(flagged_orders)
+            window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
             window.refresh()
             popup_quick_message("Order(s) have arrived.", background_color='lightgreen')
     window.close()

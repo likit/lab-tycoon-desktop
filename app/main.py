@@ -11,7 +11,7 @@ from app.auth.windows import (create_signin_window,
                               create_profile_window,
                               create_register_window,
                               create_user_list_window)
-from app.system.models import initialize_db
+from app.system.models import ensure_db_schema, initialize_db
 from app.config import DATABASE_PATH, secret_key
 from app.auth.windows import SessionManager
 from app.system.windows import *
@@ -40,13 +40,15 @@ if not DATABASE_PATH.exists() and os.path.exists(legacy_database_path):
 if not DATABASE_PATH.exists():
     print('database not exists.. in ' + str(DATABASE_PATH))
     initialize_db()
+else:
+    ensure_db_schema()
 
 sg.theme('SystemDefault')
 sg.set_options(font=('Helvetica', 12))
 menu_def = [
     ['Users', ['Register', 'Manage']],
     ['Tests', ['List']],
-    ['Simulation', ['Workflow Editor']],
+    ['Simulation', ['Workflow Editor', 'Rule Preview']],
     ['Tools', ['SQL Editor']],
     ['About', ['Program']],
 ]
@@ -66,6 +68,7 @@ layout = [
      sg.Button('Tests', key='-TESTS-'),
      sg.Button('Analyze', key='-ANALYZE-'),
      sg.Button('Workflow', key='-WORKFLOW-'),
+     sg.Button('Rule Preview', key='-RULE-PREVIEW-'),
      sg.Button('Orders', key='-ORDERS-'),
      sg.Button('Customers', key='-CUSTOMER-'),
      sg.Button('Logs', key='-LOGGING-'),
@@ -143,6 +146,8 @@ def run_app():
             create_sql_window()
         elif event == 'Workflow Editor' or event == '-WORKFLOW-':
             create_workflow_window()
+        elif event == 'Rule Preview' or event == '-RULE-PREVIEW-':
+            create_rule_preview_window()
         elif event == '-ANALYZE-':
             create_analysis_window()
         elif event == '-ORDERS-':

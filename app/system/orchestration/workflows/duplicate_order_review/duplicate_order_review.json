@@ -1,0 +1,38 @@
+{
+  "process_name": "duplicate_order_review",
+  "version": "0.1",
+  "start_step": "start",
+  "steps": [
+    {
+      "id": "start",
+      "type": "start",
+      "next": "record_observation"
+    },
+    {
+      "id": "record_observation",
+      "type": "task",
+      "action": "record_order_created_observation",
+      "next": "is_possible_duplicate"
+    },
+    {
+      "id": "is_possible_duplicate",
+      "type": "decision",
+      "condition": {
+        "field": "decisions.possible_duplicate_order.matched",
+        "equals": true
+      },
+      "true_next": "create_review_flag",
+      "false_next": "end"
+    },
+    {
+      "id": "create_review_flag",
+      "type": "task",
+      "action": "create_review_flag",
+      "next": "end"
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ]
+}

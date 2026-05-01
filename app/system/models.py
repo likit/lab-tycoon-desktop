@@ -5,12 +5,12 @@ from faker import Faker
 from typing import List
 
 from sqlalchemy_continuum import make_versioned
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy import (
     ForeignKey, String, Integer,
     Table, Column, Boolean,
     Text, Numeric, Date,
-    DateTime
+    DateTime, Enum
 )
 from sqlalchemy.orm import DeclarativeBase, configure_mappers, Session
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -266,6 +266,20 @@ class LabOrder(Base):
     id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
     customer_id: Mapped[int] = mapped_column('customer_id', ForeignKey('customers.id'))
     order_datetime: Mapped[datetime] = mapped_column('order_datetime', DateTime(), nullable=True)
+    priority: Mapped[str] = mapped_column(
+        'priority',
+        Enum(
+            'urgent',
+            'routine',
+            name='order_priority',
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+        ),
+        nullable=False,
+        default='routine',
+        server_default='routine',
+    )
     cancelled_at: Mapped[datetime] = mapped_column('cancelled_at', DateTime(), nullable=True)
     canceller_id: Mapped[int] = mapped_column('canceller_id', ForeignKey('users.id'), nullable=True)
     canceller: Mapped["User"] = relationship(foreign_keys=[canceller_id])
@@ -363,6 +377,19 @@ class LabRejectRecord(Base):
 
 
 configure_mappers()
+
+
+def ensure_db_schema():
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if 'lab_orders' not in inspector.get_table_names():
+            return
+
+        columns = {column['name'] for column in inspector.get_columns('lab_orders')}
+        if 'priority' not in columns:
+            connection.execute(
+                text("ALTER TABLE lab_orders ADD COLUMN priority VARCHAR(7) NOT NULL DEFAULT 'routine'")
+            )
 
 
 def initialize_db():
@@ -486,4 +513,3 @@ def initialize_db():
     with Session(engine) as session:
         session.add_all(test_objs)
         session.commit()
-
