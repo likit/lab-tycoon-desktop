@@ -982,6 +982,38 @@ def create_order_list_window():
             return []
         return result["orders"]
 
+    def export_orders_to_excel(rows):
+        if not rows:
+            sg.PopupQuickMessage('The order list is empty.')
+            return
+
+        filepath = show_save_query_dialog()
+        if not filepath:
+            sg.PopupQuickMessage('No file has been chosen.')
+            return
+        if not filepath.endswith('xlsx'):
+            filepath += '.xlsx'
+
+        df = pd.DataFrame(rows, columns=order_headings)
+        df.to_excel(filepath, index=False)
+        sg.PopupQuickMessage('Orders have been saved.')
+
+    def export_flagged_orders_to_excel(rows):
+        if not rows:
+            sg.PopupQuickMessage('The review queue is empty.')
+            return
+
+        filepath = show_save_query_dialog()
+        if not filepath:
+            sg.PopupQuickMessage('No file has been chosen.')
+            return
+        if not filepath.endswith('xlsx'):
+            filepath += '.xlsx'
+
+        df = pd.DataFrame(rows, columns=flagged_order_headings)
+        df.to_excel(filepath, index=False)
+        sg.PopupQuickMessage('Review queue orders have been saved.')
+
     data = load_orders()
     flagged_orders = load_flagged_orders()
     flagged_data = flagged_order_rows(flagged_orders)
@@ -1020,7 +1052,10 @@ def create_order_list_window():
         )],
         [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
         [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
-        [sg.Button('Get Order', key='-GET-ORDER-'), sg.CloseButton('Close')],
+        [sg.Button('Get Order', key='-GET-ORDER-'),
+         sg.Button('Download Orders', key='-DOWNLOAD-ORDERS-'),
+         sg.Button('Download Review Queue', key='-DOWNLOAD-REVIEW-'),
+         sg.CloseButton('Close')],
         [sg.Text('Activity Log', font=('Arial', 15, 'bold'))],
         # [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
     ]
@@ -1047,6 +1082,10 @@ def create_order_list_window():
             flagged_orders = load_flagged_orders()
             flagged_data = flagged_order_rows(flagged_orders)
             window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
+        elif event == '-DOWNLOAD-ORDERS-':
+            export_orders_to_excel(data)
+        elif event == '-DOWNLOAD-REVIEW-':
+            export_flagged_orders_to_excel(flagged_data)
         elif event == '-GET-ORDER-':
             # TODO: add code to check if the simulations run successfully
             with Session(engine) as session:
