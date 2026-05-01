@@ -1,111 +1,100 @@
-"""Small database bridge for order-derived rule context."""
+"""Order-source bridge for rule context and duplicate-signal evaluation."""
 
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, Iterable
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
-
-from app.system.models import LabOrder, LabOrderItem, engine
+from app.system.order_sources import OrderSource, get_active_order_source
 
 from .context_builder import build_rule_context
 
 
 def find_prior_orders_for_duplicate_check(
-    session: Session,
-    order: LabOrder,
+    order: Any,
+    candidate_orders: Iterable[Any],
     window_hours: int = 4,
-) -> list[LabOrder]:
-    """Load earlier same-patient orders that are relevant to duplicate detection."""
+) -> list[Any]:
+    """Return earlier same-patient orders from the provided order collection."""
 
     if window_hours < 0:
         raise ValueError("window_hours must be non-negative")
-    if order.order_datetime is None:
+
+    order_datetime = getattr(order, "order_datetime", None)
+    if order_datetime is None:
         return []
 
-    window_start = order.order_datetime - timedelta(hours=window_hours)
-    query = (
-        select(LabOrder)
-        .where(LabOrder.customer_id == order.customer_id)
-        .where(LabOrder.order_datetime >= window_start)
-        .where(LabOrder.order_datetime < order.order_datetime)
-        .options(selectinload(LabOrder.order_items).selectinload(LabOrderItem.test))
-    )
-    if order.id is not None:
-        query = query.where(LabOrder.id != order.id)
+    customer_id = _order_patient_id(order)
+    if customer_id is None:
+        return []
 
-    return list(session.scalars(query))
+    window_start = order_datetime - timedelta(hours=window_hours)
+    order_id = str(getattr(order, "id", ""))
+    prior_orders = []
+    for candidate in candidate_orders:
+        if str(getattr(candidate, "id", "")) == order_id:
+            continue
+        if _order_patient_id(candidate) != customer_id:
+            continue
+
+        candidate_time = getattr(candidate, "order_datetime", None)
+        if candidate_time is None or not (window_start <= candidate_time < order_datetime):
+            continue
+        prior_orders.append(candidate)
+    return prior_orders
 
 
 def build_rule_context_for_order_id(
     order_id: int | str,
-    session: Session | None = None,
+    order_source: OrderSource | None = None,
     window_hours: int = 4,
 ) -> dict[str, Any]:
-    """Fetch one order and return rule-ready context for preview/evaluation."""
+    """Fetch one order from the selected source and return rule-ready context."""
 
-    owns_session = session is None
-    active_session = session or Session(engine)
-    try:
-        order = active_session.scalar(
-            select(LabOrder)
-            .where(LabOrder.id == int(order_id))
-            .options(selectinload(LabOrder.order_items).selectinload(LabOrderItem.test))
-        )
-        if order is None:
-            raise ValueError(f"Order not found: {order_id}")
+    source = order_source or get_active_order_source()
+    orders = source.list_orders()
+    order = source.get_order(order_id)
+    if order is None:
+        raise ValueError(f"Order not found: {order_id}")
 
-        prior_orders = find_prior_orders_for_duplicate_check(
-            active_session,
-            order,
-            window_hours=window_hours,
-        )
-        return build_rule_context(order, prior_orders=prior_orders, window_hours=window_hours)
-    finally:
-        if owns_session:
-            active_session.close()
+    prior_orders = find_prior_orders_for_duplicate_check(order, orders, window_hours)
+    return build_rule_context(order, prior_orders=prior_orders, window_hours=window_hours)
 
 
 def build_rule_context_rows_for_orders(
-    session: Session | None = None,
+    order_source: OrderSource | None = None,
     window_hours: int = 4,
 ) -> list[dict[str, Any]]:
-    """Return order metadata plus rule-ready context for all stored orders."""
+    """Return order metadata plus rule-ready context for all orders in the source."""
 
-    owns_session = session is None
-    active_session = session or Session(engine)
-    try:
-        query = (
-            select(LabOrder)
-            .options(
-                selectinload(LabOrder.customer),
-                selectinload(LabOrder.order_items).selectinload(LabOrderItem.test),
-            )
-            .order_by(LabOrder.order_datetime, LabOrder.id)
+    source = order_source or get_active_order_source()
+    orders = source.list_orders()
+    rows: list[dict[str, Any]] = []
+    for order in orders:
+        prior_orders = find_prior_orders_for_duplicate_check(order, orders, window_hours)
+        context = build_rule_context(order, prior_orders=prior_orders, window_hours=window_hours)
+        customer = getattr(order, "customer", None)
+        rows.append(
+            {
+                "order_id": str(getattr(order, "id", "")),
+                "hn": getattr(customer, "hn", ""),
+                "patient_name": getattr(customer, "fullname", ""),
+                "ordered_at": getattr(order, "order_datetime", None).isoformat()
+                if getattr(order, "order_datetime", None)
+                else "",
+                "priority": getattr(order, "priority", "routine") or "routine",
+                "test_code": context["payload"].get("test_code"),
+                "context": context,
+            }
         )
-        rows: list[dict[str, Any]] = []
-        for order in active_session.scalars(query):
-            prior_orders = find_prior_orders_for_duplicate_check(
-                active_session,
-                order,
-                window_hours=window_hours,
-            )
-            context = build_rule_context(order, prior_orders=prior_orders, window_hours=window_hours)
-            customer = getattr(order, "customer", None)
-            rows.append(
-                {
-                    "order_id": str(order.id),
-                    "hn": getattr(customer, "hn", ""),
-                    "patient_name": getattr(customer, "fullname", ""),
-                    "ordered_at": order.order_datetime.isoformat() if order.order_datetime else "",
-                    "priority": getattr(order, "priority", "routine") or "routine",
-                    "test_code": context["payload"].get("test_code"),
-                    "context": context,
-                }
-            )
-        return rows
-    finally:
-        if owns_session:
-            active_session.close()
+    return rows
+
+
+def _order_patient_id(order: Any) -> str | None:
+    customer_id = getattr(order, "customer_id", None)
+    if customer_id is not None:
+        return str(customer_id)
+    customer = getattr(order, "customer", None)
+    if customer is not None and getattr(customer, "id", None) is not None:
+        return str(customer.id)
+    return None

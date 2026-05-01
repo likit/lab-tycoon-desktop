@@ -13,6 +13,16 @@ from sqlalchemy.orm import Session
 from tabulate import tabulate
 
 from app.auth.windows import login_required, session_manager
+from app.system.order_sources import (
+    InMemoryOrderSource,
+    SQLiteOrderSource,
+    UploadedOrderValidationError,
+    get_active_order_source,
+    get_uploaded_order_source,
+    load_uploaded_order_source,
+    use_sqlite_order_source,
+    use_uploaded_order_source,
+)
 from app.system.events import DomainEventName, publish_domain_event
 from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User, Doctor
 from app.system.model import Scenario, Workflow
@@ -32,6 +42,7 @@ from app.system.orchestration.rule_preview_ui import (
     save_rule_draft_text,
     transition_rule_draft,
 )
+from app.system.order_sources import REQUIRED_UPLOADED_COLUMNS_ORDER
 from app.system.signals.duplicate import detect_duplicate_candidate
 from app.system.signals.repository import find_prior_orders_for_duplicate_check
 from app.system.storage import WorkflowDocument, WorkflowRepository
@@ -621,6 +632,25 @@ def show_save_query_dialog():
     return filepath
 
 
+def show_open_order_data_dialog():
+    layout = [
+        [sg.Input(key='-filepath-'), sg.FileBrowse('Browse', file_types=(('Order Data', '*.csv *.xlsx'), ('CSV', '*.csv'), ('Excel', '*.xlsx')))],
+        [sg.Ok()]
+    ]
+    dialog = sg.Window('Load Order Data', layout, modal=True)
+    filepath = ''
+    while True:
+        event, values = dialog.read()
+        if event in (sg.WIN_CLOSED,):
+            break
+        elif event == 'Ok':
+            filepath = values['-filepath-']
+            break
+
+    dialog.close()
+    return filepath
+
+
 def load_all_tests():
     with Session(engine) as session:
         query = select(Test)
@@ -904,6 +934,7 @@ def create_order_list_window():
     order_headings = ['ID', 'HN', 'Customer', 'Ordered At', 'Priority', 'Duplicate',
                       'Doctor', 'Status', 'Time', 'Items']
     flagged_order_headings = ['Order ID', 'HN', 'Patient', 'Ordered At', 'Priority', 'Test', 'Reason']
+    source_options = ['SQLite', 'Uploaded file']
 
     def flagged_order_rows(flagged_orders):
         return [
@@ -918,6 +949,19 @@ def create_order_list_window():
             ]
             for order in flagged_orders
         ]
+
+    def order_source_label():
+        source = get_active_order_source()
+        if isinstance(source, SQLiteOrderSource):
+            return 'SQLite'
+        return 'Uploaded file'
+
+    def update_source_status(window, source):
+        if isinstance(source, SQLiteOrderSource):
+            message = f'Data source: SQLite ({source.count()} orders)'
+        else:
+            message = f'Data source: Uploaded file ({source.count()} loaded orders)'
+        window['-SOURCE-STATUS-'].update(message)
 
     def show_stewardship_summary(order):
         summary = build_stewardship_ai_summary(order)
@@ -936,14 +980,34 @@ def create_order_list_window():
         event, _values = popup.read()
         popup.close()
         if event == "-OPEN-ORDER-":
-            create_order_item_list_window(order["order_id"])
+            source = get_active_order_source()
+            if isinstance(source, SQLiteOrderSource):
+                create_order_item_list_window(order["order_id"])
+            else:
+                sg.popup_ok('Uploaded experiment orders are not stored in SQLite.', title='Stewardship Queue')
+
+    def show_uploaded_order_summary(order):
+        payload = {
+            'order_id': getattr(order, 'id', ''),
+            'patient_id': getattr(order, 'customer_id', ''),
+            'test_code': order.order_items[0].test.code if getattr(order, 'order_items', None) else '',
+            'order_time': format_datetime(getattr(order, 'order_datetime', None)) or '',
+            'priority': getattr(order, 'priority', ''),
+        }
+        layout = [
+            [sg.Text("Uploaded Order", font=("Arial", 18, "bold"))],
+            [sg.Multiline(json.dumps(payload, indent=2), size=(72, 10), disabled=True)],
+            [sg.CloseButton("Close")],
+        ]
+        popup = sg.Window('Uploaded Order Detail', layout, modal=True, resizable=True)
+        popup.read()
+        popup.close()
 
     def load_orders():
         data = []
-        with Session(engine) as session:
-            query = select(LabOrder)
-            for order in session.scalars(query):
-                prior_orders = find_prior_orders_for_duplicate_check(session, order)
+        orders = get_active_order_source().list_orders()
+        for order in orders:
+                prior_orders = find_prior_orders_for_duplicate_check(order, orders)
                 duplicate_candidate = detect_duplicate_candidate(order, prior_orders)
                 if order.approved_at:
                     status = 'APPROVED'
@@ -961,14 +1025,16 @@ def create_order_list_window():
                     status = 'PENDING'
                     status_datetime = ''
 
+                customer = getattr(order, 'customer', None)
+                doctor = getattr(order, 'doctor', None)
                 data.append([
                     order.id,
-                    order.customer.hn,
-                    order.customer.fullname,
+                    getattr(customer, 'hn', ''),
+                    getattr(customer, 'fullname', ''),
                     format_datetime(order.order_datetime) or '',
                     order.priority,
                     DUPLICATE_TRUE_ICON if duplicate_candidate else DUPLICATE_FALSE_ICON,
-                    order.doctor.fullname,
+                    getattr(doctor, 'fullname', ''),
                     status,
                     status_datetime,
                     len(order.order_items),
@@ -983,8 +1049,9 @@ def create_order_list_window():
         return result["orders"]
 
     def export_orders_to_excel(rows):
-        if not rows:
-            sg.PopupQuickMessage('The order list is empty.')
+        export_rows = build_uploaded_order_export_rows()
+        if not export_rows:
+            sg.PopupQuickMessage('There are no order items available to export.')
             return
 
         filepath = show_save_query_dialog()
@@ -994,12 +1061,13 @@ def create_order_list_window():
         if not filepath.endswith('xlsx'):
             filepath += '.xlsx'
 
-        df = pd.DataFrame(rows, columns=order_headings)
+        df = pd.DataFrame(export_rows, columns=REQUIRED_UPLOADED_COLUMNS_ORDER)
         df.to_excel(filepath, index=False)
-        sg.PopupQuickMessage('Orders have been saved.')
+        sg.PopupQuickMessage('Orders have been saved in upload-compatible format.')
 
     def export_flagged_orders_to_excel(rows):
-        if not rows:
+        export_rows = build_uploaded_review_export_rows(flagged_orders)
+        if not export_rows:
             sg.PopupQuickMessage('The review queue is empty.')
             return
 
@@ -1010,9 +1078,51 @@ def create_order_list_window():
         if not filepath.endswith('xlsx'):
             filepath += '.xlsx'
 
-        df = pd.DataFrame(rows, columns=flagged_order_headings)
+        df = pd.DataFrame(export_rows, columns=REQUIRED_UPLOADED_COLUMNS_ORDER)
         df.to_excel(filepath, index=False)
-        sg.PopupQuickMessage('Review queue orders have been saved.')
+        sg.PopupQuickMessage('Review queue orders have been saved in upload-compatible format.')
+
+    def build_uploaded_order_export_rows():
+        export_rows = []
+        for order in get_active_order_source().list_orders():
+            customer = getattr(order, 'customer', None)
+            patient_id = getattr(customer, 'hn', None) or getattr(order, 'customer_id', '')
+            ordered_at = getattr(order, 'order_datetime', None)
+            for item in getattr(order, 'order_items', []) or []:
+                test = getattr(item, 'test', None)
+                test_code = getattr(test, 'code', None)
+                if not test_code:
+                    continue
+                export_rows.append({
+                    'order_id': str(getattr(order, 'id', '')),
+                    'patient_id': str(patient_id),
+                    'test_code': str(test_code),
+                    'order_time': ordered_at.isoformat() if ordered_at else '',
+                    'priority': str(getattr(order, 'priority', 'routine') or 'routine'),
+                })
+        return export_rows
+
+    def build_uploaded_review_export_rows(flagged_orders_local):
+        return [
+            {
+                'order_id': str(order['order_id']),
+                'patient_id': str(order['hn']),
+                'test_code': str(order['test_code'] or ''),
+                'order_time': str(order['ordered_at'] or ''),
+                'priority': str(order['priority'] or 'routine'),
+            }
+            for order in flagged_orders_local
+            if order.get('test_code')
+        ]
+
+    def refresh_source_views(window):
+        rows = load_orders()
+        flagged_orders_local = load_flagged_orders()
+        flagged_rows = flagged_order_rows(flagged_orders_local)
+        window.find_element('-ORDER-TABLE-').update(values=rows)
+        window.find_element('-STEWARD-TABLE-').update(values=flagged_rows)
+        update_source_status(window, get_active_order_source())
+        return rows, flagged_orders_local, flagged_rows
 
     data = load_orders()
     flagged_orders = load_flagged_orders()
@@ -1050,6 +1160,12 @@ def create_order_list_window():
             expand_x=True,
             expand_y=True,
         )],
+        [
+            sg.Text('Data source:'),
+            sg.Combo(source_options, default_value=order_source_label(), key='-DATA-SOURCE-', readonly=True, enable_events=True),
+            sg.Button('Load Uploaded File', key='-LOAD-UPLOADED-'),
+            sg.Text('', key='-SOURCE-STATUS-', size=(42, 1)),
+        ],
         [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
         [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
         [sg.Button('Get Order', key='-GET-ORDER-'),
@@ -1063,25 +1179,48 @@ def create_order_list_window():
     window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     window['-STEWARD-TABLE-'].bind("<Double-Button-1>", " Double")
+    update_source_status(window, get_active_order_source())
     window.maximize()
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
+        elif event == '-DATA-SOURCE-':
+            if values['-DATA-SOURCE-'] == 'SQLite':
+                use_sqlite_order_source()
+                data, flagged_orders, flagged_data = refresh_source_views(window)
+            else:
+                try:
+                    use_uploaded_order_source()
+                except UploadedOrderValidationError as exc:
+                    sg.popup_error(str(exc), title='Uploaded Orders')
+                    window['-DATA-SOURCE-'].update('SQLite')
+                    use_sqlite_order_source()
+                data, flagged_orders, flagged_data = refresh_source_views(window)
+        elif event == '-LOAD-UPLOADED-':
+            filepath = show_open_order_data_dialog()
+            if not filepath:
+                sg.PopupQuickMessage('No file has been chosen.')
+                continue
+            try:
+                load_uploaded_order_source(filepath)
+                window['-DATA-SOURCE-'].update('Uploaded file')
+                use_uploaded_order_source()
+            except UploadedOrderValidationError as exc:
+                sg.popup_error(str(exc), title='Uploaded Orders')
+                continue
+            data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-ORDER-TABLE- Double' and values['-ORDER-TABLE-']:
-            create_order_item_list_window(data[values['-ORDER-TABLE-'][0]][0])
-            data = load_orders()
-            window.find_element('-ORDER-TABLE-').update(values=data)
-            flagged_orders = load_flagged_orders()
-            flagged_data = flagged_order_rows(flagged_orders)
-            window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
+            if isinstance(get_active_order_source(), SQLiteOrderSource):
+                create_order_item_list_window(data[values['-ORDER-TABLE-'][0]][0])
+            else:
+                order = get_active_order_source().get_order(data[values['-ORDER-TABLE-'][0]][0])
+                if order is not None:
+                    show_uploaded_order_summary(order)
+            data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-STEWARD-TABLE- Double' and values['-STEWARD-TABLE-']:
             show_stewardship_summary(flagged_orders[values['-STEWARD-TABLE-'][0]])
-            data = load_orders()
-            window.find_element('-ORDER-TABLE-').update(values=data)
-            flagged_orders = load_flagged_orders()
-            flagged_data = flagged_order_rows(flagged_orders)
-            window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
+            data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-DOWNLOAD-ORDERS-':
             export_orders_to_excel(data)
         elif event == '-DOWNLOAD-REVIEW-':
@@ -1144,11 +1283,7 @@ def create_order_list_window():
                         logger.info(f'LAB ORDER ID={order.id} REJECTED AT {order.rejected_at}')
                     session.add(order)
                 session.commit()
-            data = load_orders()
-            window.find_element('-ORDER-TABLE-').update(values=data)
-            flagged_orders = load_flagged_orders()
-            flagged_data = flagged_order_rows(flagged_orders)
-            window.find_element('-STEWARD-TABLE-').update(values=flagged_data)
+            data, flagged_orders, flagged_data = refresh_source_views(window)
             window.refresh()
             popup_quick_message("Order(s) have arrived.", background_color='lightgreen')
     window.close()
