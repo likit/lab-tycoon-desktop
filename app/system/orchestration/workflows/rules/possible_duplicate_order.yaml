@@ -10,9 +10,6 @@ conditions:
           equals: true
         - field: payload.possible_duplicate
           equals: true
-    - field: payload.priority
-      not_equals: urgent
-
 outcomes:
   matched:
     reason: Order payload contains a duplicate-order indicator.

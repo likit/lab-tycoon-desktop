@@ -193,7 +193,7 @@ def load_uploaded_order_source(path: str | Path) -> InMemoryOrderSource:
     else:
         raise UploadedOrderValidationError("Only .csv and .xlsx files are supported.")
 
-    orders = [_build_in_memory_order(row) for row in raw_rows]
+    orders = _build_in_memory_orders(raw_rows)
     source = InMemoryOrderSource(orders, str(file_path))
     _uploaded_order_source = source
     return source
@@ -309,10 +309,36 @@ def _normalize_header(value: str) -> str:
     return " ".join(value.strip().lower().replace("_", " ").split())
 
 
-def _build_in_memory_order(row: dict[str, str]) -> InMemoryOrder:
+def _build_in_memory_orders(rows: list[dict[str, str]]) -> list[InMemoryOrder]:
+    grouped_rows: dict[tuple[str, str, str, str], list[str]] = {}
+    for row in rows:
+        order_id = _required_value(row, "order_id")
+        patient_id = _required_value(row, "patient_id")
+        order_time = _required_value(row, "order_time")
+        priority = _required_value(row, "priority")
+        test_code = _required_value(row, "test_code")
+        group_key = (order_id, patient_id, order_time, priority)
+        grouped_rows.setdefault(group_key, []).append(test_code)
+
+    orders = []
+    for (order_id, patient_id, order_time, priority), test_codes in grouped_rows.items():
+        orders.append(
+            _build_in_memory_order(
+                {
+                    "order_id": order_id,
+                    "patient_id": patient_id,
+                    "order_time": order_time,
+                    "priority": priority,
+                },
+                test_codes,
+            )
+        )
+    return orders
+
+
+def _build_in_memory_order(row: dict[str, str], test_codes: list[str]) -> InMemoryOrder:
     order_id = _required_value(row, "order_id")
     patient_id = _required_value(row, "patient_id")
-    test_code = _required_value(row, "test_code")
     order_datetime = _parse_order_time(_required_value(row, "order_time"))
     priority = _parse_priority(_required_value(row, "priority"))
     customer = InMemoryCustomer(
@@ -324,7 +350,10 @@ def _build_in_memory_order(row: dict[str, str]) -> InMemoryOrder:
         id=order_id,
         customer_id=patient_id,
         order_datetime=order_datetime,
-        order_items=[InMemoryOrderItem(InMemoryTest(test_code))],
+        order_items=[
+            InMemoryOrderItem(InMemoryTest(test_code))
+            for test_code in sorted(dict.fromkeys(test_codes))
+        ],
         priority=priority,
         customer=customer,
     )

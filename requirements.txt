@@ -10,6 +10,7 @@ jaraco.classes==3.4.0
 jaraco.context==6.1.0
 jaraco.functools==4.4.0
 keyring==25.7.0
+lxml==6.0.4
 macholib==1.16.4
 more-itertools==10.8.0
 numpy==2.4.2
@@ -26,6 +27,7 @@ requests==2.32.5
 setuptools==82.0.0
 simpy==4.1.1
 six==1.17.0
+SpiffWorkflow==3.1.2
 sql-formatter==0.6.2
 SQLAlchemy==2.0.46
 SQLAlchemy-Continuum==1.6.0

@@ -58,6 +58,12 @@ DUPLICATE_FALSE_ICON = "🟢"
 def create_rule_preview_window():
     """Open a developer-facing read-only workflow rule preview window."""
 
+    def popup_error(message: str) -> None:
+        sg.popup_error(message, title="Rule Preview", keep_on_top=True)
+
+    def popup_info(message: str) -> None:
+        sg.popup_auto_close(message, title="Rule Preview", keep_on_top=True)
+
     def refresh_drafts(window: sg.Window) -> None:
         drafts = list_rule_drafts(window["-RULE-NAME-"].get())
         window["-DRAFTS-"].update(
@@ -77,7 +83,7 @@ def create_rule_preview_window():
         [
             sg.Text("Draft description"),
             sg.Input(key="-DRAFT-DESC-", size=(50, 1)),
-            sg.Button("Save Draft", key="-SAVE-DRAFT-"),
+            sg.Button("Save Draft", key="-SAVE-DRAFT-", bind_return_key=True),
             sg.Button("Refresh Drafts", key="-REFRESH-DRAFTS-"),
         ],
         [
@@ -214,12 +220,12 @@ def create_rule_preview_window():
         elif event == "-LOAD-CANDIDATE-":
             candidate_path = values.get("-CANDIDATE-FILE-")
             if not candidate_path:
-                sg.popup_error("Choose a candidate YAML file first.", title="Rule Preview")
+                popup_error("Choose a candidate YAML file first.")
                 continue
             try:
                 window["-CANDIDATE-YAML-"].update(open(candidate_path, encoding="utf-8").read())
             except OSError as exc:
-                sg.popup_error(f"Could not load candidate file: {exc}", title="Rule Preview")
+                popup_error(f"Could not load candidate file: {exc}")
         elif event == "-SAVE-DRAFT-":
             result = save_rule_draft_text(
                 values["-RULE-NAME-"],
@@ -227,26 +233,26 @@ def create_rule_preview_window():
                 values["-DRAFT-DESC-"],
             )
             if not result["ok"]:
-                sg.popup_error(result["error"], title="Rule Preview")
+                popup_error(result["error"])
                 continue
             refresh_drafts(window)
-            sg.popup_auto_close("Draft saved. It has not been promoted to baseline.", title="Rule Preview")
+            popup_info("Draft saved. It has not been promoted to baseline.")
         elif event == "-REFRESH-DRAFTS-":
             refresh_drafts(window)
         elif event == "-LOAD-DRAFT-":
             if not values["-DRAFTS-"]:
-                sg.popup_error("Select a draft first.", title="Rule Preview")
+                popup_error("Select a draft first.")
                 continue
             drafts = list_rule_drafts(values["-RULE-NAME-"])
             draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
             result = load_rule_draft_text(values["-RULE-NAME-"], draft_id)
             if not result["ok"]:
-                sg.popup_error(result["error"], title="Rule Preview")
+                popup_error(result["error"])
                 continue
             window["-CANDIDATE-YAML-"].update(result["content"])
         elif event == "-PREVIEW-DRAFT-":
             if not values["-DRAFTS-"]:
-                sg.popup_error("Select a draft first.", title="Rule Preview")
+                popup_error("Select a draft first.")
                 continue
             drafts = list_rule_drafts(values["-RULE-NAME-"])
             draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
@@ -258,7 +264,7 @@ def create_rule_preview_window():
             window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
         elif event == "-SAVE-SNAPSHOT-":
             if not values["-DRAFTS-"]:
-                sg.popup_error("Select a draft first.", title="Rule Preview")
+                popup_error("Select a draft first.")
                 continue
             drafts = list_rule_drafts(values["-RULE-NAME-"])
             draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
@@ -269,14 +275,14 @@ def create_rule_preview_window():
                 note=values["-DRAFT-DESC-"],
             )
             if not result["ok"]:
-                sg.popup_error(result["error"], title="Rule Preview")
+                popup_error(result["error"])
                 window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
                 continue
             window["-SNAPSHOT-ID-"].update(result["snapshot"]["snapshot_id"])
             window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
         elif event in ("-MARK-REVIEWED-", "-APPROVE-DRAFT-"):
             if not values["-DRAFTS-"]:
-                sg.popup_error("Select a draft first.", title="Rule Preview")
+                popup_error("Select a draft first.")
                 continue
             drafts = list_rule_drafts(values["-RULE-NAME-"])
             draft_id = drafts[values["-DRAFTS-"][0]]["draft_id"]
@@ -295,11 +301,11 @@ def create_rule_preview_window():
             refresh_drafts(window)
             window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
             if not result["ok"]:
-                sg.popup_error(result["message"], title="Rule Preview")
+                popup_error(result["message"])
                 continue
         elif event == "-PROMOTE-DRAFT-":
             if not values["-DRAFTS-"]:
-                sg.popup_error("Select a draft first.", title="Rule Preview")
+                popup_error("Select a draft first.")
                 continue
             confirmed = sg.popup_yes_no(
                 "Promote this draft to the active baseline rule?\n\n"
@@ -318,13 +324,13 @@ def create_rule_preview_window():
                 note=values["-DRAFT-DESC-"],
             )
             if not result["ok"]:
-                sg.popup_error(result["message"], title="Rule Preview")
+                popup_error(result["message"])
                 window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
                 continue
             refresh_drafts(window)
             window["-CANDIDATE-YAML-"].update(load_default_candidate_rule_text())
             window["-PREVIEW-RESULT-"].update(json.dumps(result, indent=2))
-            sg.popup_auto_close("Draft promoted to baseline.", title="Rule Preview")
+            popup_info("Draft promoted to baseline.")
         elif event == "-RESET-PREVIEW-":
             window["-RULE-NAME-"].update(DEFAULT_RULE_NAME)
             window["-CANDIDATE-YAML-"].update(load_default_candidate_rule_text())
@@ -335,17 +341,17 @@ def create_rule_preview_window():
         elif event == "-USE-ORDER-CONTEXT-":
             order_id = values["-ORDER-CONTEXT-ID-"].strip()
             if not order_id:
-                sg.popup_error("Enter an order id first.", title="Rule Preview")
+                popup_error("Enter an order id first.")
                 continue
             result = build_order_preview_context_json(order_id)
             if not result["ok"]:
-                sg.popup_error(result["error"], title="Rule Preview")
+                popup_error(result["error"])
                 continue
             window["-CONTEXT-JSON-"].update(result["context_json"])
         elif event == "-LIST-FLAGGED-":
             result = list_orders_flagged_by_current_rule(values["-RULE-NAME-"])
             if not result["ok"]:
-                sg.popup_error(result["error"], title="Rule Preview")
+                popup_error(result["error"])
                 continue
             flagged_rows = [
                 [
@@ -935,6 +941,10 @@ def create_order_list_window():
                       'Doctor', 'Status', 'Time', 'Items']
     flagged_order_headings = ['Order ID', 'HN', 'Patient', 'Ordered At', 'Priority', 'Test', 'Reason']
     source_options = ['SQLite', 'Uploaded file']
+    priority_chart_colors = {
+        'urgent': '#d9534f',
+        'routine': '#5cb85c',
+    }
 
     def flagged_order_rows(flagged_orders):
         return [
@@ -962,6 +972,82 @@ def create_order_list_window():
         else:
             message = f'Data source: Uploaded file ({source.count()} loaded orders)'
         window['-SOURCE-STATUS-'].update(message)
+
+    def update_row_counts(window, order_rows, flagged_rows):
+        window['-ORDER-COUNT-'].update(f'Total rows: {len(order_rows)}')
+        window['-STEWARD-COUNT-'].update(f'Total rows: {len(flagged_rows)}')
+
+    def priority_counts(orders):
+        counts = {'urgent': 0, 'routine': 0}
+        for order in orders:
+            priority = str(getattr(order, 'priority', 'routine') or 'routine').lower()
+            if priority in counts:
+                counts[priority] += 1
+        return counts
+
+    def draw_priority_chart(window, orders):
+        canvas = window['-PRIORITY-CHART-'].TKCanvas
+        canvas.delete("all")
+        counts = priority_counts(orders)
+        total = sum(counts.values())
+
+        canvas.create_text(
+            110,
+            16,
+            text="Priority Mix",
+            font=("Arial", 12, "bold"),
+        )
+
+        if total == 0:
+            canvas.create_text(
+                110,
+                90,
+                text="No orders",
+                font=("Arial", 11),
+                fill="#666666",
+            )
+            return
+
+        x0, y0, x1, y1 = 20, 30, 120, 130
+        start = 0.0
+        for priority in ('routine', 'urgent'):
+            count = counts[priority]
+            if count <= 0:
+                continue
+            extent = (count / total) * 360.0
+            canvas.create_arc(
+                x0,
+                y0,
+                x1,
+                y1,
+                start=start,
+                extent=extent,
+                fill=priority_chart_colors[priority],
+                outline="white",
+                width=2,
+            )
+            start += extent
+
+        legend_y = 48
+        for priority in ('routine', 'urgent'):
+            count = counts[priority]
+            percent = round((count / total) * 100)
+            canvas.create_rectangle(
+                145,
+                legend_y - 8,
+                159,
+                legend_y + 6,
+                fill=priority_chart_colors[priority],
+                outline="",
+            )
+            canvas.create_text(
+                166,
+                legend_y,
+                anchor="w",
+                text=f"{priority.title()}: {count} ({percent}%)",
+                font=("Arial", 10),
+            )
+            legend_y += 24
 
     def show_stewardship_summary(order):
         summary = build_stewardship_ai_summary(order)
@@ -1039,7 +1125,7 @@ def create_order_list_window():
                     status_datetime,
                     len(order.order_items),
                 ])
-        return data
+        return data, orders
 
     def load_flagged_orders():
         result = list_orders_flagged_by_current_rule()
@@ -1116,15 +1202,17 @@ def create_order_list_window():
         ]
 
     def refresh_source_views(window):
-        rows = load_orders()
+        rows, orders = load_orders()
         flagged_orders_local = load_flagged_orders()
         flagged_rows = flagged_order_rows(flagged_orders_local)
         window.find_element('-ORDER-TABLE-').update(values=rows)
         window.find_element('-STEWARD-TABLE-').update(values=flagged_rows)
         update_source_status(window, get_active_order_source())
+        update_row_counts(window, rows, flagged_rows)
+        draw_priority_chart(window, orders)
         return rows, flagged_orders_local, flagged_rows
 
-    data = load_orders()
+    data, initial_orders = load_orders()
     flagged_orders = load_flagged_orders()
     flagged_data = flagged_order_rows(flagged_orders)
 
@@ -1134,25 +1222,39 @@ def create_order_list_window():
                 [
                     sg.Tab(
                         'Order List',
-                        [[sg.Table(values=data, headings=order_headings,
-                                   key="-ORDER-TABLE-", auto_size_columns=True,
-                                   alternating_row_color='lightblue',
-                                   font=('Arial', 16),
-                                   expand_x=True, expand_y=True,
-                                   enable_events=True,
-                                   num_rows=20,
-                                   )]],
+                        [
+                            [sg.Text(f'Total rows: {len(data)}', key='-ORDER-COUNT-')],
+                            [sg.Table(values=data, headings=order_headings,
+                                      key="-ORDER-TABLE-", auto_size_columns=True,
+                                      alternating_row_color='lightblue',
+                                      font=('Arial', 16),
+                                      expand_x=True, expand_y=True,
+                                      enable_events=True,
+                                      num_rows=20,
+                                      )],
+                            [
+                                sg.Push(),
+                                sg.Canvas(
+                                    key='-PRIORITY-CHART-',
+                                    size=(240, 150),
+                                    background_color='white',
+                                ),
+                            ],
+                        ],
                     ),
                     sg.Tab(
                         'Stewardship Queue',
-                        [[sg.Table(values=flagged_data, headings=flagged_order_headings,
-                                   key="-STEWARD-TABLE-", auto_size_columns=True,
-                                   alternating_row_color='misty rose',
-                                   font=('Arial', 16),
-                                   expand_x=True, expand_y=True,
-                                   enable_events=True,
-                                   num_rows=20,
-                                   )]],
+                        [
+                            [sg.Text(f'Total rows: {len(flagged_data)}', key='-STEWARD-COUNT-')],
+                            [sg.Table(values=flagged_data, headings=flagged_order_headings,
+                                      key="-STEWARD-TABLE-", auto_size_columns=True,
+                                      alternating_row_color='misty rose',
+                                      font=('Arial', 16),
+                                      expand_x=True, expand_y=True,
+                                      enable_events=True,
+                                      num_rows=20,
+                                      )],
+                        ],
                     ),
                 ]
             ],
@@ -1180,6 +1282,8 @@ def create_order_list_window():
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     window['-STEWARD-TABLE-'].bind("<Double-Button-1>", " Double")
     update_source_status(window, get_active_order_source())
+    update_row_counts(window, data, flagged_data)
+    draw_priority_chart(window, initial_orders)
     window.maximize()
     while True:
         event, values = window.read()
