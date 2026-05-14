@@ -56,7 +56,7 @@ menu_def = [
 layout = [
     [sg.Menu(menu_def)],
     [sg.Image(filename=resource_path('logo.png'))],
-    [sg.Text('Lab Tycoon V.2029.1', font=('Arial', 34))],
+    [sg.Text('Lab Tycoon V.2026.1', font=('Arial', 34))],
     [sg.Text('A Demonstration Lab Information System for Education', font=('Arial', 20))],
     [sg.Text('By Likit Preeyanon, Ph.D.', font=('Arial', 16))],
     [sg.Text('Faculty of Medial Technology, Mahidol University', font=('Arial', 16))],
