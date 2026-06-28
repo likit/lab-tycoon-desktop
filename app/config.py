@@ -69,12 +69,18 @@ secret_key = '85015f158b2f8b050705aa6ec9fbd65c99966725eec0965a5ac0bd3564afd210'
 if not os.path.exists('config.yaml'):
     config_dict = {
         'num_analyzers': 1,
+        'active_workflow_id': None,
     }
     with open('config.yaml', 'w') as f:
         yaml.dump(config_dict, f)
 else:
     with open('config.yaml', 'r') as f:
         config_dict = yaml.safe_load(f)
+    if config_dict is None:
+        config_dict = {
+            'num_analyzers': 1,
+            'active_workflow_id': None,
+        }
 
 
 def update_config_yaml(**kwargs):

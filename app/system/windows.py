@@ -394,6 +394,17 @@ def create_workflow_window():
             ]
         )
 
+        active_workflow_id = config_dict.get("active_workflow_id")
+        active_label = "None"
+        if active_workflow_id:
+            try:
+                active_document = _workflow_repository.load(str(active_workflow_id))
+            except Exception:
+                active_label = f"{active_workflow_id} (missing)"
+            else:
+                active_label = f"{active_document.name} ({active_document.workflow_id})"
+        window["-WF-ACTIVE-"].update(active_label)
+
         if _current_workflow_document is None:
             window["-WF-NAME-"].update("No workflow loaded")
             window["-WF-STATUS-"].update("Status: No workflow", text_color="#64748b")
@@ -421,6 +432,9 @@ def create_workflow_window():
         window["-WF-STATUS-"].update(text, text_color=color)
         window.refresh()
 
+    def set_active_workflow(document: WorkflowDocument | None) -> None:
+        update_config_yaml(active_workflow_id=document.workflow_id if document is not None else None)
+
     def open_editor_for_workflow(selected_row: int | None = None) -> None:
         global _current_workflow_document
 
@@ -429,6 +443,7 @@ def create_workflow_window():
             if 0 <= selected_row < len(documents):
                 _current_workflow_document = _workflow_repository.load(documents[selected_row].workflow_id)
                 logger.info("LOADED WORKFLOW: %s", _current_workflow_document.name)
+                set_active_workflow(_current_workflow_document)
 
         if _current_workflow_document is None:
             popup_quick_message("Select or load a workflow before editing.", background_color="lightyellow")
@@ -456,8 +471,13 @@ def create_workflow_window():
             sg.Button("Load Selected", key="-WF-LOAD-"),
             sg.Button("Save Current", key="-WF-SAVE-"),
             sg.Button("Edit Selected Workflow", key="-WF-EDIT-"),
+            sg.Button("Set Active", key="-WF-ACTIVE-SET-"),
             sg.Button("Add Scenario", key="-WF-ADD-SCENARIO-"),
             sg.CloseButton("Close"),
+        ],
+        [
+            sg.Text("Active workflow:"),
+            sg.Text("None", key="-WF-ACTIVE-"),
         ],
         [sg.Text("Saved workflows", font=("Arial", 14, "bold"))],
         [
@@ -524,6 +544,7 @@ def create_workflow_window():
             workflow_name = f"Workflow {_workflow_counter}"
             _current_workflow_document = WorkflowDocument.create(name=workflow_name)
             logger.info("CREATED NEW WORKFLOW: %s", workflow_name)
+            set_active_workflow(_current_workflow_document)
             set_status(window, "Status: Saving...", "#b45309")
             _workflow_repository.save(_current_workflow_document)
             refresh_view(window)
@@ -539,6 +560,7 @@ def create_workflow_window():
             set_status(window, "Status: Saving...", "#b45309")
             saved_path = _workflow_repository.save(_current_workflow_document)
             logger.info("SAVED WORKFLOW: %s", _current_workflow_document.name)
+            set_active_workflow(_current_workflow_document)
             refresh_view(window)
             sg.popup_auto_close(
                 f"{_current_workflow_document.name} saved to {saved_path}.",
@@ -551,7 +573,32 @@ def create_workflow_window():
             selected_id = documents[selected_row].workflow_id
             _current_workflow_document = _workflow_repository.load(selected_id)
             logger.info("LOADED WORKFLOW: %s", _current_workflow_document.name)
+            set_active_workflow(_current_workflow_document)
             refresh_view(window)
+        elif event == "-WF-ACTIVE-SET-":
+            selected_rows = values.get("-WF-DOCS-", [])
+            if selected_rows:
+                documents = _workflow_repository.list_documents()
+                selected_row = selected_rows[0]
+                if 0 <= selected_row < len(documents):
+                    _current_workflow_document = _workflow_repository.load(documents[selected_row].workflow_id)
+                    logger.info("SET ACTIVE WORKFLOW: %s", _current_workflow_document.name)
+                    set_active_workflow(_current_workflow_document)
+                    refresh_view(window)
+                    sg.popup_quick_message(
+                        f"{_current_workflow_document.name} is now the active workflow.",
+                        background_color="lightgreen",
+                    )
+                    continue
+            if _current_workflow_document is not None:
+                set_active_workflow(_current_workflow_document)
+                refresh_view(window)
+                sg.popup_quick_message(
+                    f"{_current_workflow_document.name} is now the active workflow.",
+                    background_color="lightgreen",
+                )
+            else:
+                sg.popup_error("Select a workflow to set it active.", title="Workflow")
         elif event == "-WF-EDIT-" or event == "-WF-DOCS- Double":
             selected_rows = values.get("-WF-DOCS-", [])
             open_editor_for_workflow(selected_rows[0] if selected_rows else None)
