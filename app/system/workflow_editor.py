@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import FreeSimpleGUI as sg
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from app.system.models import Test, engine
 from app.system.model import Scenario, Workflow, WorkflowNode
 from app.system.storage import WorkflowDocument, WorkflowRepository
 
@@ -59,6 +62,7 @@ def _bind_graph_right_click_selection(
         if selected_node_id is not None:
             controller.refresh_summary(window)
             controller.rerender(window)
+            controller.update_graph_context_menu(window)
 
     for bind_string in ("<ButtonPress-3>", "<ButtonPress-2>"):
         try:
@@ -168,6 +172,92 @@ def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
                     "human_throughput": human_throughput,
                     "required_staff": required_staff,
                 }
+    finally:
+        window.close()
+
+
+def _load_available_tests() -> list[dict[str, str]]:
+    """Load available lab tests for analyzer configuration."""
+
+    try:
+        with Session(engine) as session:
+            return [
+                {
+                    "code": str(test.code),
+                    "label": str(test.label),
+                }
+                for test in session.scalars(select(Test).order_by(Test.code))
+            ]
+    except Exception:
+        logger.exception("Unable to load available tests for analyzer configuration.")
+        return []
+
+
+def _show_test_selection_dialog(
+    *,
+    node: WorkflowNode,
+    available_tests: list[dict[str, str]],
+) -> list[str] | None:
+    """Prompt for analyzer test selection using checkboxes."""
+
+    selected_codes = set(node.widget.metadata.get("analyzer_tests", []))
+    if not available_tests:
+        _notify("No tests are available to select.")
+        return None
+
+    layout: list[list[Any]] = [
+        [sg.Text(f"Configure tests for {node.widget.name}", font=("Arial", 12, "bold"))],
+        [sg.Text("Select the tests this analyzer can perform:")],
+        [
+            sg.Column(
+                [
+                    [
+                        sg.Checkbox(
+                            f"{test['code']} - {test['label']}",
+                            default=test["code"] in selected_codes,
+                            key=f"-TEST-{index}-",
+                        )
+                    ]
+                    for index, test in enumerate(available_tests)
+                ],
+                scrollable=True,
+                vertical_scroll_only=True,
+                size=(520, 320),
+                expand_x=True,
+                expand_y=True,
+            )
+        ],
+        [
+            sg.Button("Select All", key="-SELECT-ALL-"),
+            sg.Button("Clear All", key="-CLEAR-ALL-"),
+            sg.Button("Save", key="-SAVE-TESTS-", bind_return_key=True),
+            sg.Button("Cancel"),
+        ],
+    ]
+    window = sg.Window(
+        "Analyzer Tests",
+        layout=layout,
+        modal=True,
+        finalize=True,
+        keep_on_top=True,
+    )
+    try:
+        while True:
+            event, values = window.read()
+            if event in ("Cancel", sg.WIN_CLOSED):
+                return None
+            if event == "-SELECT-ALL-":
+                for index in range(len(available_tests)):
+                    window[f"-TEST-{index}-"].update(value=True)
+            elif event == "-CLEAR-ALL-":
+                for index in range(len(available_tests)):
+                    window[f"-TEST-{index}-"].update(value=False)
+            elif event == "-SAVE-TESTS-":
+                return [
+                    test["code"]
+                    for index, test in enumerate(available_tests)
+                    if values.get(f"-TEST-{index}-")
+                ]
     finally:
         window.close()
 
@@ -412,8 +502,9 @@ class WorkflowGraphRenderer:
             color=text_color,
             font=("Arial", 13, "bold"),
         )
+        test_count = len(node.widget.metadata.get("analyzer_tests", []))
         graph_canvas.draw_text(
-            f"{node.kind} | {node.widget.service_time:g}",
+            f"Tests: {test_count} | Staff: {node.widget.required_staff}",
             (center[0], center[1] - 16),
             color="#475569",
             font=("Arial", 10),
@@ -453,6 +544,7 @@ class WorkflowEditorController:
             window["-WF-SCENARIOS-"].update(values=[])
             window["-WF-WIDGETS-"].update(values=[])
             window["-WF-DETAILS-"].update("Select a node to edit its properties.")
+            self.update_analyzer_tests_button(window)
             return
 
         workflow = self.current_document.workflow
@@ -503,9 +595,21 @@ class WorkflowEditorController:
             f"Incoming edges: {incoming}",
             f"Outgoing edges: {outgoing}",
         ]
+        analyzer_tests = node.widget.metadata.get("analyzer_tests", [])
+        if analyzer_tests:
+            details.append(f"Analyzer tests: {', '.join(str(test) for test in analyzer_tests)}")
         if node.metadata:
             details.append(f"Metadata: {node.metadata}")
         window["-WF-DETAILS-"].update("\n".join(details))
+        self.update_analyzer_tests_button(window)
+
+    def update_analyzer_tests_button(self, window: sg.Window) -> None:
+        """Enable the test selection button only for analyzer nodes."""
+
+        button = window["-WF-SELECT-TESTS-"]
+        node = self.selected_node()
+        is_analyzer = bool(node and node.widget.node_type in {"automated analyzer", "manual analyzer"})
+        button.update(disabled=not is_analyzer)
 
     def rerender(self, window: sg.Window) -> None:
         if self.current_document is None:
@@ -533,30 +637,46 @@ class WorkflowEditorController:
         graph.set_right_click_menu(self.build_graph_context_menu())
 
     def build_graph_context_menu(self) -> list[Any] | None:
-        """Build a right-click menu that can connect the source node to another node."""
+        """Build a right-click menu for adding or removing connections."""
 
         if self.current_document is None:
             return [
                 "Workflow Node",
-                ["Connect to", ["No workflow loaded::noop"], "Reassign connection to", ["No workflow loaded::noop"]],
+                [
+                    "Add connection",
+                    ["No workflow loaded::noop"],
+                    "Disconnect from",
+                    ["No workflow loaded::noop"],
+                ],
             ]
 
         nodes = self.current_document.workflow.graph.iter_nodes()
+        selected_node = self.selected_node()
         target_items = [
-            f"Connect to {node.widget.name}::{node.node_id}"
+            f"Add connection to {node.widget.name}::{node.node_id}"
             for node in nodes
             if node.node_id != self.selected_node_id
         ]
-        reassign_items = [
-            f"Reassign to {node.widget.name}::{node.node_id}"
+        outgoing_ids = {
+            edge.target
+            for edge in self.current_document.workflow.graph.outgoing_edges(self.selected_node_id or "")
+        }
+        disconnect_items = [
+            f"Disconnect from {node.widget.name}::{node.node_id}"
             for node in nodes
-            if node.node_id != self.selected_node_id
+            if node.node_id in outgoing_ids
         ]
         if not target_items:
             target_items = ["No other nodes::noop"]
-        if not reassign_items:
-            reassign_items = ["No other nodes::noop"]
-        return ["Workflow Node", ["Connect to", target_items, "Reassign connection to", reassign_items]]
+        if not disconnect_items:
+            disconnect_items = ["No connections::noop"]
+        menu = ["Workflow Node", ["Add connection", target_items, "Disconnect from", disconnect_items]]
+        if selected_node is not None and selected_node.widget.node_type in {
+            "automated analyzer",
+            "manual analyzer",
+        }:
+            menu.append("Select tests::select_analyzer_tests")
+        return menu
 
     def persist_current_workflow(self, window: sg.Window | None = None) -> str:
         """Write the current workflow document to disk."""
@@ -668,7 +788,7 @@ class WorkflowEditorController:
         self.persist_current_workflow(window)
 
     def connect_selected_node_to(self, target_node_id: str, window: sg.Window | None = None) -> None:
-        """Connect the selected node to another node."""
+        """Add a connection from the selected node to another node."""
 
         if target_node_id == "noop":
             raise ValueError("No other nodes are available to connect to.")
@@ -684,27 +804,27 @@ class WorkflowEditorController:
         if source_node is None or target_node is None:
             raise ValueError("Selected nodes are no longer available.")
 
-        self.current_document.workflow.connect(source_node.widget, target_node.widget)
+        self.current_document.workflow.graph.connect_nodes(source_node.node_id, target_node.node_id)
         self.persist_current_workflow(window)
 
-    def reassign_selected_node_connection(self, target_node_id: str, window: sg.Window | None = None) -> None:
-        """Replace the selected node's primary outgoing connection."""
+    def disconnect_selected_node_from(self, target_node_id: str, window: sg.Window | None = None) -> None:
+        """Remove a connection from the selected node to another node."""
 
         if target_node_id == "noop":
-            raise ValueError("No other nodes are available to connect to.")
+            raise ValueError("No connections are available to remove.")
         if self.current_document is None:
             raise ValueError("Create or load a workflow first.")
         if self.selected_node_id is None:
             raise ValueError("Select a node first.")
         if self.selected_node_id == target_node_id:
-            raise ValueError("A node cannot connect to itself.")
+            raise ValueError("A node cannot disconnect from itself.")
 
         source_node = self.current_document.workflow.get_node(self.selected_node_id)
         target_node = self.current_document.workflow.get_node(target_node_id)
         if source_node is None or target_node is None:
             raise ValueError("Selected nodes are no longer available.")
 
-        self.current_document.workflow.reassign_connection(source_node.node_id, target_node.node_id)
+        self.current_document.workflow.graph.disconnect_nodes(source_node.node_id, target_node.node_id)
         self.persist_current_workflow(window)
 
     def _next_node_name(self, suffix: str) -> str:
@@ -774,6 +894,25 @@ class WorkflowEditorController:
             raise ValueError("Select a node first.")
         self.current_document.workflow.delete_node(node.node_id)
         self.selected_node_id = None
+        self.persist_current_workflow(window)
+
+    def set_analyzer_tests(
+        self,
+        node_id: str,
+        test_codes: list[str],
+        window: sg.Window | None = None,
+    ) -> None:
+        """Store the analyzer test selection on the selected node."""
+
+        node = self.current_document.workflow.get_node(node_id) if self.current_document else None
+        if node is None:
+            raise ValueError("Selected node is no longer available.")
+
+        self.current_document.workflow.update_node_properties(
+            node_id,
+            metadata={"analyzer_tests": list(test_codes)},
+        )
+        node.widget.metadata["analyzer_tests"] = list(test_codes)
         self.persist_current_workflow(window)
 
 
@@ -851,6 +990,7 @@ def open_workflow_editor_window(
             sg.Button("Add Branch Node", key="-WF-ADD-BRANCH-"),
             sg.Button("Rename Node", key="-WF-RENAME-"),
             sg.Button("Edit Properties", key="-WF-PROPS-"),
+            sg.Button("Select tests", key="-WF-SELECT-TESTS-", disabled=True),
             sg.Button("Delete Node", key="-WF-DELETE-", button_color=("white", "#b91c1c")),
             sg.Button("Add Scenario", key="-WF-ADD-SCENARIO-"),
             sg.CloseButton("Close"),
@@ -967,7 +1107,6 @@ def open_workflow_editor_window(
                     controller.refresh_summary(window)
                     controller.rerender(window)
                 continue
-
             if event == "-WF-GRAPH-DOUBLE-":
                 controller.refresh_summary(window)
                 controller.rerender(window)
@@ -981,14 +1120,51 @@ def open_workflow_editor_window(
             try:
                 if isinstance(event, str) and "::" in event:
                     _, target_node_id = event.rsplit("::", 1)
-                    if event.startswith("Reassign to "):
-                        controller.reassign_selected_node_connection(target_node_id, window)
-                        controller.refresh(window)
-                        _notify("Connection reassigned.")
-                    else:
+                    if event.endswith("::select_analyzer_tests"):
+                        node = controller.selected_node()
+                        if node is None:
+                            _notify("Select a node first.")
+                            continue
+                        if node.widget.node_type not in {"automated analyzer", "manual analyzer"}:
+                            _notify("Select an automated analyzer or manual analyzer node first.")
+                            continue
+                        available_tests = _load_available_tests()
+                        selected_codes = _show_test_selection_dialog(
+                            node=node,
+                            available_tests=available_tests,
+                        )
+                        if selected_codes is not None:
+                            controller.set_analyzer_tests(node.node_id, selected_codes, window)
+                            controller.refresh(window)
+                            _notify("Analyzer tests updated.")
+                    elif event.startswith("Add connection to "):
                         controller.connect_selected_node_to(target_node_id, window)
                         controller.refresh(window)
-                        _notify("Connection created.")
+                        _notify("Connection added.")
+                    elif event.startswith("Disconnect from "):
+                        controller.disconnect_selected_node_from(target_node_id, window)
+                        controller.refresh(window)
+                        _notify("Connection removed.")
+                    else:
+                        _notify("Unsupported workflow action.")
+                    continue
+                if event == "-WF-SELECT-TESTS-":
+                    node = controller.selected_node()
+                    if node is None:
+                        _notify("Select an analyzer node first.")
+                        continue
+                    if node.widget.node_type not in {"automated analyzer", "manual analyzer"}:
+                        _notify("Select an analyzer node first.")
+                        continue
+                    available_tests = _load_available_tests()
+                    selected_codes = _show_test_selection_dialog(
+                        node=node,
+                        available_tests=available_tests,
+                    )
+                    if selected_codes is not None:
+                        controller.set_analyzer_tests(node.node_id, selected_codes, window)
+                        controller.refresh(window)
+                        _notify("Analyzer tests updated.")
                     continue
                 if event == "-WF-NEW-":
                     workflow_name = controller.create_new_workflow(window)

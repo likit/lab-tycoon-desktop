@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from app.system.model import BaseWidget, Workflow
-from app.system.storage import WorkflowRepository
+from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.system.workflow_editor import WorkflowEditorController, WorkflowLayoutEngine
 
 
@@ -119,6 +119,57 @@ class WorkflowCompatibilityTests(unittest.TestCase):
         self.assertEqual(restored.description, "Manual review")
         self.assertEqual(restored.required_staff, 2)
 
+    def test_add_connection_appends_existing_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repository = WorkflowRepository(tmpdir)
+            workflow = Workflow()
+            source = workflow.create_node("Source", 1.0)
+            initial_target = workflow.create_connected_node(source.node_id, "Initial", 2.0)
+            replacement = workflow.create_node("Replacement", 3.0)
+
+            controller = WorkflowEditorController(repository=repository)
+            controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+            controller.selected_node_id = source.node_id
+
+            controller.connect_selected_node_to(replacement.node_id)
+
+            outgoing_targets = [edge.target for edge in workflow.graph.outgoing_edges(source.node_id)]
+            self.assertEqual(outgoing_targets, [initial_target.node_id, replacement.node_id])
+            self.assertEqual(source.widget.downstream_widgets[-1], replacement.widget)
+
+    def test_disconnect_menu_lists_current_outgoing_nodes(self) -> None:
+        workflow = Workflow()
+        source = workflow.create_node("Source", 1.0)
+        target = workflow.create_connected_node(source.node_id, "Target", 2.0)
+
+        controller = WorkflowEditorController()
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        controller.selected_node_id = source.node_id
+
+        menu = controller.build_graph_context_menu()
+
+        self.assertIsNotNone(menu)
+        flattened_menu = str(menu)
+        self.assertIn("Disconnect from", flattened_menu)
+        self.assertIn(target.node_id, flattened_menu)
+
+    def test_disconnect_selected_node_removes_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repository = WorkflowRepository(tmpdir)
+            workflow = Workflow()
+            source = workflow.create_node("Source", 1.0)
+            target = workflow.create_connected_node(source.node_id, "Target", 2.0)
+
+            controller = WorkflowEditorController(repository=repository)
+            controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+            controller.selected_node_id = source.node_id
+
+            controller.disconnect_selected_node_from(target.node_id)
+
+            outgoing_targets = [edge.target for edge in workflow.graph.outgoing_edges(source.node_id)]
+            self.assertEqual(outgoing_targets, [])
+            self.assertEqual(source.widget.downstream_widgets, [])
+
 
 class WorkflowPersistenceTests(unittest.TestCase):
     def test_new_workflow_is_persisted_immediately(self) -> None:
@@ -146,6 +197,27 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertEqual(len(loaded.workflow.graph.nodes), 1)
             self.assertEqual(len(loaded.workflow.scenarios), 2)
             self.assertIsNotNone(loaded.workflow.get_node(node_id))
+
+    def test_analyzer_test_selection_is_persisted_in_node_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repository = WorkflowRepository(tmpdir)
+            controller = WorkflowEditorController(repository=repository)
+            controller.create_new_workflow()
+            assert controller.current_document is not None
+
+            node = controller.current_document.workflow.create_node(
+                "Analyzer",
+                1.0,
+                metadata={"node_type": "automated analyzer"},
+            )
+            controller.selected_node_id = node.node_id
+
+            controller.set_analyzer_tests(node.node_id, ["CBC", "GLU"])
+
+            reloaded = repository.load(controller.current_document.workflow_id)
+            stored_node = reloaded.workflow.get_node(node.node_id)
+            assert stored_node is not None
+            self.assertEqual(stored_node.widget.metadata["analyzer_tests"], ["CBC", "GLU"])
 
 
 if __name__ == "__main__":
