@@ -29,6 +29,140 @@ def _notify(message: str) -> None:
     )
 
 
+def _workflow_node_choice_items(
+    workflow: Workflow | None,
+    *,
+    exclude_node_id: str | None = None,
+) -> list[tuple[str, str]]:
+    """Return stable node choice labels and ids for modal connection pickers."""
+
+    if workflow is None:
+        return []
+    return [
+        (f"{node.widget.name}::{node.node_id}", node.node_id)
+        for node in sorted(workflow.graph.iter_nodes(), key=lambda item: item.widget.name.lower())
+        if node.node_id != exclude_node_id
+    ]
+
+
+def _workflow_node_choices(workflow: Workflow | None, *, exclude_node_id: str | None = None) -> list[str]:
+    """Return stable node choices for modal connection pickers."""
+
+    return [label for label, _ in _workflow_node_choice_items(workflow, exclude_node_id=exclude_node_id)]
+
+
+def _choice_to_node_id(choice: str | None) -> str | None:
+    """Extract the node id from a modal choice value."""
+
+    if not choice:
+        return None
+    if "::" not in choice:
+        return None
+    return choice.rsplit("::", 1)[1]
+
+
+def _selected_connection_choices(
+    workflow: Workflow | None,
+    *,
+    node_id: str,
+    direction: str,
+) -> list[str]:
+    """Return the default selected connection labels for a node form."""
+
+    if workflow is None:
+        return []
+
+    if direction == "incoming":
+        connected_ids = {edge.source for edge in workflow.graph.incoming_edges(node_id)}
+    elif direction == "outgoing":
+        connected_ids = {edge.target for edge in workflow.graph.outgoing_edges(node_id)}
+    else:
+        return []
+
+    selections = []
+    for label, candidate_id in _workflow_node_choice_items(workflow, exclude_node_id=node_id):
+        if candidate_id in connected_ids:
+            selections.append(label)
+    return selections
+
+
+def _selected_connection_choice(
+    workflow: Workflow | None,
+    *,
+    node_id: str,
+    direction: str,
+) -> str:
+    """Return the first selected connection label for a node form."""
+
+    choices = _selected_connection_choices(workflow, node_id=node_id, direction=direction)
+    return choices[0] if choices else ""
+
+
+def _connection_panes(
+    workflow: Workflow | None,
+    *,
+    exclude_node_id: str | None = None,
+    node_id: str | None = None,
+) -> list[Any]:
+    """Build incoming and outgoing dropdown panes for node forms."""
+
+    choices = _workflow_node_choices(workflow, exclude_node_id=exclude_node_id)
+    incoming_default = _selected_connection_choice(workflow, node_id=node_id or "", direction="incoming") if node_id else ""
+    outgoing_default = _selected_connection_choice(workflow, node_id=node_id or "", direction="outgoing") if node_id else ""
+    return [
+        [
+            sg.Column(
+                [
+                    [
+                        sg.Frame(
+                            "Incoming nodes",
+                            [
+                                [
+                                    sg.Combo(
+                                        choices,
+                                        key="-CONN-INCOMING-",
+                                        default_value=incoming_default,
+                                        readonly=True,
+                                        expand_x=True,
+                                        size=(36, 1),
+                                        disabled=not bool(choices),
+                                    )
+                                ]
+                            ],
+                            expand_x=True,
+                        )
+                    ]
+                ],
+                expand_x=True,
+            ),
+            sg.Column(
+                [
+                    [
+                        sg.Frame(
+                            "Outgoing nodes",
+                            [
+                                [
+                                    sg.Combo(
+                                        choices,
+                                        key="-CONN-OUTGOING-",
+                                        default_value=outgoing_default,
+                                        readonly=True,
+                                        expand_x=True,
+                                        size=(36, 1),
+                                        disabled=not bool(choices),
+                                    )
+                                ]
+                            ],
+                            expand_x=True,
+                        )
+                    ]
+                ],
+                expand_x=True,
+            ),
+        ],
+    ]
+
+
 def _reset_scrollable_view(element: sg.Element) -> None:
     """Move a scrollable container back to its origin if supported."""
 
@@ -62,7 +196,7 @@ def _bind_graph_right_click_selection(
         if selected_node_id is not None:
             controller.refresh_summary(window)
             controller.rerender(window)
-            controller.update_graph_context_menu(window)
+            controller.update_graph_context_menu(window, selected_node_id=selected_node_id)
 
     for bind_string in ("<ButtonPress-3>", "<ButtonPress-2>"):
         try:
@@ -99,7 +233,10 @@ def _bind_graph_double_click_properties(
         return
 
 
-def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
+def _show_node_form_dialog(
+    node: WorkflowNode | None,
+    workflow: Workflow | None = None,
+) -> dict[str, Any] | None:
     """Prompt for node configuration values."""
 
     if node is None:
@@ -146,6 +283,7 @@ def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
             sg.Text("Description"),
             sg.Multiline(node.widget.description, key="-DESC-", size=(46, 4), expand_x=True),
         ],
+        *(_connection_panes(workflow, exclude_node_id=node.node_id, node_id=node.node_id)),
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
     window = sg.Window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
@@ -177,6 +315,8 @@ def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
                     "human_throughput": human_throughput,
                     "capacity": capacity,
                     "required_staff": required_staff,
+                    "incoming_connection_node_id": _choice_to_node_id(str(values.get("-CONN-INCOMING-", ""))),
+                    "outgoing_connection_node_id": _choice_to_node_id(str(values.get("-CONN-OUTGOING-", ""))),
                 }
     finally:
         window.close()
@@ -637,13 +777,26 @@ class WorkflowEditorController:
         self.rerender(window)
         self.update_graph_context_menu(window)
 
-    def update_graph_context_menu(self, window: sg.Window) -> None:
-        """Refresh the graph's right-click menu for the current workflow."""
+    def update_graph_context_menu(self, window: sg.Window, *, selected_node_id: str | None = None) -> None:
+        """Disable the graph right-click menu.
+
+        Connection editing now happens from the modal node forms, so the
+        context menu is intentionally turned off to avoid stale selection
+        behavior.
+        """
 
         graph = window["-WF-GRAPH-"]
-        graph.set_right_click_menu(self.build_graph_context_menu())
+        try:
+            window.TKRightClickMenu = None
+        except Exception:
+            pass
+        try:
+            graph.TKRightClickMenu = None
+        except Exception:
+            pass
+        graph.set_right_click_menu(sg.MENU_RIGHT_CLICK_DISABLED)
 
-    def build_graph_context_menu(self) -> list[Any] | None:
+    def build_graph_context_menu(self, *, selected_node_id: str | None = None) -> list[Any] | None:
         """Build a right-click menu for adding or removing connections."""
 
         if self.current_document is None:
@@ -658,17 +811,15 @@ class WorkflowEditorController:
             ]
 
         nodes = self.current_document.workflow.graph.iter_nodes()
-        selected_node = self.selected_node()
-        target_items = []
-        for node in nodes:
-            if node.node_id == self.selected_node_id:
-                continue
-            if not self._is_valid_connection_target(node.node_id):
-                continue
-            target_items.append(f"Add connection to {node.widget.name}::{node.node_id}")
+        selected_node_id = selected_node_id if selected_node_id is not None else self.selected_node_id
+        selected_node = self.current_document.workflow.get_node(selected_node_id) if selected_node_id is not None else None
+        target_items = [
+            f"Add connection to {node.widget.name}::{node.node_id}"
+            for node in self._available_connection_targets(selected_node_id)
+        ]
         outgoing_ids = {
             edge.target
-            for edge in self.current_document.workflow.graph.outgoing_edges(self.selected_node_id or "")
+            for edge in self.current_document.workflow.graph.outgoing_edges(selected_node_id or "")
         }
         disconnect_items = [
             f"Disconnect from {node.widget.name}::{node.node_id}"
@@ -687,7 +838,34 @@ class WorkflowEditorController:
             menu.append("Select tests::select_analyzer_tests")
         return menu
 
-    def _is_valid_connection_target(self, target_node_id: str) -> bool:
+    def _available_connection_targets(self, selected_node_id: str | None = None) -> list[WorkflowNode]:
+        """Return the nodes that should appear in the Connect to menu."""
+
+        if self.current_document is None:
+            return []
+
+        workflow = self.current_document.workflow
+        selected_node_id = selected_node_id if selected_node_id is not None else self.selected_node_id
+        if selected_node_id is None:
+            return []
+
+        source_node = workflow.get_node(selected_node_id)
+        if source_node is None:
+            return []
+
+        connected_ids = {edge.target for edge in workflow.graph.outgoing_edges(selected_node_id)}
+        available_nodes: list[WorkflowNode] = []
+        for node in workflow.graph.iter_nodes():
+            if node.node_id == selected_node_id:
+                continue
+            if node.node_id in connected_ids:
+                continue
+            if not self._is_valid_connection_target(node.node_id, selected_node_id=selected_node_id):
+                continue
+            available_nodes.append(node)
+        return sorted(available_nodes, key=lambda node: node.widget.name.lower())
+
+    def _is_valid_connection_target(self, target_node_id: str, *, selected_node_id: str | None = None) -> bool:
         """Return whether the current selection can connect to ``target_node_id``.
 
         The editor keeps the submenu focused on legal targets: the selected node
@@ -695,9 +873,12 @@ class WorkflowEditorController:
         connecting back into the currently selected node.
         """
 
-        if self.current_document is None or self.selected_node_id is None:
+        if self.current_document is None:
             return True
-        if target_node_id == self.selected_node_id:
+        selected_node_id = selected_node_id if selected_node_id is not None else self.selected_node_id
+        if selected_node_id is None:
+            return True
+        if target_node_id == selected_node_id:
             return False
 
         workflow = self.current_document.workflow
@@ -708,7 +889,7 @@ class WorkflowEditorController:
             if node_id in seen:
                 continue
             seen.add(node_id)
-            if node_id == self.selected_node_id:
+            if node_id == selected_node_id:
                 return False
             for edge in workflow.graph.outgoing_edges(node_id):
                 if edge.target not in seen:
@@ -736,15 +917,20 @@ class WorkflowEditorController:
         self.selected_node_id = None
         logger.info("CREATED NEW WORKFLOW: %s", workflow_name)
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
         return workflow_name
 
     def add_node(self, window: sg.Window | None = None) -> str:
         if self.current_document is None:
             raise ValueError("Create or load a workflow first.")
+        selected_node_id = self.selected_node_id
         widget = self.current_document.workflow.graph.create_default_widget()
         node = self.current_document.workflow.graph.add_widget(widget)
-        self.selected_node_id = node.node_id
+        self.selected_node_id = selected_node_id
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
         return node.node_id
 
     def save_current_workflow(self, window: sg.Window | None = None) -> str:
@@ -797,6 +983,8 @@ class WorkflowEditorController:
         human_throughput: float,
         capacity: int,
         required_staff: int,
+        incoming_connection_node_id: str | None = None,
+        outgoing_connection_node_id: str | None = None,
         window: sg.Window | None = None,
     ) -> None:
         """Apply form values to a node and persist the workflow."""
@@ -817,7 +1005,7 @@ class WorkflowEditorController:
                 "required_staff": required_staff,
                 "capacity": capacity,
             },
-            kind=node_type,
+            kind=node.kind,
         )
         node.widget.node_type = node_type
         node.widget.throughput = throughput
@@ -825,7 +1013,14 @@ class WorkflowEditorController:
         node.widget.capacity = capacity
         node.widget.description = description
         node.widget.required_staff = required_staff
+        self._apply_connection_choices(
+            node_id,
+            incoming_connection_node_id=incoming_connection_node_id,
+            outgoing_connection_node_id=outgoing_connection_node_id,
+        )
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
 
     def connect_selected_node_to(self, target_node_id: str, window: sg.Window | None = None) -> None:
         """Add a connection from the selected node to another node."""
@@ -846,6 +1041,8 @@ class WorkflowEditorController:
 
         self.current_document.workflow.graph.connect_nodes(source_node.node_id, target_node.node_id)
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
 
     def disconnect_selected_node_from(self, target_node_id: str, window: sg.Window | None = None) -> None:
         """Remove a connection from the selected node to another node."""
@@ -866,6 +1063,8 @@ class WorkflowEditorController:
 
         self.current_document.workflow.graph.disconnect_nodes(source_node.node_id, target_node.node_id)
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
 
     def _next_node_name(self, suffix: str) -> str:
         if self.current_document is None:
@@ -884,6 +1083,8 @@ class WorkflowEditorController:
         )
         self.selected_node_id = node.node_id
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
         return node.node_id
 
     def add_branch_node(self, window: sg.Window | None = None) -> str:
@@ -897,6 +1098,8 @@ class WorkflowEditorController:
         )
         self.selected_node_id = node.node_id
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
         return node.node_id
 
     def rename_selected_node(self, new_name: str, window: sg.Window | None = None) -> None:
@@ -914,6 +1117,8 @@ class WorkflowEditorController:
         kind: str,
         description: str,
         capacity: int = 1,
+        incoming_connection_node_id: str | None = None,
+        outgoing_connection_node_id: str | None = None,
         window: sg.Window | None = None,
     ) -> None:
         node = self.selected_node()
@@ -928,7 +1133,40 @@ class WorkflowEditorController:
             kind=kind,
         )
         node.widget.capacity = capacity
+        self._apply_connection_choices(
+            node.node_id,
+            incoming_connection_node_id=incoming_connection_node_id,
+            outgoing_connection_node_id=outgoing_connection_node_id,
+        )
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
+
+    def _apply_connection_choices(
+        self,
+        node_id: str,
+        *,
+        incoming_connection_node_id: str | None,
+        outgoing_connection_node_id: str | None,
+    ) -> None:
+        """Reconcile connections chosen in a modal node form."""
+
+        if self.current_document is None:
+            return
+        workflow = self.current_document.workflow
+        current_incoming = {edge.source for edge in workflow.graph.incoming_edges(node_id)}
+        current_outgoing = {edge.target for edge in workflow.graph.outgoing_edges(node_id)}
+        desired_incoming = {incoming_connection_node_id} if incoming_connection_node_id and incoming_connection_node_id != node_id else set()
+        desired_outgoing = {outgoing_connection_node_id} if outgoing_connection_node_id and outgoing_connection_node_id != node_id else set()
+
+        for source_id in sorted(current_incoming - desired_incoming):
+            workflow.graph.disconnect_nodes(source_id, node_id)
+        for target_id in sorted(current_outgoing - desired_outgoing):
+            workflow.graph.disconnect_nodes(node_id, target_id)
+        for source_id in sorted(desired_incoming - current_incoming):
+            workflow.graph.connect_nodes(source_id, node_id)
+        for target_id in sorted(desired_outgoing - current_outgoing):
+            workflow.graph.connect_nodes(node_id, target_id)
 
     def delete_selected_node(self, window: sg.Window | None = None) -> None:
         node = self.selected_node()
@@ -937,6 +1175,8 @@ class WorkflowEditorController:
         self.current_document.workflow.delete_node(node.node_id)
         self.selected_node_id = None
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
 
     def set_analyzer_tests(
         self,
@@ -956,9 +1196,14 @@ class WorkflowEditorController:
         )
         node.widget.metadata["analyzer_tests"] = list(test_codes)
         self.persist_current_workflow(window)
+        if window is not None:
+            self.update_graph_context_menu(window)
 
 
-def _show_node_properties_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
+def _show_node_properties_dialog(
+    node: WorkflowNode | None,
+    workflow: Workflow | None = None,
+) -> dict[str, Any] | None:
     """Prompt for editable node properties."""
 
     if node is None:
@@ -981,6 +1226,13 @@ def _show_node_properties_dialog(node: WorkflowNode | None) -> dict[str, Any] | 
         [
             sg.Text("Description"),
             sg.Multiline(node.metadata.get("description", ""), key="-DESC-", size=(42, 4), expand_x=True),
+        ],
+        [
+            sg.Frame(
+                "Connections",
+                _connection_panes(workflow, exclude_node_id=node.node_id, node_id=node.node_id),
+                expand_x=True,
+            )
         ],
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
@@ -1006,6 +1258,8 @@ def _show_node_properties_dialog(node: WorkflowNode | None) -> dict[str, Any] | 
                     "capacity": capacity,
                     "kind": kind,
                     "description": description,
+                    "incoming_connection_node_id": _choice_to_node_id(str(values.get("-CONN-INCOMING-", ""))),
+                    "outgoing_connection_node_id": _choice_to_node_id(str(values.get("-CONN-OUTGOING-", ""))),
                 }
     finally:
         window.close()
@@ -1159,7 +1413,8 @@ def open_workflow_editor_window(
                 controller.refresh_summary(window)
                 controller.rerender(window)
                 node = controller.selected_node()
-                result = _show_node_form_dialog(node)
+                workflow = controller.current_document.workflow if controller.current_document else None
+                result = _show_node_form_dialog(node, workflow=workflow)
                 if result is not None and node is not None:
                     controller.update_node_from_form(node.node_id, window=window, **result)
                     controller.refresh(window)
@@ -1254,7 +1509,8 @@ def open_workflow_editor_window(
                         controller.refresh(window)
                 elif event == "-WF-PROPS-":
                     node = controller.selected_node()
-                    result = _show_node_properties_dialog(node)
+                    workflow = controller.current_document.workflow if controller.current_document else None
+                    result = _show_node_properties_dialog(node, workflow=workflow)
                     if result is not None:
                         controller.update_selected_node(**result, window=window)
                         controller.refresh(window)
