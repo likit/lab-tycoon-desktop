@@ -28,7 +28,7 @@ class RunEntryPointTests(unittest.TestCase):
         with patch("run.load_uploaded_order_source", return_value=FakeOrderSource()) as load_source, patch(
             "run.use_uploaded_order_source"
         ) as use_source, patch("run.run_and_print_workflow_simulation") as run_sim:
-            exit_code = run.main(["--simulate", "--order-file", "/tmp/orders.xlsx"])
+            exit_code = run.main(["--simulate", "--order-file", "/tmp/orders.xlsx", "--seed", "123"])
 
         self.assertEqual(exit_code, 0)
         load_source.assert_called_once_with("/tmp/orders.xlsx")
@@ -37,6 +37,7 @@ class RunEntryPointTests(unittest.TestCase):
         kwargs = run_sim.call_args.kwargs
         self.assertEqual(kwargs["specimens_number"], 2)
         self.assertEqual(len(kwargs["orders"]), 2)
+        self.assertEqual(kwargs["random_seed"], 123)
 
 
 if __name__ == "__main__":

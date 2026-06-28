@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="SimPy realtime factor to use when --simulate is enabled.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible simulations.",
+    )
     return parser
 
 
@@ -68,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
                 specimens_number=specimens_number,
                 workflow_id=args.workflow_id,
                 realtime_factor=args.factor,
+                random_seed=args.seed,
                 orders=orders,
             )
         except ValueError as exc:
