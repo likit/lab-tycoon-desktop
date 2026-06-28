@@ -23,7 +23,7 @@ from app.system.storage import WorkflowDocument, WorkflowRepository
 class WorkflowSimulationEngineTests(unittest.TestCase):
     def test_simulation_traverses_nodes_and_collects_metrics(self) -> None:
         workflow = Workflow()
-        intake = workflow.create_node("Intake", 1.0)
+        intake = workflow.create_node("Intake", 1.0, metadata={"capacity": 2})
         review = workflow.create_node(
             "Review",
             1.0,
@@ -62,6 +62,7 @@ class WorkflowSimulationEngineTests(unittest.TestCase):
         self.assertGreater(review_stats.average_wait_time, 0.0)
         self.assertGreater(review_stats.total_staff_busy_time, 0.0)
         self.assertIn("staff", review_stats.utilization(result.makespan, staff_capacity=result.staff_capacity))
+        self.assertEqual(engine.node_resources[intake.node_id].capacity, 2)
 
     def test_loaded_orders_are_simulated_as_specimens(self) -> None:
         workflow = Workflow()

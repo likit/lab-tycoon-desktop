@@ -105,6 +105,7 @@ class WorkflowCompatibilityTests(unittest.TestCase):
                 "node_type": "manual analyzer",
                 "throughput": 8.0,
                 "human_throughput": 1.5,
+                "capacity": 3,
                 "description": "Manual review",
                 "required_staff": 2,
             },
@@ -116,8 +117,14 @@ class WorkflowCompatibilityTests(unittest.TestCase):
         self.assertEqual(restored.node_type, "manual analyzer")
         self.assertEqual(restored.throughput, 8.0)
         self.assertEqual(restored.human_throughput, 1.5)
+        self.assertEqual(restored.capacity, 3)
         self.assertEqual(restored.description, "Manual review")
         self.assertEqual(restored.required_staff, 2)
+
+    def test_base_widget_defaults_capacity_to_one(self) -> None:
+        widget = BaseWidget("Widget", 3.5, metadata={"description": "note"})
+
+        self.assertEqual(widget.capacity, 1)
 
     def test_add_connection_appends_existing_connection(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -169,6 +176,23 @@ class WorkflowCompatibilityTests(unittest.TestCase):
             outgoing_targets = [edge.target for edge in workflow.graph.outgoing_edges(source.node_id)]
             self.assertEqual(outgoing_targets, [])
             self.assertEqual(source.widget.downstream_widgets, [])
+
+    def test_add_connection_menu_filters_cycle_targets(self) -> None:
+        workflow = Workflow()
+        source = workflow.create_node("Source", 1.0)
+        middle = workflow.create_connected_node(source.node_id, "Middle", 2.0)
+        target = workflow.create_connected_node(middle.node_id, "Target", 3.0)
+
+        controller = WorkflowEditorController()
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        controller.selected_node_id = middle.node_id
+
+        menu = controller.build_graph_context_menu()
+
+        self.assertIsNotNone(menu)
+        flattened_menu = str(menu)
+        self.assertIn(target.node_id, flattened_menu)
+        self.assertNotIn(source.node_id, flattened_menu)
 
 
 class WorkflowPersistenceTests(unittest.TestCase):

@@ -63,6 +63,16 @@ class BaseWidget:
         self.metadata["human_throughput"] = float(value)
 
     @property
+    def capacity(self) -> int:
+        """Return the configured simulation capacity."""
+
+        return max(1, int(self.metadata.get("capacity", 1)))
+
+    @capacity.setter
+    def capacity(self, value: int) -> None:
+        self.metadata["capacity"] = max(1, int(value))
+
+    @property
     def description(self) -> str:
         """Return the configured description."""
 
@@ -164,6 +174,7 @@ class BaseWidget:
             "node_type": self.node_type,
             "throughput": self.throughput,
             "human_throughput": self.human_throughput,
+            "capacity": self.capacity,
             "description": self.description,
             "required_staff": self.required_staff,
         }
@@ -183,6 +194,8 @@ class BaseWidget:
             metadata["throughput"] = float(data.get("throughput", 0.0))
         if "human_throughput" not in metadata and data.get("human_throughput") is not None:
             metadata["human_throughput"] = float(data.get("human_throughput", 0.0))
+        if "capacity" not in metadata and data.get("capacity") is not None:
+            metadata["capacity"] = int(data.get("capacity", 1))
         if "description" not in metadata and data.get("description") is not None:
             metadata["description"] = str(data.get("description", ""))
         if "required_staff" not in metadata and data.get("required_staff") is not None:

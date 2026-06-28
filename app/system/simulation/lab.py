@@ -348,7 +348,7 @@ class WorkflowSimulationEngine:
         else:
             self.active_node_ids = self.router.reachable_node_ids(self.workflow, self.start_node_id)
         self.node_resources = {
-            node.node_id: simpy.Resource(self.env, capacity=1)
+            node.node_id: simpy.Resource(self.env, capacity=max(1, int(node.widget.capacity)))
             for node in self.workflow.graph.iter_nodes()
             if node.node_id in self.active_node_ids
         }

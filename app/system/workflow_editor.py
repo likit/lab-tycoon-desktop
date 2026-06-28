@@ -135,6 +135,10 @@ def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
             sg.Input(str(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-", size=(14, 1)),
         ],
         [
+            sg.Text("Capacity"),
+            sg.Input(str(node.widget.capacity), key="-CAPACITY-", size=(14, 1)),
+        ],
+        [
             sg.Text("Required staff"),
             sg.Input(str(node.widget.required_staff), key="-STAFF-", size=(14, 1)),
         ],
@@ -154,10 +158,11 @@ def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
                 try:
                     throughput = float(values["-THROUGHPUT-"])
                     human_throughput = float(values["-HUMAN-THROUGHPUT-"])
+                    capacity = int(values["-CAPACITY-"])
                     required_staff = int(values["-STAFF-"])
                 except (TypeError, ValueError):
                     _notify(
-                        "Processing capacity and human processing capacity must be numeric, and staff must be an integer."
+                        "Processing capacity and human processing capacity must be numeric, capacity and staff must be integers."
                     )
                     continue
 
@@ -170,6 +175,7 @@ def _show_node_form_dialog(node: WorkflowNode | None) -> dict[str, Any] | None:
                     "description": description,
                     "throughput": throughput,
                     "human_throughput": human_throughput,
+                    "capacity": capacity,
                     "required_staff": required_staff,
                 }
     finally:
@@ -504,7 +510,7 @@ class WorkflowGraphRenderer:
         )
         test_count = len(node.widget.metadata.get("analyzer_tests", []))
         graph_canvas.draw_text(
-            f"Tests: {test_count} | Staff: {node.widget.required_staff}",
+            f"Tests: {test_count} | Staff: {node.widget.required_staff} | Capacity: {node.widget.capacity}",
             (center[0], center[1] - 16),
             color="#475569",
             font=("Arial", 10),
@@ -591,6 +597,7 @@ class WorkflowEditorController:
             f"Type: {node.widget.node_type}",
             f"Processing Capacity (per hours): {node.widget.throughput:g}",
             f"Human Processing Capacity (per hour): {node.widget.human_throughput:g}",
+            f"Capacity: {node.widget.capacity}",
             f"Required staff: {node.widget.required_staff}",
             f"Incoming edges: {incoming}",
             f"Outgoing edges: {outgoing}",
@@ -652,11 +659,13 @@ class WorkflowEditorController:
 
         nodes = self.current_document.workflow.graph.iter_nodes()
         selected_node = self.selected_node()
-        target_items = [
-            f"Add connection to {node.widget.name}::{node.node_id}"
-            for node in nodes
-            if node.node_id != self.selected_node_id
-        ]
+        target_items = []
+        for node in nodes:
+            if node.node_id == self.selected_node_id:
+                continue
+            if not self._is_valid_connection_target(node.node_id):
+                continue
+            target_items.append(f"Add connection to {node.widget.name}::{node.node_id}")
         outgoing_ids = {
             edge.target
             for edge in self.current_document.workflow.graph.outgoing_edges(self.selected_node_id or "")
@@ -677,6 +686,34 @@ class WorkflowEditorController:
         }:
             menu.append("Select tests::select_analyzer_tests")
         return menu
+
+    def _is_valid_connection_target(self, target_node_id: str) -> bool:
+        """Return whether the current selection can connect to ``target_node_id``.
+
+        The editor keeps the submenu focused on legal targets: the selected node
+        itself is excluded, and we avoid targets that would introduce a cycle by
+        connecting back into the currently selected node.
+        """
+
+        if self.current_document is None or self.selected_node_id is None:
+            return True
+        if target_node_id == self.selected_node_id:
+            return False
+
+        workflow = self.current_document.workflow
+        seen: set[str] = set()
+        stack = [target_node_id]
+        while stack:
+            node_id = stack.pop()
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            if node_id == self.selected_node_id:
+                return False
+            for edge in workflow.graph.outgoing_edges(node_id):
+                if edge.target not in seen:
+                    stack.append(edge.target)
+        return True
 
     def persist_current_workflow(self, window: sg.Window | None = None) -> str:
         """Write the current workflow document to disk."""
@@ -758,6 +795,7 @@ class WorkflowEditorController:
         description: str,
         throughput: float,
         human_throughput: float,
+        capacity: int,
         required_staff: int,
         window: sg.Window | None = None,
     ) -> None:
@@ -777,12 +815,14 @@ class WorkflowEditorController:
                 "human_throughput": human_throughput,
                 "description": description,
                 "required_staff": required_staff,
+                "capacity": capacity,
             },
             kind=node_type,
         )
         node.widget.node_type = node_type
         node.widget.throughput = throughput
         node.widget.human_throughput = human_throughput
+        node.widget.capacity = capacity
         node.widget.description = description
         node.widget.required_staff = required_staff
         self.persist_current_workflow(window)
@@ -873,6 +913,7 @@ class WorkflowEditorController:
         service_time: float,
         kind: str,
         description: str,
+        capacity: int = 1,
         window: sg.Window | None = None,
     ) -> None:
         node = self.selected_node()
@@ -883,9 +924,10 @@ class WorkflowEditorController:
             node.node_id,
             name=name,
             service_time=service_time,
-            metadata=metadata,
+            metadata={**metadata, "capacity": capacity},
             kind=kind,
         )
+        node.widget.capacity = capacity
         self.persist_current_workflow(window)
 
     def delete_selected_node(self, window: sg.Window | None = None) -> None:
@@ -929,6 +971,10 @@ def _show_node_properties_dialog(node: WorkflowNode | None) -> dict[str, Any] | 
             sg.Input(str(node.widget.service_time), key="-SERVICE-", size=(12, 1)),
         ],
         [
+            sg.Text("Capacity"),
+            sg.Input(str(node.widget.capacity), key="-CAPACITY-", size=(12, 1)),
+        ],
+        [
             sg.Text("Type"),
             sg.Combo(["task", "branch"], default_value=node.kind, key="-KIND-", readonly=True, size=(12, 1)),
         ],
@@ -947,8 +993,9 @@ def _show_node_properties_dialog(node: WorkflowNode | None) -> dict[str, Any] | 
             if event == "-SAVE-":
                 try:
                     service_time = float(values["-SERVICE-"])
+                    capacity = int(values["-CAPACITY-"])
                 except (TypeError, ValueError):
-                    _notify("Processing capacity must be a number.")
+                    _notify("Processing capacity must be a number and capacity must be an integer.")
                     continue
                 name = str(values["-NAME-"]).strip() or "Unnamed Node"
                 description = str(values["-DESC-"]).strip()
@@ -956,6 +1003,7 @@ def _show_node_properties_dialog(node: WorkflowNode | None) -> dict[str, Any] | 
                 return {
                     "name": name,
                     "service_time": service_time,
+                    "capacity": capacity,
                     "kind": kind,
                     "description": description,
                 }

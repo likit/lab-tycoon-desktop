@@ -158,6 +158,7 @@ class WorkflowGraph:
         name: str | None = None,
         throughput: float = 0.0,
         human_throughput: float = 0.0,
+        capacity: int = 1,
         description: str = "",
         required_staff: int = 0,
     ) -> BaseWidget:
@@ -170,6 +171,7 @@ class WorkflowGraph:
                 "node_type": node_type,
                 "throughput": float(throughput),
                 "human_throughput": float(human_throughput),
+                "capacity": max(1, int(capacity)),
                 "description": description,
                 "required_staff": int(required_staff),
             },
@@ -177,6 +179,7 @@ class WorkflowGraph:
         widget.node_type = node_type
         widget.throughput = throughput
         widget.human_throughput = human_throughput
+        widget.capacity = capacity
         widget.description = description
         widget.required_staff = required_staff
         return widget
