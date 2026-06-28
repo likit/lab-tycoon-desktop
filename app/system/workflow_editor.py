@@ -283,6 +283,7 @@ def _show_node_form_dialog(
             sg.Text("Description"),
             sg.Multiline(node.widget.description, key="-DESC-", size=(46, 4), expand_x=True),
         ],
+        [sg.Checkbox("Enabled", default=node.widget.enabled, key="-ENABLED-")],
         *(_connection_panes(workflow, exclude_node_id=node.node_id, node_id=node.node_id)),
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
@@ -315,6 +316,7 @@ def _show_node_form_dialog(
                     "human_throughput": human_throughput,
                     "capacity": capacity,
                     "required_staff": required_staff,
+                    "enabled": bool(values.get("-ENABLED-", False)),
                     "incoming_connection_node_id": _choice_to_node_id(str(values.get("-CONN-INCOMING-", ""))),
                     "outgoing_connection_node_id": _choice_to_node_id(str(values.get("-CONN-OUTGOING-", ""))),
                 }
@@ -616,9 +618,12 @@ class WorkflowGraphRenderer:
         width, height = layout.node_size(node)
         bounds = layout.node_bounds(node, center[0], center[1])
 
+        enabled = node.widget.enabled
         fill_color = "#dbeafe" if node.kind == "branch" else "#f8fafc"
-        line_color = "#1d4ed8" if selected else "#334155"
-        text_color = "#0f172a"
+        if not enabled:
+            fill_color = "#e5e7eb"
+        line_color = "#1d4ed8" if selected else ("#6b7280" if not enabled else "#334155")
+        text_color = "#0f172a" if enabled else "#4b5563"
         line_width = 4 if selected else 2
 
         if node.kind == "branch":
@@ -642,6 +647,23 @@ class WorkflowGraphRenderer:
                 line_width=line_width,
             )
 
+        if not enabled:
+            badge_x = center[0] + width / 2 - 16
+            badge_y = center[1] + height / 2 - 16
+            graph_canvas.draw_circle(
+                (badge_x, badge_y),
+                10,
+                fill_color="#dc2626",
+                line_color="#991b1b",
+                line_width=1,
+            )
+            graph_canvas.draw_text(
+                "×",
+                (badge_x, badge_y - 1),
+                color="white",
+                font=("Arial", 11, "bold"),
+            )
+
         graph_canvas.draw_text(
             node.widget.name,
             (center[0], center[1] + 10),
@@ -649,10 +671,14 @@ class WorkflowGraphRenderer:
             font=("Arial", 13, "bold"),
         )
         test_count = len(node.widget.metadata.get("analyzer_tests", []))
+        status_label = "Disabled" if not enabled else ""
+        label_parts = [f"Tests: {test_count}", f"Staff: {node.widget.required_staff}", f"Capacity: {node.widget.capacity}"]
+        if status_label:
+            label_parts.append(status_label)
         graph_canvas.draw_text(
-            f"Tests: {test_count} | Staff: {node.widget.required_staff} | Capacity: {node.widget.capacity}",
+            " | ".join(label_parts),
             (center[0], center[1] - 16),
-            color="#475569",
+            color="#6b7280" if not enabled else "#475569",
             font=("Arial", 10),
         )
         return bounds
@@ -735,6 +761,7 @@ class WorkflowEditorController:
             f"Selected: {node.widget.name}",
             f"ID: {node.node_id}",
             f"Type: {node.widget.node_type}",
+            f"Status: {'Enabled' if node.widget.enabled else 'Disabled'}",
             f"Processing Capacity (per hours): {node.widget.throughput:g}",
             f"Human Processing Capacity (per hour): {node.widget.human_throughput:g}",
             f"Capacity: {node.widget.capacity}",
@@ -983,6 +1010,7 @@ class WorkflowEditorController:
         human_throughput: float,
         capacity: int,
         required_staff: int,
+        enabled: bool = True,
         incoming_connection_node_id: str | None = None,
         outgoing_connection_node_id: str | None = None,
         window: sg.Window | None = None,
@@ -1004,6 +1032,7 @@ class WorkflowEditorController:
                 "description": description,
                 "required_staff": required_staff,
                 "capacity": capacity,
+                "enabled": enabled,
             },
             kind=node.kind,
         )
@@ -1011,6 +1040,7 @@ class WorkflowEditorController:
         node.widget.throughput = throughput
         node.widget.human_throughput = human_throughput
         node.widget.capacity = capacity
+        node.widget.enabled = enabled
         node.widget.description = description
         node.widget.required_staff = required_staff
         self._apply_connection_choices(
@@ -1117,6 +1147,7 @@ class WorkflowEditorController:
         kind: str,
         description: str,
         capacity: int = 1,
+        enabled: bool = True,
         incoming_connection_node_id: str | None = None,
         outgoing_connection_node_id: str | None = None,
         window: sg.Window | None = None,
@@ -1129,10 +1160,11 @@ class WorkflowEditorController:
             node.node_id,
             name=name,
             service_time=service_time,
-            metadata={**metadata, "capacity": capacity},
+            metadata={**metadata, "capacity": capacity, "enabled": enabled},
             kind=kind,
         )
         node.widget.capacity = capacity
+        node.widget.enabled = enabled
         self._apply_connection_choices(
             node.node_id,
             incoming_connection_node_id=incoming_connection_node_id,
@@ -1227,6 +1259,7 @@ def _show_node_properties_dialog(
             sg.Text("Description"),
             sg.Multiline(node.metadata.get("description", ""), key="-DESC-", size=(42, 4), expand_x=True),
         ],
+        [sg.Checkbox("Enabled", default=node.widget.enabled, key="-ENABLED-")],
         [
             sg.Frame(
                 "Connections",
@@ -1258,6 +1291,7 @@ def _show_node_properties_dialog(
                     "capacity": capacity,
                     "kind": kind,
                     "description": description,
+                    "enabled": bool(values.get("-ENABLED-", False)),
                     "incoming_connection_node_id": _choice_to_node_id(str(values.get("-CONN-INCOMING-", ""))),
                     "outgoing_connection_node_id": _choice_to_node_id(str(values.get("-CONN-OUTGOING-", ""))),
                 }

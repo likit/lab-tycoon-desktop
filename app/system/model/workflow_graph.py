@@ -159,6 +159,7 @@ class WorkflowGraph:
         throughput: float = 0.0,
         human_throughput: float = 0.0,
         capacity: int = 1,
+        enabled: bool = True,
         description: str = "",
         required_staff: int = 0,
     ) -> BaseWidget:
@@ -172,6 +173,7 @@ class WorkflowGraph:
                 "throughput": float(throughput),
                 "human_throughput": float(human_throughput),
                 "capacity": max(1, int(capacity)),
+                "enabled": bool(enabled),
                 "description": description,
                 "required_staff": int(required_staff),
             },
@@ -180,6 +182,7 @@ class WorkflowGraph:
         widget.throughput = throughput
         widget.human_throughput = human_throughput
         widget.capacity = capacity
+        widget.enabled = enabled
         widget.description = description
         widget.required_staff = required_staff
         return widget
@@ -293,6 +296,7 @@ class WorkflowGraph:
         service_time: float | None = None,
         metadata: dict[str, Any] | None = None,
         kind: str | None = None,
+        enabled: bool | None = None,
     ) -> None:
         """Update a node and keep widget metadata synchronized."""
 
@@ -307,6 +311,9 @@ class WorkflowGraph:
         if kind is not None:
             node.kind = kind
             node.widget.metadata["kind"] = kind
+        if enabled is not None:
+            node.metadata["enabled"] = enabled
+            node.widget.enabled = enabled
 
     def root_node_ids(self) -> list[str]:
         """Return nodes without any incoming edges."""

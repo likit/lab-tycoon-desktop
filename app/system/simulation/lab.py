@@ -264,7 +264,7 @@ class WorkflowRouter:
                 "Workflow has multiple root nodes. Merge the flows into a single chain before simulation."
             )
         if roots:
-            return roots[0]
+            return self.first_enabled_reachable_node_id(workflow, roots[0])
         if any(
             workflow.graph.incoming_edges(node.node_id) or workflow.graph.outgoing_edges(node.node_id)
             for node in workflow.graph.iter_nodes()
@@ -284,8 +284,36 @@ class WorkflowRouter:
                 active_roots.append(node_id)
         return active_roots
 
+    def first_enabled_reachable_node_id(
+        self,
+        workflow: Workflow,
+        start_node_id: str,
+        *,
+        blocked_node_ids: set[str] | None = None,
+    ) -> str | None:
+        """Return the first enabled node reachable from ``start_node_id``."""
+
+        if start_node_id not in workflow.graph.nodes:
+            return None
+
+        blocked = set(blocked_node_ids or set())
+        seen = set(blocked)
+        stack = [start_node_id]
+        while stack:
+            node_id = stack.pop()
+            if node_id in seen or node_id not in workflow.graph.nodes:
+                continue
+            seen.add(node_id)
+            node = workflow.graph.get_node(node_id)
+            if node is not None and node.widget.enabled:
+                return node_id
+            for edge in reversed(workflow.graph.outgoing_edges(node_id)):
+                if edge.target not in seen:
+                    stack.append(edge.target)
+        return None
+
     def reachable_node_ids(self, workflow: Workflow, start_node_id: str | None) -> list[str]:
-        """Return the nodes reachable from the start node, excluding disconnected islands."""
+        """Return the enabled nodes reachable from the start node."""
 
         if start_node_id is None:
             return []
@@ -298,7 +326,9 @@ class WorkflowRouter:
             if node_id in seen or node_id not in workflow.graph.nodes:
                 continue
             seen.add(node_id)
-            reachable.append(node_id)
+            node = workflow.graph.get_node(node_id)
+            if node is not None and node.widget.enabled:
+                reachable.append(node_id)
             for edge in workflow.graph.outgoing_edges(node_id):
                 if edge.target not in seen:
                     stack.append(edge.target)
@@ -308,7 +338,15 @@ class WorkflowRouter:
         outgoing = workflow.graph.outgoing_edges(current_node_id)
         if not outgoing:
             return None
-        return outgoing[0].target
+        for edge in outgoing:
+            next_node_id = self.first_enabled_reachable_node_id(
+                workflow,
+                edge.target,
+                blocked_node_ids={current_node_id},
+            )
+            if next_node_id is not None:
+                return next_node_id
+        return None
 
 
 class WorkflowSimulationEngine:
@@ -589,8 +627,11 @@ class WorkflowSimulationEngine:
 
         while current_node_id is not None:
             node = self.workflow.graph.get_node(current_node_id)
-            if node is None or node.node_id not in self.active_node_ids:
+            if node is None:
                 break
+            if not node.widget.enabled:
+                current_node_id = self.router.next_node_id(self.workflow, node.node_id, specimen)
+                continue
 
             specimen.record_event(node.widget.name, "arrived", time=self.env.now)
             node_wait_start = self.env.now

@@ -184,6 +184,51 @@ class WorkflowSimulationEngineTests(unittest.TestCase):
         self.assertIn("Review", summary)
         self.assertNotIn("Orphan", summary)
 
+    def test_disabled_analyzer_is_bypassed_in_favor_of_active_analyzer(self) -> None:
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 1.0)
+        skipped_analyzer = workflow.create_node(
+            "Analyzer A",
+            1.0,
+            metadata={
+                "node_type": "automated analyzer",
+                "analyzer_tests": ["CBC"],
+                "enabled": False,
+            },
+        )
+        active_analyzer = workflow.create_node(
+            "Analyzer B",
+            1.0,
+            metadata={
+                "node_type": "automated analyzer",
+                "analyzer_tests": ["CBC"],
+            },
+        )
+        workflow.graph.connect_nodes(intake.node_id, skipped_analyzer.node_id)
+        workflow.graph.connect_nodes(skipped_analyzer.node_id, active_analyzer.node_id)
+        workflow.create_connected_node(active_analyzer.node_id, "Release", 1.0)
+
+        order = InMemoryOrder(
+            id="ORD-2",
+            customer_id="P002",
+            order_datetime=datetime(2026, 5, 2, 11, 0, 0),
+            order_items=[InMemoryOrderItem(InMemoryTest("CBC"))],
+            priority="routine",
+            customer=InMemoryCustomer(id="P002", hn="P002", fullname="Uploaded Patient P002"),
+        )
+
+        result = run_workflow_simulation(
+            specimens_number=1,
+            workflow_document=WorkflowDocument.create("Workflow", workflow=workflow),
+            orders=[order],
+            random_seed=7,
+        )
+
+        self.assertEqual(len(result.completed_specimens), 1)
+        self.assertNotIn(skipped_analyzer.node_id, result.node_stats)
+        self.assertEqual(result.node_stats[active_analyzer.node_id].specimens_processed, 1)
+        self.assertEqual(result.completed_specimens[0].metadata["pending_tests"], [])
+
 
 class WorkflowSelectionTests(unittest.TestCase):
     def test_active_workflow_id_is_used_when_available(self) -> None:

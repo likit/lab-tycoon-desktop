@@ -63,6 +63,19 @@ class BaseWidget:
         self.metadata["human_throughput"] = float(value)
 
     @property
+    def enabled(self) -> bool:
+        """Return whether the node is active in simulation."""
+
+        value = self.metadata.get("enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"false", "0", "no", "off"}
+        return bool(value)
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self.metadata["enabled"] = bool(value)
+
+    @property
     def capacity(self) -> int:
         """Return the configured simulation capacity."""
 
@@ -175,6 +188,7 @@ class BaseWidget:
             "throughput": self.throughput,
             "human_throughput": self.human_throughput,
             "capacity": self.capacity,
+            "enabled": self.enabled,
             "description": self.description,
             "required_staff": self.required_staff,
         }
@@ -188,6 +202,13 @@ class BaseWidget:
             metadata = {}
 
         metadata = dict(metadata)
+        def _coerce_bool(value: object, default: bool = True) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, str):
+                return value.strip().lower() not in {"false", "0", "no", "off"}
+            return bool(value)
+
         if "node_type" not in metadata and data.get("node_type") is not None:
             metadata["node_type"] = str(data.get("node_type"))
         if "throughput" not in metadata and data.get("throughput") is not None:
@@ -196,6 +217,8 @@ class BaseWidget:
             metadata["human_throughput"] = float(data.get("human_throughput", 0.0))
         if "capacity" not in metadata and data.get("capacity") is not None:
             metadata["capacity"] = int(data.get("capacity", 1))
+        if "enabled" not in metadata and data.get("enabled") is not None:
+            metadata["enabled"] = _coerce_bool(data.get("enabled", True))
         if "description" not in metadata and data.get("description") is not None:
             metadata["description"] = str(data.get("description", ""))
         if "required_staff" not in metadata and data.get("required_staff") is not None:

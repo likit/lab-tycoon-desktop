@@ -111,6 +111,7 @@ class WorkflowCompatibilityTests(unittest.TestCase):
                 "throughput": 8.0,
                 "human_throughput": 1.5,
                 "capacity": 3,
+                "enabled": False,
                 "description": "Manual review",
                 "required_staff": 2,
             },
@@ -123,6 +124,7 @@ class WorkflowCompatibilityTests(unittest.TestCase):
         self.assertEqual(restored.throughput, 8.0)
         self.assertEqual(restored.human_throughput, 1.5)
         self.assertEqual(restored.capacity, 3)
+        self.assertFalse(restored.enabled)
         self.assertEqual(restored.description, "Manual review")
         self.assertEqual(restored.required_staff, 2)
 
@@ -130,6 +132,7 @@ class WorkflowCompatibilityTests(unittest.TestCase):
         widget = BaseWidget("Widget", 3.5, metadata={"description": "note"})
 
         self.assertEqual(widget.capacity, 1)
+        self.assertTrue(widget.enabled)
 
     def test_disconnect_selected_node_removes_connection(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -248,6 +251,29 @@ class WorkflowPersistenceTests(unittest.TestCase):
             incoming_sources = [edge.source for edge in workflow.graph.incoming_edges(middle.node_id)]
             self.assertIn(target.node_id, outgoing_targets)
             self.assertIn(source.node_id, incoming_sources)
+
+    def test_update_node_from_form_updates_enabled_state(self) -> None:
+        workflow = Workflow()
+        node = workflow.create_node("Node", 1.0)
+
+        controller = WorkflowEditorController()
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+
+        controller.update_node_from_form(
+            node.node_id,
+            node_type="specimens processing",
+            name="Node",
+            description="Updated",
+            throughput=1.0,
+            human_throughput=0.0,
+            capacity=1,
+            required_staff=0,
+            enabled=False,
+        )
+
+        updated = workflow.get_node(node.node_id)
+        assert updated is not None
+        self.assertFalse(updated.widget.enabled)
 
     def test_analyzer_test_selection_is_persisted_in_node_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -211,6 +211,7 @@ class Workflow:
         service_time: float | None = None,
         metadata: dict[str, object] | None = None,
         kind: str | None = None,
+        enabled: bool | None = None,
     ) -> None:
         """Update editable node properties."""
 
@@ -220,6 +221,7 @@ class Workflow:
             service_time=service_time,
             metadata=metadata,
             kind=kind,
+            enabled=enabled,
         )
 
     def delete_node(self, node_id: str) -> None:
