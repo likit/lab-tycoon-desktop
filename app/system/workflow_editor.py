@@ -17,6 +17,10 @@ from app.system.storage import WorkflowDocument, WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
+LEGACY_NODE_TYPE_ALIASES = {
+    "AI agent": "Evaluation",
+}
+
 
 def _notify(message: str) -> None:
     """Show a lightweight non-blocking workflow notification."""
@@ -59,6 +63,12 @@ def _choice_to_node_id(choice: str | None) -> str | None:
     if "::" not in choice:
         return None
     return choice.rsplit("::", 1)[1]
+
+
+def _normalize_node_type_label(node_type: str) -> str:
+    """Map legacy node type labels to their current display names."""
+
+    return LEGACY_NODE_TYPE_ALIASES.get(node_type, node_type)
 
 
 def _selected_connection_choices(
@@ -248,9 +258,11 @@ def _show_node_form_dialog(
         "manual analyzer",
         "result reporting",
         "result validating",
-        "AI agent",
+        "Evaluation",
     ]
-    current_type = node.widget.node_type if node.widget.node_type in node_types else node.kind
+    current_type = _normalize_node_type_label(node.widget.node_type)
+    if current_type not in node_types:
+        current_type = node.kind
     layout = [
         [
             sg.Text("Node type"),

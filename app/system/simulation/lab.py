@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 import random
@@ -10,8 +11,17 @@ from typing import Callable
 
 import simpy
 
+from app.system.governance import (
+    ACTION_REJECT_DUPLICATE,
+    GovernanceConsultation,
+    GovernanceEvent,
+    GovernanceProvider,
+    EVENT_DUPLICATE_ORDER_DETECTED,
+    SopAsCodeGovernanceProvider,
+)
 from app.system.model import Scenario, Specimen, Workflow, WorkflowNode
 from app.system.storage import WorkflowDocument, WorkflowRepository
+from app.system.signals.duplicate import detect_duplicate_candidate
 
 
 def _format_seconds(value: float) -> str:
@@ -96,6 +106,17 @@ def _finish_progress_line(completed: int, total: int) -> None:
 
     sys.stderr.write("\r" + f"Completed orders: {_render_progress_bar(completed, total)}\n")
     sys.stderr.flush()
+
+
+def _safe_copy(value: object) -> object:
+    """Copy workflow payloads defensively without failing on odd objects."""
+
+    if value is None:
+        return None
+    try:
+        return deepcopy(value)
+    except Exception:
+        return value
 
 
 @dataclass(slots=True)
@@ -196,6 +217,7 @@ class WorkflowSimulationResult:
     node_stats: dict[str, NodeSimulationStats] = field(default_factory=dict)
     completed_specimens: list[Specimen] = field(default_factory=list)
     active_node_ids: list[str] = field(default_factory=list)
+    governance_consultations: list[GovernanceConsultation] = field(default_factory=list)
 
     def summary_rows(self, workflow: Workflow, staff_capacity: int | None = None) -> list[list[str]]:
         """Build rows for the summary table."""
@@ -252,6 +274,38 @@ class WorkflowSimulationResult:
             return "\n".join([_format_row(headers), separator, *(_format_row(row) for row in rows)])
 
         return tabulate(rows, headers=headers, tablefmt="github")
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the result bundle for export and debugging."""
+
+        return {
+            "workflow_name": self.workflow_name,
+            "specimens_number": self.specimens_number,
+            "makespan": self.makespan,
+            "staff_capacity": self.staff_capacity,
+            "node_stats": {
+                node_id: {
+                    "node_id": stats.node_id,
+                    "node_name": stats.node_name,
+                    "specimens_processed": stats.specimens_processed,
+                    "total_wait_time": stats.total_wait_time,
+                    "total_processing_time": stats.total_processing_time,
+                    "total_time_spent": stats.total_time_spent,
+                    "total_staff_busy_time": stats.total_staff_busy_time,
+                }
+                for node_id, stats in self.node_stats.items()
+            },
+            "completed_specimens": [
+                {
+                    "specimen_id": specimen.specimen_id,
+                    "metadata": dict(specimen.metadata),
+                    "history": list(specimen.history),
+                }
+                for specimen in self.completed_specimens
+            ],
+            "active_node_ids": list(self.active_node_ids),
+            "governance_consultations": [consultation.to_dict() for consultation in self.governance_consultations],
+        }
 
 
 class WorkflowRouter:
@@ -362,6 +416,8 @@ class WorkflowSimulationEngine:
         router: WorkflowRouter | None = None,
         specimens: list[Specimen] | None = None,
         on_specimen_completed: Callable[[int, int], None] | None = None,
+        governance_provider: GovernanceProvider | None = None,
+        debug_governance: bool = False,
     ) -> None:
         self.workflow = workflow
         self.settings = settings
@@ -375,6 +431,10 @@ class WorkflowSimulationEngine:
             self.env = simpy.Environment()
         self.rng = random.Random(settings.random_seed)
         self.completed_specimens: list[Specimen] = []
+        self.governance_provider = governance_provider or SopAsCodeGovernanceProvider()
+        self.governance_consultations: list[GovernanceConsultation] = []
+        self.debug_governance = debug_governance
+        self._observed_orders: list[object] = []
         self.specimens = (
             specimens
             if specimens is not None
@@ -459,6 +519,242 @@ class WorkflowSimulationEngine:
 
     def _set_specimen_pending_tests(self, specimen: Specimen, pending_tests: list[str]) -> None:
         specimen.metadata["pending_tests"] = list(pending_tests)
+
+    def _node_uses_duplicate_detection(self, node: WorkflowNode) -> bool:
+        """Return whether this node should run the duplicate-order adapter."""
+
+        if node.widget.node_type in {"Evaluation", "AI agent"}:
+            return True
+        return node.metadata.get("plugin") == "duplicate_order_detector"
+
+    def _build_duplicate_detection_context(self, specimen: Specimen) -> tuple[object | None, list[object]]:
+        """Build the order and prior-order context required by the duplicate detector."""
+
+        arrival_index = int(specimen.metadata.get("arrival_index", len(self._observed_orders)))
+        prior_orders = [
+            order
+            for order in self._observed_orders[:arrival_index]
+            if order is not None
+        ]
+        return specimen.payload, prior_orders
+
+    def _run_duplicate_detection_adapter(self, *, node: WorkflowNode, specimen: Specimen) -> bool:
+        """Run the temporary duplicate-order adapter for evaluation nodes."""
+
+        current_order, prior_orders = self._build_duplicate_detection_context(specimen)
+        specimen_id = specimen.specimen_id
+        order_id = self._order_id_for_specimen(specimen) or str(specimen.metadata.get("order_id") or "")
+        detection_run = current_order is not None
+        duplicate_candidate = False
+        consultation_created = False
+
+        if detection_run:
+            duplicate_candidate = detect_duplicate_candidate(current_order, prior_orders)
+
+        if duplicate_candidate:
+            governance_event = GovernanceEvent(
+                event_type=EVENT_DUPLICATE_ORDER_DETECTED,
+                node_id=node.node_id,
+                order_id=self._order_id_for_specimen(specimen),
+                specimen_id=specimen.specimen_id,
+                sim_time=self.env.now,
+                context={
+                    "order": current_order,
+                    "prior_orders": prior_orders,
+                    "duplicate_candidate": True,
+                    "matched_action": "REQUEST_REVIEW",
+                    "node_name": node.widget.name,
+                    "node_type": node.widget.node_type,
+                    "workflow_name": self.workflow_name,
+                },
+            )
+            self._consult_governance_event(governance_event, specimen=specimen)
+            consultation_created = True
+
+        self._debug_duplicate_detection(
+            node_id=node.node_id,
+            specimen_id=specimen_id,
+            order_id=order_id or "-",
+            detection_run=detection_run,
+            duplicate_candidate=duplicate_candidate,
+            consultation_created=consultation_created,
+        )
+        return duplicate_candidate
+
+    def _debug_duplicate_detection(
+        self,
+        *,
+        node_id: str,
+        specimen_id: str,
+        order_id: str,
+        detection_run: bool,
+        duplicate_candidate: bool,
+        consultation_created: bool,
+    ) -> None:
+        """Print temporary adapter diagnostics when debug output is enabled."""
+
+        if not self.debug_governance:
+            return
+        print(
+            "Governance debug: "
+            f"node_id={node_id} "
+            f"specimen_id={specimen_id} "
+            f"order_id={order_id} "
+            f"detection_run={detection_run} "
+            f"duplicate_candidate={duplicate_candidate} "
+            f"consultation_created={consultation_created}"
+        )
+
+    def _consult_governance_event(self, governance_event: GovernanceEvent, *, specimen: Specimen | None = None) -> None:
+        """Evaluate and log one governance event."""
+
+        decision = self.governance_provider.evaluate(governance_event)
+        consultation = GovernanceConsultation(
+            sim_time=governance_event.sim_time,
+            event_type=governance_event.event_type,
+            node_id=governance_event.node_id,
+            order_id=governance_event.order_id,
+            specimen_id=governance_event.specimen_id,
+            provider_name=self.governance_provider.provider_name,
+            decision_action=decision.action,
+            requires_human=decision.requires_human,
+            reason=decision.reason,
+            metadata={
+                **deepcopy(decision.metadata),
+                "target_node": decision.target_node,
+            },
+        )
+        self.governance_consultations.append(consultation)
+        specimen = specimen or governance_event.context.get("specimen")
+        specimen_metadata = getattr(specimen, "metadata", None)
+        if isinstance(specimen_metadata, dict):
+            consultation_log = specimen_metadata.get("governance_consultations")
+            if not isinstance(consultation_log, list):
+                consultation_log = []
+                specimen_metadata["governance_consultations"] = consultation_log
+            consultation_log.append(consultation.to_dict())
+
+    def _governance_events_for_node(self, node: WorkflowNode) -> list[dict[str, object]]:
+        """Return governance event declarations attached to a workflow node."""
+
+        declared_events = node.metadata.get("governance_events")
+        if isinstance(declared_events, list) and declared_events:
+            events: list[dict[str, object]] = []
+            for item in declared_events:
+                if isinstance(item, str):
+                    events.append({"event_type": item.upper()})
+                elif isinstance(item, dict) and item.get("event_type"):
+                    normalized_item = dict(item)
+                    normalized_item["event_type"] = str(normalized_item["event_type"]).upper()
+                    events.append(normalized_item)
+            if events:
+                return events
+
+        if node.widget.node_type == "specimen registration":
+            return [
+                {"event_type": "ORDER_RECEIVED"},
+                {"event_type": "DUPLICATE_ORDER_CHECK"},
+            ]
+
+        return []
+
+    def _order_id_for_specimen(self, specimen: Specimen) -> str | None:
+        order_id = specimen.metadata.get("order_id")
+        if order_id is not None:
+            return str(order_id)
+
+        payload = specimen.payload
+        if payload is not None and hasattr(payload, "id"):
+            value = getattr(payload, "id")
+            if value is not None:
+                return str(value)
+        return None
+
+    def _governance_context(
+        self,
+        *,
+        node: WorkflowNode,
+        specimen: Specimen,
+        governance_event: dict[str, object],
+    ) -> dict[str, object]:
+        """Build the compact context passed to the governance provider."""
+
+        arrival_index = int(specimen.metadata.get("arrival_index", len(self._observed_orders)))
+        prior_orders = [
+            order
+            for order in self._observed_orders[:arrival_index]
+            if order is not None
+        ]
+        context: dict[str, object] = {
+            "workflow_name": self.workflow_name,
+            "node_name": node.widget.name,
+            "node_type": node.widget.node_type,
+            "specimen": specimen,
+            "payload": specimen.payload if isinstance(specimen.payload, dict) else _safe_copy(specimen.payload),
+            "prior_orders": prior_orders,
+        }
+        governance_context = node.metadata.get("governance_context", {})
+        if isinstance(governance_context, dict):
+            context.update(governance_context)
+
+        for key in ("target_node", "matched_action", "human_review_status", "patient_id", "test_code"):
+            if key in governance_event and governance_event[key] is not None:
+                context[key] = governance_event[key]
+
+        if "payload" not in context or context["payload"] is None:
+            context["payload"] = specimen.metadata.get("governance_payload", {})
+        return context
+
+    def _consult_governance(
+        self,
+        *,
+        node: WorkflowNode,
+        specimen: Specimen,
+    ) -> tuple[bool, str | None]:
+        """Consult governance events attached to the current node."""
+
+        next_node_override: str | None = None
+        for governance_event_config in self._governance_events_for_node(node):
+            event_type = str(governance_event_config.get("event_type", "")).strip().upper()
+            if not event_type:
+                continue
+
+            governance_event = GovernanceEvent(
+                event_type=event_type,
+                node_id=node.node_id,
+                order_id=self._order_id_for_specimen(specimen),
+                specimen_id=specimen.specimen_id,
+                sim_time=self.env.now,
+                context=self._governance_context(
+                    node=node,
+                    specimen=specimen,
+                    governance_event=governance_event_config,
+                ),
+            )
+            governance_event.context["specimen"] = specimen
+            self._consult_governance_event(governance_event)
+
+            if (
+                decision.target_node
+                and decision.target_node != node.node_id
+                and decision.target_node in self.workflow.graph.nodes
+            ):
+                next_node_override = decision.target_node
+
+            if decision.action == ACTION_REJECT_DUPLICATE:
+                specimen.record_event(
+                    node.widget.name,
+                    "governance_rejected",
+                    action=decision.action,
+                    reason=decision.reason,
+                    time=self.env.now,
+                )
+                self.completed_specimens.append(specimen)
+                if self.on_specimen_completed is not None:
+                    self.on_specimen_completed(len(self.completed_specimens), len(self.specimens))
+                return True, next_node_override
+
+        return False, next_node_override
 
     def _process_analyzer_node(
         self,
@@ -634,6 +930,13 @@ class WorkflowSimulationEngine:
                 continue
 
             specimen.record_event(node.widget.name, "arrived", time=self.env.now)
+            if self._node_uses_duplicate_detection(node):
+                self._run_duplicate_detection_adapter(node=node, specimen=specimen)
+                current_node_id = self.router.next_node_id(self.workflow, node.node_id, specimen)
+                continue
+            governance_stopped, next_node_override = self._consult_governance(node=node, specimen=specimen)
+            if governance_stopped:
+                return
             node_wait_start = self.env.now
             with self.node_resources[node.node_id].request() as node_request:
                 yield node_request
@@ -713,7 +1016,7 @@ class WorkflowSimulationEngine:
                         time=self.env.now,
                     )
 
-            current_node_id = self.router.next_node_id(self.workflow, node.node_id, specimen)
+            current_node_id = next_node_override or self.router.next_node_id(self.workflow, node.node_id, specimen)
 
         specimen.record_event("workflow", "completed", time=self.env.now)
         self.completed_specimens.append(specimen)
@@ -722,6 +1025,9 @@ class WorkflowSimulationEngine:
 
     def _arrival_process(self):
         for specimen_index in range(len(self.specimens)):
+            specimen = self.specimens[specimen_index]
+            specimen.metadata["arrival_index"] = specimen_index
+            self._observed_orders.append(specimen.payload)
             self.env.process(self._specimen_process(specimen_index))
             if specimen_index + 1 < len(self.specimens) and self.settings.interarrival_time > 0:
                 yield self.env.timeout(self.settings.interarrival_time)
@@ -736,6 +1042,7 @@ class WorkflowSimulationEngine:
                 makespan=0.0,
                 staff_capacity=self.staff_capacity,
                 active_node_ids=self.active_node_ids,
+                governance_consultations=self.governance_consultations,
             )
 
         self.env.process(self._arrival_process())
@@ -749,6 +1056,7 @@ class WorkflowSimulationEngine:
             node_stats=self.node_stats,
             completed_specimens=self.completed_specimens,
             active_node_ids=self.active_node_ids,
+            governance_consultations=self.governance_consultations,
         )
 
 
@@ -799,6 +1107,8 @@ def run_workflow_simulation(
     realtime_factor: float | None = None,
     orders: list[object] | None = None,
     on_specimen_completed: Callable[[int, int], None] | None = None,
+    governance_provider: GovernanceProvider | None = None,
+    debug_governance: bool = False,
 ) -> WorkflowSimulationResult:
     """Load a workflow, simulate it, and return the result bundle."""
 
@@ -824,6 +1134,8 @@ def run_workflow_simulation(
         scenario=scenario,
         specimens=specimens,
         on_specimen_completed=on_specimen_completed,
+        governance_provider=governance_provider,
+        debug_governance=debug_governance,
     )
     return engine.run()
 
@@ -836,6 +1148,8 @@ def run_and_print_workflow_simulation(
     random_seed: int | None = None,
     realtime_factor: float | None = None,
     orders: list[object] | None = None,
+    governance_provider: GovernanceProvider | None = None,
+    debug_governance: bool = False,
 ) -> WorkflowSimulationResult:
     """Convenience wrapper for the CLI."""
 
@@ -866,6 +1180,8 @@ def run_and_print_workflow_simulation(
         scenario=scenario,
         specimens=specimens,
         on_specimen_completed=on_specimen_completed,
+        governance_provider=governance_provider,
+        debug_governance=debug_governance,
     )
     result = engine.run()
     if total_specimens > 0:
@@ -876,4 +1192,19 @@ def run_and_print_workflow_simulation(
     print(f"Specimens: {result.specimens_number}")
     print(f"Makespan: {_format_seconds(result.makespan)}")
     print(result.format_summary_table(workflow_document.workflow, staff_capacity=result.staff_capacity))
+    if result.governance_consultations:
+        print("Governance consultations:")
+        for consultation in result.governance_consultations:
+            print(
+                "- "
+                f"t={_format_seconds(consultation.sim_time)} "
+                f"node={consultation.node_id} "
+                f"event={consultation.event_type} "
+                f"order={consultation.order_id or '-'} "
+                f"specimen={consultation.specimen_id or '-'} "
+                f"provider={consultation.provider_name} "
+                f"action={consultation.decision_action} "
+                f"human={consultation.requires_human} "
+                f"reason={consultation.reason}"
+            )
     return result

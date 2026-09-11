@@ -6,7 +6,12 @@ import argparse
 import sys
 
 from app.system.order_sources import UploadedOrderValidationError, load_uploaded_order_source, use_uploaded_order_source
-from app.system.simulation import run_and_print_workflow_simulation
+from app.system.governance import (
+    export_governance_consultations_to_csv,
+    export_governance_consultations_to_json,
+    export_simulation_result_to_json,
+)
+from app.system.simulation import load_workflow_document_for_simulation, run_and_print_workflow_simulation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +52,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Random seed for reproducible simulations.",
     )
+    parser.add_argument(
+        "--export-governance-log",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Export governance consultation records to CSV or JSON after simulation.",
+    )
+    parser.add_argument(
+        "--export-simulation-result",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Export the structured simulation result as JSON after simulation.",
+    )
+    parser.add_argument(
+        "--debug-governance",
+        action="store_true",
+        help="Print governance diagnostics before and after simulation.",
+    )
     return parser
 
 
@@ -70,13 +94,28 @@ def main(argv: list[str] | None = None) -> int:
         elif specimens_number is None or specimens_number <= 0:
             parser.error("--specimens-number must be a positive integer when --simulate is used.")
         try:
-            run_and_print_workflow_simulation(
+            if args.debug_governance:
+                workflow_document = load_workflow_document_for_simulation(
+                    workflow_id=args.workflow_id,
+                )
+                _print_governance_debug_info(workflow_document.workflow)
+            result = run_and_print_workflow_simulation(
                 specimens_number=specimens_number,
                 workflow_id=args.workflow_id,
                 realtime_factor=args.factor,
                 random_seed=args.seed,
                 orders=orders,
+                debug_governance=args.debug_governance,
             )
+            if args.debug_governance:
+                _print_governance_debug_result(result.governance_consultations)
+            if args.export_governance_log:
+                _export_governance_consultations(
+                    result.governance_consultations,
+                    args.export_governance_log,
+                )
+            if args.export_simulation_result:
+                export_simulation_result_to_json(result, args.export_simulation_result)
         except ValueError as exc:
             message = str(exc)
             if "multiple root nodes" in message or "no root node" in message:
@@ -105,6 +144,64 @@ def main(argv: list[str] | None = None) -> int:
 
     run_app()
     return 0
+
+
+def _export_governance_consultations(consultations: list[object], path: str) -> None:
+    """Export governance consultations using the format implied by the file suffix."""
+
+    if path.lower().endswith(".csv"):
+        export_governance_consultations_to_csv(consultations, path)
+        return
+
+    export_governance_consultations_to_json(consultations, path)
+
+
+def _print_governance_debug_info(workflow: object) -> None:
+    """Print governance-related workflow metadata before simulation."""
+
+    print("Governance debug: workflow inspection")
+    for node in workflow.graph.iter_nodes():
+        governance_events = node.metadata.get("governance_events")
+        can_emit = _node_can_emit_governance_events(node)
+        print(
+            "- "
+            f"node_id={node.node_id} "
+            f"widget.name={node.widget.name} "
+            f"widget.node_type={node.widget.node_type} "
+            f"metadata.governance_events={governance_events} "
+            f"can_emit_governance_events={can_emit}"
+        )
+
+
+def _print_governance_debug_result(consultations: list[object]) -> None:
+    """Print a short governance summary after simulation."""
+
+    print(f"Governance consultations total: {len(consultations)}")
+    if not consultations:
+        return
+
+    print("Governance consultations preview:")
+    for consultation in consultations[:5]:
+        if hasattr(consultation, "to_dict") and callable(getattr(consultation, "to_dict")):
+            payload = consultation.to_dict()
+        elif isinstance(consultation, dict):
+            payload = consultation
+        else:
+            payload = {"value": consultation}
+        print(f"- {payload}")
+
+
+def _node_can_emit_governance_events(node: object) -> bool:
+    """Mirror the current simulation rule for governance event emission."""
+
+    metadata = getattr(node, "metadata", {})
+    governance_events = metadata.get("governance_events")
+    if isinstance(governance_events, list) and governance_events:
+        return True
+    node_type = getattr(getattr(node, "widget", None), "node_type", None)
+    if node_type in {"specimen registration", "Evaluation", "AI agent"}:
+        return True
+    return metadata.get("plugin") == "duplicate_order_detector"
 
 
 if __name__ == "__main__":

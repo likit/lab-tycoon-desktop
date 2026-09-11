@@ -11,6 +11,7 @@ from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.system.workflow_editor import (
     WorkflowEditorController,
     WorkflowLayoutEngine,
+    _normalize_node_type_label,
     _selected_connection_choices,
     _workflow_node_choices,
 )
@@ -67,6 +68,10 @@ class WorkflowGraphModelTests(unittest.TestCase):
         self.assertEqual(outgoing_targets, [replacement_target.node_id])
         self.assertEqual(source.widget.downstream_widgets, [replacement_target.widget])
         self.assertEqual(initial_target.widget.downstream_widgets, [])
+
+    def test_legacy_ai_agent_node_type_normalizes_to_evaluation(self) -> None:
+        self.assertEqual(_normalize_node_type_label("AI agent"), "Evaluation")
+        self.assertEqual(_normalize_node_type_label("Evaluation"), "Evaluation")
 
 
 class WorkflowLayoutTests(unittest.TestCase):
