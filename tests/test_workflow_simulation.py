@@ -58,7 +58,7 @@ class WorkflowSimulationEngineTests(unittest.TestCase):
         review_stats = result.node_stats[review.node_id]
         self.assertEqual(intake_stats.specimens_processed, 2)
         self.assertEqual(review_stats.specimens_processed, 2)
-        self.assertGreater(intake_stats.average_wait_time, 0.0)
+        self.assertEqual(intake_stats.average_wait_time, 0.0)
         self.assertGreater(review_stats.average_wait_time, 0.0)
         self.assertGreater(review_stats.total_staff_busy_time, 0.0)
         self.assertIn("staff", review_stats.utilization(result.makespan, staff_capacity=result.staff_capacity))

@@ -130,3 +130,9 @@ dmypy.json
 .pyre/
 
 app.db
+
+# Local IDE and generated simulation output
+.idea/
+results/
+run_log.txt
+governance_logs.txt

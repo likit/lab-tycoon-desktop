@@ -697,6 +697,7 @@ class WorkflowSimulationEngine:
             "node_name": node.widget.name,
             "node_type": node.widget.node_type,
             "specimen": specimen,
+            "order": specimen.payload,
             "payload": specimen.payload if isinstance(specimen.payload, dict) else _safe_copy(specimen.payload),
             "prior_orders": prior_orders,
         }

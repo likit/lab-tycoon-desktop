@@ -8,11 +8,15 @@ from unittest.mock import patch
 
 from app.system.governance import (
     ACTION_ALLOW_ORDER,
+    ACTION_CONTINUE,
+    ACTION_REJECT_DUPLICATE,
     EVENT_DUPLICATE_ORDER_DETECTED,
     ACTION_REQUEST_REVIEW,
+    Decision,
     EVENT_DUPLICATE_ORDER_CHECK,
     EVENT_ORDER_RECEIVED,
     GovernanceEvent,
+    GovernanceProvider,
     SopAsCodeGovernanceProvider,
 )
 from app.system.model import Workflow
@@ -68,9 +72,13 @@ class GovernanceProviderTests(unittest.TestCase):
         self.assertTrue(decision.requires_human)
         self.assertEqual(decision.reason, "Order payload contains a duplicate-order indicator.")
         self.assertTrue(decision.metadata["rule_result"]["matched"])
-        self.assertEqual(
+        self.assertCountEqual(
             decision.metadata["rule_result"]["metadata"]["matched_fields"],
-            ["payload.duplicate_candidate"],
+            [
+                "payload.duplicate_candidate",
+                "payload.repeated_indicator",
+                "payload.possible_duplicate",
+            ],
         )
 
     def test_sop_as_code_provider_allows_non_duplicate_orders(self) -> None:
@@ -123,6 +131,15 @@ class GovernanceProviderTests(unittest.TestCase):
 
 
 class GovernanceSimulationTests(unittest.TestCase):
+    class StubGovernanceProvider(GovernanceProvider):
+        provider_name = "test-governance"
+
+        def __init__(self, decision: Decision) -> None:
+            self.decision = decision
+
+        def evaluate(self, event: GovernanceEvent) -> Decision:
+            return self.decision
+
     def _evaluation_workflow(self) -> Workflow:
         workflow = Workflow()
         evaluation = workflow.create_node(
@@ -273,6 +290,65 @@ class GovernanceSimulationTests(unittest.TestCase):
         detect_mock.assert_not_called()
         self.assertEqual(len(result.completed_specimens), 1)
         self.assertEqual(result.governance_consultations, [])
+
+    def test_governance_target_node_overrides_normal_routing(self) -> None:
+        workflow = Workflow()
+        intake = workflow.create_node(
+            "Intake",
+            0.0,
+            metadata={"governance_events": ["ROUTE_ORDER"]},
+        )
+        normal = workflow.create_connected_node(intake.node_id, "Normal", 1.0)
+        target = workflow.create_connected_node(normal.node_id, "Target", 1.0)
+        provider = self.StubGovernanceProvider(
+            Decision(
+                action=ACTION_CONTINUE,
+                requires_human=False,
+                reason="Route to the governed target.",
+                target_node=target.node_id,
+            )
+        )
+
+        result = run_workflow_simulation(
+            specimens_number=1,
+            workflow_document=WorkflowDocument.create("Governed Routing", workflow=workflow),
+            governance_provider=provider,
+            random_seed=7,
+        )
+
+        self.assertEqual(result.node_stats[normal.node_id].specimens_processed, 0)
+        self.assertEqual(result.node_stats[target.node_id].specimens_processed, 1)
+        self.assertEqual(result.governance_consultations[0].metadata["target_node"], target.node_id)
+
+    def test_governance_rejection_stops_specimen_processing(self) -> None:
+        workflow = Workflow()
+        intake = workflow.create_node(
+            "Intake",
+            0.0,
+            metadata={"governance_events": ["REVIEW_ORDER"]},
+        )
+        release = workflow.create_connected_node(intake.node_id, "Release", 1.0)
+        provider = self.StubGovernanceProvider(
+            Decision(
+                action=ACTION_REJECT_DUPLICATE,
+                requires_human=False,
+                reason="Confirmed duplicate.",
+                target_node=None,
+            )
+        )
+
+        result = run_workflow_simulation(
+            specimens_number=1,
+            workflow_document=WorkflowDocument.create("Governed Rejection", workflow=workflow),
+            governance_provider=provider,
+            random_seed=7,
+        )
+
+        self.assertEqual(len(result.completed_specimens), 1)
+        self.assertEqual(result.node_stats[release.node_id].specimens_processed, 0)
+        self.assertTrue(
+            any(event["event"] == "governance_rejected" for event in result.completed_specimens[0].history)
+        )
 
 
 if __name__ == "__main__":

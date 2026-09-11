@@ -241,8 +241,11 @@ def _load_yaml_rule(path: Path) -> dict[str, Any]:
     """Load a YAML rule file, using a tiny fallback parser if PyYAML is absent."""
 
     if yaml is not None:
-        with path.open("r", encoding="utf-8") as handle:
-            return yaml.safe_load(handle) or {}
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return yaml.safe_load(handle) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML rule: {path}") from exc
     return _load_simple_rule_yaml(path.read_text(encoding="utf-8"))
 
 

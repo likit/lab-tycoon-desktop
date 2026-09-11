@@ -258,27 +258,28 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertIn(source.node_id, incoming_sources)
 
     def test_update_node_from_form_updates_enabled_state(self) -> None:
-        workflow = Workflow()
-        node = workflow.create_node("Node", 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workflow = Workflow()
+            node = workflow.create_node("Node", 1.0)
 
-        controller = WorkflowEditorController()
-        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+            controller = WorkflowEditorController(repository=WorkflowRepository(tmpdir))
+            controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
 
-        controller.update_node_from_form(
-            node.node_id,
-            node_type="specimens processing",
-            name="Node",
-            description="Updated",
-            throughput=1.0,
-            human_throughput=0.0,
-            capacity=1,
-            required_staff=0,
-            enabled=False,
-        )
+            controller.update_node_from_form(
+                node.node_id,
+                node_type="specimens processing",
+                name="Node",
+                description="Updated",
+                throughput=1.0,
+                human_throughput=0.0,
+                capacity=1,
+                required_staff=0,
+                enabled=False,
+            )
 
-        updated = workflow.get_node(node.node_id)
-        assert updated is not None
-        self.assertFalse(updated.widget.enabled)
+            updated = workflow.get_node(node.node_id)
+            assert updated is not None
+            self.assertFalse(updated.widget.enabled)
 
     def test_analyzer_test_selection_is_persisted_in_node_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -302,28 +303,29 @@ class WorkflowPersistenceTests(unittest.TestCase):
             self.assertEqual(stored_node.widget.metadata["analyzer_tests"], ["CBC", "GLU"])
 
     def test_editing_node_type_does_not_change_kind(self) -> None:
-        workflow = Workflow()
-        root = workflow.create_node("Root", 1.0)
-        branch = workflow.create_branch_node(root.node_id, "Branch")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workflow = Workflow()
+            root = workflow.create_node("Root", 1.0)
+            branch = workflow.create_branch_node(root.node_id, "Branch")
 
-        controller = WorkflowEditorController()
-        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+            controller = WorkflowEditorController(repository=WorkflowRepository(tmpdir))
+            controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
 
-        controller.update_node_from_form(
-            branch.node_id,
-            node_type="manual analyzer",
-            name="Branch",
-            description="Updated",
-            throughput=2.0,
-            human_throughput=1.5,
-            capacity=2,
-            required_staff=1,
-        )
+            controller.update_node_from_form(
+                branch.node_id,
+                node_type="manual analyzer",
+                name="Branch",
+                description="Updated",
+                throughput=2.0,
+                human_throughput=1.5,
+                capacity=2,
+                required_staff=1,
+            )
 
-        updated = workflow.get_node(branch.node_id)
-        assert updated is not None
-        self.assertEqual(updated.kind, "branch")
-        self.assertEqual(updated.widget.node_type, "manual analyzer")
+            updated = workflow.get_node(branch.node_id)
+            assert updated is not None
+            self.assertEqual(updated.kind, "branch")
+            self.assertEqual(updated.widget.node_type, "manual analyzer")
 
 
 if __name__ == "__main__":
