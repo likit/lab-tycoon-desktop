@@ -13,6 +13,7 @@ import simpy
 
 from app.system.governance import (
     ACTION_REJECT_DUPLICATE,
+    Decision,
     GovernanceConsultation,
     GovernanceEvent,
     GovernanceProvider,
@@ -605,7 +606,12 @@ class WorkflowSimulationEngine:
             f"consultation_created={consultation_created}"
         )
 
-    def _consult_governance_event(self, governance_event: GovernanceEvent, *, specimen: Specimen | None = None) -> None:
+    def _consult_governance_event(
+        self,
+        governance_event: GovernanceEvent,
+        *,
+        specimen: Specimen | None = None,
+    ) -> Decision:
         """Evaluate and log one governance event."""
 
         decision = self.governance_provider.evaluate(governance_event)
@@ -633,6 +639,7 @@ class WorkflowSimulationEngine:
                 consultation_log = []
                 specimen_metadata["governance_consultations"] = consultation_log
             consultation_log.append(consultation.to_dict())
+        return decision
 
     def _governance_events_for_node(self, node: WorkflowNode) -> list[dict[str, object]]:
         """Return governance event declarations attached to a workflow node."""
@@ -732,7 +739,7 @@ class WorkflowSimulationEngine:
                 ),
             )
             governance_event.context["specimen"] = specimen
-            self._consult_governance_event(governance_event)
+            decision = self._consult_governance_event(governance_event)
 
             if (
                 decision.target_node
