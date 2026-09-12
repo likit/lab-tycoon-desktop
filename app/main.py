@@ -12,6 +12,7 @@ from app.auth.windows import (create_signin_window,
                               create_register_window,
                               create_user_list_window)
 from app.system.models import ensure_db_schema, initialize_db
+from app.system.floor_view import create_floor_view_window
 from app.config import DATABASE_PATH, secret_key
 from app.auth.windows import SessionManager
 from app.system.windows import *
@@ -48,7 +49,7 @@ sg.set_options(font=('Helvetica', 12))
 menu_def = [
     ['Users', ['Register', 'Manage']],
     ['Tests', ['List']],
-    ['Simulation', ['Workflow Editor', 'Rule Preview']],
+    ['Simulation', ['Workflow Editor', 'Rule Preview', 'Floor view']],
     ['Tools', ['SQL Editor']],
     ['About', ['Program']],
 ]
@@ -148,6 +149,8 @@ def run_app():
             create_workflow_window()
         elif event == 'Rule Preview' or event == '-RULE-PREVIEW-':
             create_rule_preview_window()
+        elif event == 'Floor view':
+            create_floor_view_window()
         elif event == '-ANALYZE-':
             create_analysis_window()
         elif event == '-ORDERS-':
