@@ -9,6 +9,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from app.config import secret_key, logger
+from app.ui_styles import DANGER_BUTTON_COLOR
 from app.system.models import engine, User, UserRole
 
 
@@ -62,7 +63,7 @@ def create_signin_window():
     layout = [
         [sg.Text('Username', size=(8, 1)), sg.InputText(focus=True, key='username')],
         [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*', key='password')],
-        [sg.Button('Submit'), sg.Exit()],
+        [sg.Button('Submit'), sg.Exit(button_color=DANGER_BUTTON_COLOR)],
     ]
 
     window = sg.Window('Sign In', layout=layout, modal=True)
@@ -121,7 +122,7 @@ def create_profile_window():
             [
                 sg.Button('Change Password', key='-PASSWORD-', button_color=('white', 'red')),
                 sg.Button('Save'),
-                sg.CloseButton('Close')
+                sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)
              ],
         ]
 
@@ -152,7 +153,7 @@ def create_password_setting_window():
         [sg.Text('Old Password', size=(15, 1)), sg.InputText(key='-OLD-PWD-', password_char='*')],
         [sg.Text('New Password', size=(15, 1)), sg.InputText(key='-NEW-PWD-', password_char='*')],
         [sg.Text('Confirm Password', size=(15, 1)), sg.InputText(key='-CF-PWD-', password_char='*')],
-        [sg.Button('Submit'), sg.CloseButton('Close')]
+        [sg.Button('Submit'), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)]
     ]
     window = sg.Window('User Profile', layout=layout, modal=True)
 
@@ -189,7 +190,7 @@ def create_register_window():
         [sg.Text('License ID', size=(8, 1)), sg.InputText(key='license_id')],
         [sg.Text('Username', size=(8, 1)), sg.InputText(key='username')],
         [sg.Text('Password', size=(8, 1)), sg.Input(password_char='*', key='password')],
-        [sg.Button('Submit'), sg.Exit()],
+        [sg.Button('Submit'), sg.Exit(button_color=DANGER_BUTTON_COLOR)],
     ]
 
     window = sg.Window('Register', layout=layout, modal=True)
@@ -231,7 +232,7 @@ def create_user_list_window():
         layout = [
             [sg.Table(headings=['First', 'Last', 'License ID', 'Username', 'Position', 'Roles', 'Active'],
                       values=data, key='-TABLE-', enable_events=True)],
-            [sg.Exit('Close')]
+            [sg.Exit('Close', button_color=DANGER_BUTTON_COLOR)]
         ]
 
         window = sg.Window('Users', layout=layout, resizable=True, modal=True, finalize=True)
@@ -284,7 +285,7 @@ def create_admin_user_role_window(username):
                     ])
 
             layout.append(
-                [sg.Button('Update'), sg.Button('Close')]
+                [sg.Button('Update'), sg.Button('Close', button_color=DANGER_BUTTON_COLOR)]
             )
         window = sg.Window('User Roles', layout, modal=True)
         while True:
@@ -306,4 +307,3 @@ def create_admin_user_role_window(username):
                 break
         window.close()
     return updates
-

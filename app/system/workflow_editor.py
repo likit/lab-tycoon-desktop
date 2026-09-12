@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import FreeSimpleGUI as sg
+
+from app.ui_styles import DANGER_BUTTON_COLOR
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -486,7 +488,25 @@ class WorkflowLayoutEngine:
             if y < self.top_margin:
                 y = self.top_margin + (max_level - level) * 20
             for index, node_id in enumerate(node_ids):
-                positions[node_id] = (start_x + index * self.column_gap, y)
+                node = graph.nodes[node_id]
+                stored_position = node.metadata.get("editor_position")
+                if (
+                    isinstance(stored_position, (list, tuple))
+                    and len(stored_position) == 2
+                    and all(isinstance(value, (int, float)) for value in stored_position)
+                ):
+                    positions[node_id] = (float(stored_position[0]), float(stored_position[1]))
+                elif isinstance(node.metadata.get("x"), (int, float)) and isinstance(
+                    node.metadata.get("y"), (int, float)
+                ):
+                    # Keep compatibility with early editor metadata while using
+                    # editor_position as the canonical project field.
+                    positions[node_id] = (
+                        float(node.metadata["x"]),
+                        float(node.metadata["y"]),
+                    )
+                else:
+                    positions[node_id] = (start_x + index * self.column_gap, y)
         return positions
 
     def node_size(self, node: WorkflowNode) -> tuple[int, int]:
@@ -703,9 +723,11 @@ class WorkflowEditorController:
         self,
         repository: WorkflowRepository | None = None,
         current_document: WorkflowDocument | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.repository = repository or WorkflowRepository()
         self.current_document: WorkflowDocument | None = current_document
+        self.on_change = on_change
         self.selected_node_id: str | None = None
         self.workflow_counter = 0
         self.bounds: dict[str, NodeBounds] = {}
@@ -940,6 +962,12 @@ class WorkflowEditorController:
 
         if self.current_document is None:
             raise ValueError("No workflow is loaded.")
+        if self.on_change is not None:
+            self.on_change()
+            if window is not None:
+                window["-WF-STATUS-"].update("Status: Unsaved project changes", text_color="#b45309")
+                window.refresh()
+            return ""
         if window is not None:
             window["-WF-STATUS-"].update("Status: Saving...", text_color="#b45309")
             window.refresh()
@@ -1314,10 +1342,16 @@ def _show_node_properties_dialog(
 def open_workflow_editor_window(
     current_document: WorkflowDocument | None = None,
     repository: WorkflowRepository | None = None,
+    on_change: Callable[[], None] | None = None,
 ) -> None:
     """Open the interactive workflow editor window."""
 
-    controller = WorkflowEditorController(repository=repository, current_document=current_document)
+    controller = WorkflowEditorController(
+        repository=repository,
+        current_document=current_document,
+        on_change=on_change,
+    )
+    project_mode = on_change is not None
 
     layout = [
         [sg.Text("Workflow Editor", font=("Arial", 20, "bold"))],
@@ -1327,12 +1361,18 @@ def open_workflow_editor_window(
             sg.Text("Status: No workflow", key="-WF-STATUS-", text_color="#64748b"),
             sg.Text("Select a node and use the toolbar to edit the graph.", text_color="#475569"),
         ],
-        [sg.Text(f"Storage: {controller.repository.base_dir}", key="-WF-STORAGE-", size=(90, 1))],
+        [
+            sg.Text(
+                "Storage: Active Lab Tycoon project" if project_mode else f"Storage: {controller.repository.base_dir}",
+                key="-WF-STORAGE-",
+                size=(90, 1),
+            )
+        ],
         [sg.Text("Create a workflow to begin.", key="-WF-SUMMARY-")],
         [
-            sg.Button("New Workflow", key="-WF-NEW-", button_color=("white", "green")),
-            sg.Button("Load Selected", key="-WF-LOAD-"),
-            sg.Button("Save Current", key="-WF-SAVE-"),
+            sg.Button("New Workflow", key="-WF-NEW-", button_color=("white", "green"), disabled=project_mode),
+            sg.Button("Load Selected", key="-WF-LOAD-", disabled=project_mode),
+            sg.Button("Save Current", key="-WF-SAVE-", disabled=project_mode),
             sg.Button("Add Node", key="-WF-ADD-NODE-"),
             sg.Button("Add Connected Node", key="-WF-ADD-CONNECTED-"),
             sg.Button("Add Branch Node", key="-WF-ADD-BRANCH-"),
@@ -1341,7 +1381,7 @@ def open_workflow_editor_window(
             sg.Button("Select tests", key="-WF-SELECT-TESTS-", disabled=True),
             sg.Button("Delete Node", key="-WF-DELETE-", button_color=("white", "#b91c1c")),
             sg.Button("Add Scenario", key="-WF-ADD-SCENARIO-"),
-            sg.CloseButton("Close"),
+            sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR),
         ],
         [
             sg.Column(
@@ -1572,7 +1612,12 @@ def open_workflow_editor_window(
 def create_workflow_window(
     current_document: WorkflowDocument | None = None,
     repository: WorkflowRepository | None = None,
+    on_change: Callable[[], None] | None = None,
 ) -> None:
     """Backward-compatible alias for opening the editor window."""
 
-    open_workflow_editor_window(current_document=current_document, repository=repository)
+    open_workflow_editor_window(
+        current_document=current_document,
+        repository=repository,
+        on_change=on_change,
+    )

@@ -5,7 +5,7 @@ from faker import Faker
 from typing import List
 
 from sqlalchemy_continuum import make_versioned
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy import (
     ForeignKey, String, Integer,
     Table, Column, Boolean,
@@ -17,11 +17,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from datetime import datetime, date
 
-from app.config import DATABASE_URI
+from app.config import DATABASE_MANAGER
 
 make_versioned()
 
-engine = create_engine(DATABASE_URI)
+engine = DATABASE_MANAGER.create_orm_engine()
 
 
 class Base(DeclarativeBase):
@@ -144,6 +144,7 @@ class Test(Base):
     def __init__(self, code, tmlt_code, tmlt_name, loinc_no, specimens, method,
                  component, label, scale, price, desc, unit, order_type,
                  cgd_code, cgd_name, cgd_price, panel, ref_min, ref_max, value_choices, active=True, **kwargs):
+        database_engine = kwargs.pop('_database_engine', engine)
         self.code = code
         self.tmlt_code = tmlt_code or None
         self.tmlt_name = tmlt_name
@@ -164,19 +165,22 @@ class Test(Base):
         self.active = active
         self.value_choices = value_choices
 
-        with Session(engine) as session:
-            _method = session.scalar(select(TestMethod).where(TestMethod.method == method))
-            if _method:
-                self.method = _method
-            else:
-                new_method = TestMethod(method=method)
-                self.method = new_method
-            _specimens = session.scalar(select(Specimens).where(Specimens.label == specimens))
-            if _specimens:
-                self.specimens = _specimens
-            else:
-                new_specimens = Specimens(label=specimens)
-                self.specimens = new_specimens
+        with Session(database_engine) as session:
+            # This object is intentionally added only after both required
+            # relationships are resolved. Prevent the lookup queries from
+            # autoflushing the still-transient Test through a relationship
+            # back-reference.
+            with session.no_autoflush:
+                _method = session.scalar(select(TestMethod).where(TestMethod.method == method))
+                if _method:
+                    self.method = _method
+                else:
+                    self.method = TestMethod(method=method)
+                _specimens = session.scalar(select(Specimens).where(Specimens.label == specimens))
+                if _specimens:
+                    self.specimens = _specimens
+                else:
+                    self.specimens = Specimens(label=specimens)
             session.add(self)
             session.commit()
 
@@ -379,6 +383,13 @@ class LabRejectRecord(Base):
 configure_mappers()
 
 
+def database_is_initialized() -> bool:
+    """Return whether the configured database contains the core LIS schema."""
+
+    inspector = inspect(engine)
+    return inspector.has_table('users') and inspector.has_table('lab_orders')
+
+
 def ensure_db_schema():
     with engine.begin() as connection:
         inspector = inspect(connection)
@@ -392,8 +403,11 @@ def ensure_db_schema():
             )
 
 
-def initialize_db():
-    Base.metadata.create_all(engine)
+def initialize_db(database_engine=None):
+    """Create and seed the LIS schema on the supplied or active engine."""
+
+    target_engine = database_engine or engine
+    Base.metadata.create_all(target_engine)
     print('Populating a default admin account...')
     user = User(firstname='Jane',
                 lastname='Doe',
@@ -405,7 +419,7 @@ def initialize_db():
         r = UserRole(role_need=role)
         user.roles.append(r)
 
-    with Session(engine) as session:
+    with Session(target_engine) as session:
         session.add(user)
         session.commit()
 
@@ -427,7 +441,7 @@ def initialize_db():
                                   address=address,
                                   dob=dob)
                          )
-    with Session(engine) as session:
+    with Session(target_engine) as session:
         session.add_all(customers)
         session.commit()
 
@@ -442,7 +456,7 @@ def initialize_db():
                               gender=gender,
                               fullname=fullname)
                          )
-    with Session(engine) as session:
+    with Session(target_engine) as session:
         session.add_all(doctors)
         session.commit()
 
@@ -508,8 +522,8 @@ def initialize_db():
     test_objs = []
     for test in test_data:
         test_dict = dict(zip(test_attribues, test))
-        new_test = Test(**test_dict)
+        new_test = Test(**test_dict, _database_engine=target_engine)
         test_objs.append(new_test)
-    with Session(engine) as session:
+    with Session(target_engine) as session:
         session.add_all(test_objs)
         session.commit()

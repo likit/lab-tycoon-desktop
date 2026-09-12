@@ -6,6 +6,8 @@ from logging.config import dictConfig
 
 import yaml
 
+from app.database import DatabaseConfig, DatabaseManager
+
 base_url = os.path.dirname(os.path.abspath(__file__))
 
 current_user = None
@@ -58,8 +60,7 @@ def get_app_data_dir(app_name='LabTycoon'):
 
 
 APP_DATA_DIR = get_app_data_dir()
-DATABASE_PATH = APP_DATA_DIR / 'labtycoon.db'
-DATABASE_URI = f'sqlite:///{DATABASE_PATH}'
+DEFAULT_DATABASE_PATH = APP_DATA_DIR / 'labtycoon.db'
 
 # TODO: find a way to dynamically set the secret key when app is first launched.
 secret_key = '85015f158b2f8b050705aa6ec9fbd65c99966725eec0965a5ac0bd3564afd210'
@@ -70,6 +71,8 @@ if not os.path.exists('config.yaml'):
     config_dict = {
         'num_analyzers': 1,
         'active_workflow_id': None,
+        'last_project_path': None,
+        'database': DatabaseConfig.default_sqlite(DEFAULT_DATABASE_PATH).to_dict(),
     }
     with open('config.yaml', 'w') as f:
         yaml.dump(config_dict, f)
@@ -80,7 +83,18 @@ else:
         config_dict = {
             'num_analyzers': 1,
             'active_workflow_id': None,
+            'last_project_path': None,
+            'database': DatabaseConfig.default_sqlite(DEFAULT_DATABASE_PATH).to_dict(),
         }
+
+DATABASE_CONFIG = DatabaseConfig.from_dict(
+    config_dict.get('database'),
+    default_database_path=DEFAULT_DATABASE_PATH,
+)
+DATABASE_MANAGER = DatabaseManager(DATABASE_CONFIG)
+DATABASE_PATH = Path(DATABASE_CONFIG.database_path)
+# Retained for compatibility with code outside the central models module.
+DATABASE_URI = str(DATABASE_MANAGER.sqlalchemy_url())
 
 
 def update_config_yaml(**kwargs):

@@ -6,9 +6,12 @@ from dataclasses import dataclass
 from math import floor
 from pathlib import Path
 import sys
-from typing import Iterable
+from typing import Callable, Iterable
 
 import FreeSimpleGUI as sg
+
+from app.ui_styles import DANGER_BUTTON_COLOR
+from app.project import LabTycoonProject, ProjectEquipmentInstance, ProjectFloor
 
 
 TILE_WIDTH = 128
@@ -75,15 +78,7 @@ EQUIPMENT_CATALOG: dict[str, EquipmentMetadata] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class EquipmentInstance:
-    """A physical equipment instance placed on the laboratory floor."""
-
-    instance_id: str
-    equipment_type: str
-    row: int
-    col: int
-    status: str = "idle"
+EquipmentInstance = ProjectEquipmentInstance
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,16 +115,35 @@ class FloorPlan:
         rows: int = DEFAULT_FLOOR_ROWS,
         columns: int = DEFAULT_FLOOR_COLUMNS,
         equipment_catalog: dict[str, EquipmentMetadata] | None = None,
+        floor_state: ProjectFloor | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
-        self.rows = rows
-        self.columns = columns
+        self.floor_state = floor_state or ProjectFloor(rows=rows, columns=columns)
+        self.rows = self.floor_state.rows
+        self.columns = self.floor_state.columns
         self.equipment_catalog = dict(equipment_catalog or EQUIPMENT_CATALOG)
         self.selected_cell: tuple[int, int] | None = None
         self.selected_equipment_id: str | None = None
         self.placement_equipment_type: str | None = None
-        self.equipment_instances: list[EquipmentInstance] = []
-        self._instance_sequences: dict[str, int] = {}
+        self.equipment_instances = self.floor_state.equipment_instances
+        self._instance_sequences = self._derive_instance_sequences()
         self._placement_session_instance_ids: set[str] = set()
+        self._on_change = on_change
+
+    def _derive_instance_sequences(self) -> dict[str, int]:
+        sequences: dict[str, int] = {}
+        for instance in self.equipment_instances:
+            suffix = instance.instance_id.rsplit("-", 1)[-1]
+            if suffix.isdigit():
+                sequences[instance.equipment_type] = max(
+                    sequences.get(instance.equipment_type, 0),
+                    int(suffix),
+                )
+        return sequences
+
+    def _notify_change(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
 
     def contains(self, row: int, col: int) -> bool:
         return 0 <= row < self.rows and 0 <= col < self.columns
@@ -171,6 +185,7 @@ class FloorPlan:
         self._placement_session_instance_ids.discard(instance.instance_id)
         self.selected_equipment_id = None
         self.selected_cell = None
+        self._notify_change()
         return instance
 
     def occupied_cells(self) -> set[tuple[int, int]]:
@@ -212,7 +227,7 @@ class FloorPlan:
             for instance in self.equipment_instances
             if instance.instance_id in self._placement_session_instance_ids
         ]
-        self.equipment_instances = [
+        self.equipment_instances[:] = [
             instance
             for instance in self.equipment_instances
             if instance.instance_id not in self._placement_session_instance_ids
@@ -221,6 +236,8 @@ class FloorPlan:
         self.placement_equipment_type = None
         self.selected_cell = None
         self.selected_equipment_id = None
+        if removed:
+            self._notify_change()
         return removed
 
     def finish_placement(self) -> None:
@@ -253,6 +270,7 @@ class FloorPlan:
         )
         self.equipment_instances.append(instance)
         self._placement_session_instance_ids.add(instance.instance_id)
+        self._notify_change()
         return instance
 
 
@@ -428,10 +446,10 @@ def _equipment_panel_layout() -> list[list[object]]:
     return rows
 
 
-def create_floor_view_window() -> None:
+def create_floor_view_window(project: LabTycoonProject) -> None:
     """Open the experimental isometric floor view in its own window."""
 
-    floor_plan = FloorPlan()
+    floor_plan = FloorPlan(floor_state=project.floor, on_change=project.mark_dirty)
     layout = [
         [
             sg.Text("Experimental Floor View", font=("Arial", 18, "bold")),
@@ -458,7 +476,7 @@ def create_floor_view_window() -> None:
         [
             sg.Button("Remove Equipment", key="-REMOVE-EQUIPMENT-", disabled=True),
             sg.Push(),
-            sg.CloseButton("Close"),
+            sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR),
         ],
     ]
     window = sg.Window(
