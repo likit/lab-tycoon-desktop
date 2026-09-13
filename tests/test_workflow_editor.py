@@ -5,19 +5,184 @@ from __future__ import annotations
 import unittest
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.system.model import BaseWidget, Workflow
+from app.project import ProjectEquipmentInstance
 from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.system.workflow_editor import (
     WorkflowEditorController,
     WorkflowLayoutEngine,
+    _center_scroll_fraction,
+    _scroll_canvas_for_column,
     _normalize_node_type_label,
-    _selected_connection_choices,
-    _workflow_node_choices,
 )
 
 
 class WorkflowGraphModelTests(unittest.TestCase):
+    def test_equipment_nodes_reference_and_resolve_project_equipment(self) -> None:
+        equipment = [ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 4, 5)]
+        workflow = Workflow()
+        controller = WorkflowEditorController(equipment_instances=equipment, on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+
+        node_id = controller.add_equipment_node("CHEM-001")
+        node = workflow.get_node(node_id)
+
+        self.assertEqual(node.kind, "equipment")
+        self.assertEqual(node.metadata["equipment_id"], "CHEM-001")
+        resolution = controller.resolve_equipment_node(node)
+        self.assertTrue(resolution.resolved)
+        self.assertEqual(resolution.display_name, "Chemistry Analyzer")
+
+    def test_equipment_reference_survives_location_change_and_becomes_unresolved_on_delete(self) -> None:
+        equipment = [ProjectEquipmentInstance("CENT-001", "centrifuge", 2, 2)]
+        workflow = Workflow()
+        controller = WorkflowEditorController(equipment_instances=equipment, on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        node = workflow.get_node(controller.add_equipment_node("CENT-001"))
+
+        equipment[0] = ProjectEquipmentInstance("CENT-001", "centrifuge", 7, 7, orientation=180)
+        self.assertTrue(controller.resolve_equipment_node(node).resolved)
+        self.assertEqual(node.metadata["equipment_id"], "CENT-001")
+
+        equipment.clear()
+        resolution = controller.resolve_equipment_node(node)
+        self.assertFalse(resolution.resolved)
+        self.assertEqual(resolution.display_name, "Missing Equipment")
+        self.assertEqual(resolution.equipment_id, "CENT-001")
+
+    def test_multiple_nodes_may_reference_the_same_equipment(self) -> None:
+        equipment = [ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 4, 5)]
+        workflow = Workflow()
+        controller = WorkflowEditorController(equipment_instances=equipment, on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+
+        first_id = controller.add_equipment_node("CHEM-001")
+        second_id = controller.add_equipment_node("CHEM-001")
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(workflow.get_node(first_id).metadata["equipment_id"], "CHEM-001")
+        self.assertEqual(workflow.get_node(second_id).metadata["equipment_id"], "CHEM-001")
+
+    def test_equipment_nodes_can_connect_to_each_other(self) -> None:
+        equipment = [
+            ProjectEquipmentInstance("CENT-001", "centrifuge", 2, 2),
+            ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 4, 5),
+        ]
+        dirty_events: list[bool] = []
+        workflow = Workflow()
+        controller = WorkflowEditorController(
+            equipment_instances=equipment,
+            on_change=lambda: dirty_events.append(True),
+        )
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        source_id = controller.add_equipment_node("CENT-001")
+        target_id = controller.add_equipment_node("CHEM-001")
+        controller.selected_node_id = source_id
+
+        choices = controller.connection_target_choices()
+        self.assertTrue(any(node_id == target_id and "CHEM-001" in label for node_id, label in choices))
+
+        controller.connect_selected_node_to(target_id)
+
+        self.assertEqual(
+            [(edge.source, edge.target) for edge in workflow.graph.edges],
+            [(source_id, target_id)],
+        )
+        self.assertEqual(len(dirty_events), 3)
+
+    def test_preprocessing_can_connect_to_two_equipment_nodes_without_losing_branches(self) -> None:
+        equipment = [
+            ProjectEquipmentInstance("CENT-001", "centrifuge", 2, 2),
+            ProjectEquipmentInstance("CENT-002", "centrifuge", 5, 5),
+        ]
+        dirty_events: list[bool] = []
+        workflow = Workflow()
+        controller = WorkflowEditorController(equipment_instances=equipment, on_change=lambda: dirty_events.append(True))
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        source = workflow.create_node("Preprocessing", 1.0)
+        first = controller.add_equipment_node("CENT-001")
+        second = controller.add_equipment_node("CENT-002")
+        controller.selected_node_id = source.node_id
+
+        choices = controller.connection_target_choices()
+        self.assertEqual({node_id for node_id, _ in choices}, {first, second})
+        controller.connect_selected_node_to_many([first, second])
+        self.assertEqual({edge.target for edge in workflow.graph.outgoing_edges(source.node_id)}, {first, second})
+
+        controller.update_node_from_form(
+            source.node_id, node_type="specimens processing", name="Preprocessing", description="",
+            throughput=1.0, human_throughput=0.0, capacity=1, required_staff=0,
+            outgoing_connection_node_id=first,
+        )
+        self.assertEqual({edge.target for edge in workflow.graph.outgoing_edges(source.node_id)}, {first, second})
+        self.assertEqual(len(dirty_events), 4)
+
+    def test_binding_and_rebinding_equipment_marks_project_dirty(self) -> None:
+        equipment = [
+            ProjectEquipmentInstance("CENT-001", "centrifuge", 2, 2),
+            ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 4, 5),
+        ]
+        dirty_events: list[bool] = []
+        workflow = Workflow()
+        controller = WorkflowEditorController(
+            equipment_instances=equipment,
+            on_change=lambda: dirty_events.append(True),
+        )
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        controller.add_equipment_node("CENT-001")
+
+        controller.bind_selected_equipment("CHEM-001")
+
+        node = controller.selected_node()
+        self.assertEqual(node.metadata["equipment_id"], "CHEM-001")
+        self.assertEqual(len(dirty_events), 2)
+
+    def test_equipment_operating_settings_persist_without_copying_floor_properties(self) -> None:
+        equipment = [ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 4, 5)]
+        dirty_events: list[bool] = []
+        workflow = Workflow()
+        controller = WorkflowEditorController(equipment_instances=equipment, on_change=lambda: dirty_events.append(True))
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        node_id = controller.add_equipment_node(
+            "CHEM-001", throughput=60.0, human_throughput=15.0,
+            capacity=2, required_staff=1, description="Primary analyzer", enabled=False,
+        )
+        node = workflow.get_node(node_id)
+        self.assertEqual(node.widget.throughput, 60.0)
+        self.assertEqual(node.widget.service_time, 60.0)
+        self.assertEqual(node.widget.human_throughput, 15.0)
+        self.assertEqual(node.widget.capacity, 2)
+        self.assertEqual(node.widget.required_staff, 1)
+        self.assertFalse(node.widget.enabled)
+        self.assertEqual(node.widget.description, "Primary analyzer")
+        self.assertNotIn("row", node.metadata)
+        self.assertNotIn("orientation", node.metadata)
+
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(node_id)
+        self.assertEqual(restored.metadata["equipment_id"], "CHEM-001")
+        self.assertEqual(restored.widget.throughput, 60.0)
+        self.assertEqual(restored.widget.required_staff, 1)
+        self.assertFalse(restored.widget.enabled)
+        self.assertEqual(len(dirty_events), 1)
+
+    def test_editing_missing_equipment_keeps_reference_and_settings(self) -> None:
+        equipment = [ProjectEquipmentInstance("CENT-001", "centrifuge", 2, 2)]
+        workflow = Workflow()
+        controller = WorkflowEditorController(equipment_instances=equipment, on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        node_id = controller.add_equipment_node("CENT-001")
+        equipment.clear()
+
+        controller.bind_selected_equipment("CENT-001", throughput=30.0, capacity=2)
+
+        node = workflow.get_node(node_id)
+        self.assertFalse(controller.resolve_equipment_node(node).resolved)
+        self.assertEqual(node.metadata["equipment_id"], "CENT-001")
+        self.assertEqual(node.widget.throughput, 30.0)
+        self.assertEqual(node.widget.capacity, 2)
+
     def test_workflow_roundtrip_preserves_nodes_edges_and_metadata(self) -> None:
         workflow = Workflow()
         intake = workflow.create_node("Intake", 1.0)
@@ -75,6 +240,33 @@ class WorkflowGraphModelTests(unittest.TestCase):
 
 
 class WorkflowLayoutTests(unittest.TestCase):
+    def test_scrollable_column_resolves_its_inner_canvas(self) -> None:
+        canvas = object()
+        wrapped_column = SimpleNamespace(Widget=SimpleNamespace(canvas=canvas))
+        frame_column = SimpleNamespace(TKColFrame=SimpleNamespace(canvas=canvas), Widget=object())
+        direct_column = SimpleNamespace(Widget=canvas)
+
+        self.assertIs(_scroll_canvas_for_column(wrapped_column), canvas)
+        self.assertIs(_scroll_canvas_for_column(frame_column), canvas)
+        self.assertIs(_scroll_canvas_for_column(direct_column), canvas)
+
+    def test_scroll_fraction_centers_and_clamps_node_position(self) -> None:
+        self.assertAlmostEqual(_center_scroll_fraction(1200, 800, 0, 2400), 1 / 3)
+        self.assertEqual(_center_scroll_fraction(100, 800, 0, 2400), 0.0)
+        self.assertAlmostEqual(_center_scroll_fraction(2300, 800, 0, 2400), 2 / 3)
+        self.assertEqual(_center_scroll_fraction(500, 800, 0, 600), 0.0)
+
+    def test_node_table_row_maps_to_graph_node(self) -> None:
+        workflow = Workflow()
+        first = workflow.create_node("First", 1.0)
+        second = workflow.create_node("Second", 1.0)
+        controller = WorkflowEditorController()
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+
+        self.assertEqual(controller.node_id_for_table_row(0), first.node_id)
+        self.assertEqual(controller.node_id_for_table_row(1), second.node_id)
+        self.assertIsNone(controller.node_id_for_table_row(2))
+
     def test_layout_places_children_below_parents(self) -> None:
         workflow = Workflow()
         root = workflow.create_node("Root", 1.0)
@@ -196,38 +388,8 @@ class WorkflowPersistenceTests(unittest.TestCase):
 
             self.assertEqual(controller.selected_node_id, source.node_id)
             self.assertIsNotNone(controller.current_document.workflow.get_node(new_node_id))
-            choices = _workflow_node_choices(workflow, exclude_node_id=source.node_id)
-            self.assertIn(f"Node 2::{new_node_id}", choices)
-
-    def test_connection_defaults_reflect_existing_edges(self) -> None:
-        workflow = Workflow()
-        source = workflow.create_node("Source", 1.0)
-        existing = workflow.create_connected_node(source.node_id, "Existing", 2.0)
-        controller = WorkflowEditorController()
-        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
-        controller.selected_node_id = source.node_id
-
-        outgoing_defaults = _selected_connection_choices(workflow, node_id=source.node_id, direction="outgoing")
-        incoming_defaults = _selected_connection_choices(workflow, node_id=source.node_id, direction="incoming")
-
-        self.assertEqual(outgoing_defaults, [f"Existing::{existing.node_id}"])
-        self.assertEqual(incoming_defaults, [])
-
-    def test_modal_node_choices_are_stable_and_exclude_only_self(self) -> None:
-        workflow = Workflow()
-        first = workflow.create_node("Gamma", 1.0)
-        alpha = workflow.create_node("Alpha", 1.0)
-        beta = workflow.create_node("Beta", 1.0)
-
-        choices = _workflow_node_choices(workflow, exclude_node_id=first.node_id)
-
-        self.assertEqual(
-            choices,
-            [
-                f"Alpha::{alpha.node_id}",
-                f"Beta::{beta.node_id}",
-            ],
-        )
+            choices = controller.connection_target_choices()
+            self.assertTrue(any(node_id == new_node_id for node_id, _ in choices))
 
     def test_update_node_from_form_can_add_outgoing_and_incoming_connections(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

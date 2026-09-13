@@ -22,6 +22,7 @@ class ProjectPersistenceTests(unittest.TestCase):
             [
                 ProjectEquipmentInstance("CENT-001", "centrifuge", 2, 2),
                 ProjectEquipmentInstance("CENT-003", "centrifuge", 5, 5, status="maintenance"),
+                ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 6, 1),
             ]
         )
         first = self.project.workflow.create_node("Receive", metadata={"x": 120, "y": 80})
@@ -120,6 +121,24 @@ class ProjectPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded_node.metadata["y"], 80)
         self.assertEqual(loaded.workflow.scenarios[-1].parameters, {"staff": 2})
         self.assertFalse(loaded.is_dirty)
+
+    def test_equipment_node_reference_resolves_after_project_round_trip(self) -> None:
+        equipment_node = self.project.workflow.create_node(
+            "Equipment",
+            kind="equipment",
+            metadata={"equipment_id": "CHEM-001", "editor_position": [420, 280]},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            loaded = self.serializer.load(
+                self.serializer.save(self.project, Path(directory) / "equipment-link.ltp")
+            )
+
+        restored_node = loaded.workflow.get_node(equipment_node.node_id)
+        self.assertEqual(restored_node.kind, "equipment")
+        self.assertEqual(restored_node.metadata["equipment_id"], "CHEM-001")
+        self.assertTrue(
+            any(instance.instance_id == "CHEM-001" for instance in loaded.floor.equipment_instances)
+        )
 
     def test_loaded_equipment_ids_continue_without_collisions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

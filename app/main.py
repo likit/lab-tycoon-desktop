@@ -299,7 +299,11 @@ def run_app():
                 sg.popup_error('No project is currently open. Create or open a Lab Tycoon project first.')
             else:
                 document = WorkflowDocument(project.project_id, f'{project.name} Workflow', project.workflow)
-                create_project_workflow_window(current_document=document, on_change=project.mark_dirty)
+                create_project_workflow_window(
+                    current_document=document,
+                    on_change=project.mark_dirty,
+                    equipment_instances=project.floor.equipment_instances,
+                )
                 refresh_project_display()
         elif event == 'Rule Preview':
             create_rule_preview_window()

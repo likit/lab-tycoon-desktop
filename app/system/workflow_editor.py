@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import FreeSimpleGUI as sg
 
 from app.ui_styles import DANGER_BUTTON_COLOR
+from app.project import ProjectEquipmentInstance
+from app.system.floor_view import EQUIPMENT_CATALOG, EquipmentMetadata
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +27,15 @@ LEGACY_NODE_TYPE_ALIASES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class EquipmentNodeResolution:
+    """Display-time result of resolving a workflow equipment reference."""
+
+    equipment_id: str
+    display_name: str
+    resolved: bool
+
+
 def _notify(message: str) -> None:
     """Show a lightweight non-blocking workflow notification."""
 
@@ -35,160 +47,31 @@ def _notify(message: str) -> None:
     )
 
 
-def _workflow_node_choice_items(
-    workflow: Workflow | None,
-    *,
-    exclude_node_id: str | None = None,
-) -> list[tuple[str, str]]:
-    """Return stable node choice labels and ids for modal connection pickers."""
-
-    if workflow is None:
-        return []
-    return [
-        (f"{node.widget.name}::{node.node_id}", node.node_id)
-        for node in sorted(workflow.graph.iter_nodes(), key=lambda item: item.widget.name.lower())
-        if node.node_id != exclude_node_id
-    ]
-
-
-def _workflow_node_choices(workflow: Workflow | None, *, exclude_node_id: str | None = None) -> list[str]:
-    """Return stable node choices for modal connection pickers."""
-
-    return [label for label, _ in _workflow_node_choice_items(workflow, exclude_node_id=exclude_node_id)]
-
-
-def _choice_to_node_id(choice: str | None) -> str | None:
-    """Extract the node id from a modal choice value."""
-
-    if not choice:
-        return None
-    if "::" not in choice:
-        return None
-    return choice.rsplit("::", 1)[1]
-
-
 def _normalize_node_type_label(node_type: str) -> str:
     """Map legacy node type labels to their current display names."""
 
     return LEGACY_NODE_TYPE_ALIASES.get(node_type, node_type)
 
 
-def _selected_connection_choices(
-    workflow: Workflow | None,
-    *,
-    node_id: str,
-    direction: str,
-) -> list[str]:
-    """Return the default selected connection labels for a node form."""
+def _center_scroll_fraction(target: float, viewport: float, start: float, end: float) -> float:
+    """Return a Tk canvas scroll fraction that centers a content coordinate."""
 
-    if workflow is None:
-        return []
-
-    if direction == "incoming":
-        connected_ids = {edge.source for edge in workflow.graph.incoming_edges(node_id)}
-    elif direction == "outgoing":
-        connected_ids = {edge.target for edge in workflow.graph.outgoing_edges(node_id)}
-    else:
-        return []
-
-    selections = []
-    for label, candidate_id in _workflow_node_choice_items(workflow, exclude_node_id=node_id):
-        if candidate_id in connected_ids:
-            selections.append(label)
-    return selections
+    extent = end - start
+    if extent <= viewport or extent <= 0:
+        return 0.0
+    return max(0.0, min((target - viewport / 2 - start) / extent, 1.0 - viewport / extent))
 
 
-def _selected_connection_choice(
-    workflow: Workflow | None,
-    *,
-    node_id: str,
-    direction: str,
-) -> str:
-    """Return the first selected connection label for a node form."""
+def _scroll_canvas_for_column(column: sg.Column) -> Any | None:
+    """Find the actual Tk canvas across FreeSimpleGUI scroll-column variants."""
 
-    choices = _selected_connection_choices(workflow, node_id=node_id, direction=direction)
-    return choices[0] if choices else ""
-
-
-def _connection_panes(
-    workflow: Workflow | None,
-    *,
-    exclude_node_id: str | None = None,
-    node_id: str | None = None,
-) -> list[Any]:
-    """Build incoming and outgoing dropdown panes for node forms."""
-
-    choices = _workflow_node_choices(workflow, exclude_node_id=exclude_node_id)
-    incoming_default = _selected_connection_choice(workflow, node_id=node_id or "", direction="incoming") if node_id else ""
-    outgoing_default = _selected_connection_choice(workflow, node_id=node_id or "", direction="outgoing") if node_id else ""
-    return [
-        [
-            sg.Column(
-                [
-                    [
-                        sg.Frame(
-                            "Incoming nodes",
-                            [
-                                [
-                                    sg.Combo(
-                                        choices,
-                                        key="-CONN-INCOMING-",
-                                        default_value=incoming_default,
-                                        readonly=True,
-                                        expand_x=True,
-                                        size=(36, 1),
-                                        disabled=not bool(choices),
-                                    )
-                                ]
-                            ],
-                            expand_x=True,
-                        )
-                    ]
-                ],
-                expand_x=True,
-            ),
-            sg.Column(
-                [
-                    [
-                        sg.Frame(
-                            "Outgoing nodes",
-                            [
-                                [
-                                    sg.Combo(
-                                        choices,
-                                        key="-CONN-OUTGOING-",
-                                        default_value=outgoing_default,
-                                        readonly=True,
-                                        expand_x=True,
-                                        size=(36, 1),
-                                        disabled=not bool(choices),
-                                    )
-                                ]
-                            ],
-                            expand_x=True,
-                        )
-                    ]
-                ],
-                expand_x=True,
-            ),
-        ],
-    ]
-
-
-def _reset_scrollable_view(element: sg.Element) -> None:
-    """Move a scrollable container back to its origin if supported."""
-
-    widget = getattr(element, "Widget", None)
+    frame = getattr(column, "TKColFrame", None)
+    if frame is not None and getattr(frame, "canvas", None) is not None:
+        return frame.canvas
+    widget = getattr(column, "Widget", None)
     if widget is None:
-        return
-
-    for method_name in ("xview_moveto", "yview_moveto"):
-        method = getattr(widget, method_name, None)
-        if callable(method):
-            try:
-                method(0)
-            except Exception:
-                continue
+        return None
+    return getattr(widget, "canvas", widget)
 
 
 def _bind_graph_right_click_selection(
@@ -247,7 +130,6 @@ def _bind_graph_double_click_properties(
 
 def _show_node_form_dialog(
     node: WorkflowNode | None,
-    workflow: Workflow | None = None,
 ) -> dict[str, Any] | None:
     """Prompt for node configuration values."""
 
@@ -298,7 +180,6 @@ def _show_node_form_dialog(
             sg.Multiline(node.widget.description, key="-DESC-", size=(46, 4), expand_x=True),
         ],
         [sg.Checkbox("Enabled", default=node.widget.enabled, key="-ENABLED-")],
-        *(_connection_panes(workflow, exclude_node_id=node.node_id, node_id=node.node_id)),
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
     window = sg.Window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
@@ -331,8 +212,6 @@ def _show_node_form_dialog(
                     "capacity": capacity,
                     "required_staff": required_staff,
                     "enabled": bool(values.get("-ENABLED-", False)),
-                    "incoming_connection_node_id": _choice_to_node_id(str(values.get("-CONN-INCOMING-", ""))),
-                    "outgoing_connection_node_id": _choice_to_node_id(str(values.get("-CONN-OUTGOING-", ""))),
                 }
     finally:
         window.close()
@@ -564,8 +443,13 @@ class WorkflowLayoutEngine:
 class WorkflowGraphRenderer:
     """Draw a workflow graph onto a FreeSimpleGUI Graph canvas."""
 
-    def __init__(self, layout_engine: WorkflowLayoutEngine | None = None) -> None:
+    def __init__(
+        self,
+        layout_engine: WorkflowLayoutEngine | None = None,
+        equipment_resolver: Callable[[WorkflowNode], EquipmentNodeResolution] | None = None,
+    ) -> None:
         self.layout_engine = layout_engine or WorkflowLayoutEngine()
+        self.equipment_resolver = equipment_resolver
 
     def render(
         self,
@@ -652,9 +536,20 @@ class WorkflowGraphRenderer:
 
         enabled = node.widget.enabled
         fill_color = "#dbeafe" if node.kind == "branch" else "#f8fafc"
+        equipment_resolution = (
+            self.equipment_resolver(node)
+            if node.kind == "equipment" and self.equipment_resolver is not None
+            else None
+        )
+        if equipment_resolution is not None and not equipment_resolution.resolved:
+            fill_color = "#fee2e2"
         if not enabled:
             fill_color = "#e5e7eb"
-        line_color = "#1d4ed8" if selected else ("#6b7280" if not enabled else "#334155")
+        line_color = "#b91c1c" if equipment_resolution is not None and not equipment_resolution.resolved else "#334155"
+        if selected:
+            line_color = "#1d4ed8"
+        elif not enabled:
+            line_color = "#6b7280"
         text_color = "#0f172a" if enabled else "#4b5563"
         line_width = 4 if selected else 2
 
@@ -696,15 +591,21 @@ class WorkflowGraphRenderer:
                 font=("Arial", 11, "bold"),
             )
 
+        display_name = equipment_resolution.display_name if equipment_resolution is not None else node.widget.name
         graph_canvas.draw_text(
-            node.widget.name,
+            display_name,
             (center[0], center[1] + 10),
             color=text_color,
             font=("Arial", 13, "bold"),
         )
-        test_count = len(node.widget.metadata.get("analyzer_tests", []))
+        if equipment_resolution is not None:
+            label_parts = [equipment_resolution.equipment_id or "No equipment selected"]
+            if not equipment_resolution.resolved:
+                label_parts.append("Unresolved")
+        else:
+            test_count = len(node.widget.metadata.get("analyzer_tests", []))
+            label_parts = [f"Tests: {test_count}", f"Staff: {node.widget.required_staff}", f"Capacity: {node.widget.capacity}"]
         status_label = "Disabled" if not enabled else ""
-        label_parts = [f"Tests: {test_count}", f"Staff: {node.widget.required_staff}", f"Capacity: {node.widget.capacity}"]
         if status_label:
             label_parts.append(status_label)
         graph_canvas.draw_text(
@@ -724,14 +625,136 @@ class WorkflowEditorController:
         repository: WorkflowRepository | None = None,
         current_document: WorkflowDocument | None = None,
         on_change: Callable[[], None] | None = None,
+        equipment_instances: list[ProjectEquipmentInstance] | None = None,
+        equipment_catalog: dict[str, EquipmentMetadata] | None = None,
     ) -> None:
         self.repository = repository or WorkflowRepository()
         self.current_document: WorkflowDocument | None = current_document
         self.on_change = on_change
+        self.equipment_instances = equipment_instances if equipment_instances is not None else []
+        self.equipment_catalog = equipment_catalog or EQUIPMENT_CATALOG
         self.selected_node_id: str | None = None
         self.workflow_counter = 0
         self.bounds: dict[str, NodeBounds] = {}
-        self.renderer = WorkflowGraphRenderer()
+        self.renderer = WorkflowGraphRenderer(equipment_resolver=self.resolve_equipment_node)
+
+    def equipment_instance(self, equipment_id: str) -> ProjectEquipmentInstance | None:
+        return next(
+            (instance for instance in self.equipment_instances if instance.instance_id == equipment_id),
+            None,
+        )
+
+    def equipment_choices(self) -> list[tuple[str, str]]:
+        """Return current project equipment IDs and display labels."""
+
+        choices: list[tuple[str, str]] = []
+        for instance in self.equipment_instances:
+            metadata = self.equipment_catalog.get(instance.equipment_type)
+            display_name = metadata.name if metadata is not None else instance.equipment_type
+            choices.append((instance.instance_id, f"{instance.instance_id} — {display_name}"))
+        return choices
+
+    def resolve_equipment_node(self, node: WorkflowNode) -> EquipmentNodeResolution:
+        equipment_id = str(node.metadata.get("equipment_id", ""))
+        instance = self.equipment_instance(equipment_id)
+        if instance is None:
+            return EquipmentNodeResolution(equipment_id, "Missing Equipment", False)
+        metadata = self.equipment_catalog.get(instance.equipment_type)
+        display_name = metadata.name if metadata is not None else instance.equipment_type
+        return EquipmentNodeResolution(equipment_id, display_name, True)
+
+    def node_display_name(self, node: WorkflowNode) -> str:
+        if node.kind == "equipment":
+            return self.resolve_equipment_node(node).display_name
+        return node.widget.name
+
+    def add_equipment_node(
+        self,
+        equipment_id: str,
+        window: sg.Window | None = None,
+        *,
+        throughput: float = 0.0,
+        human_throughput: float = 0.0,
+        capacity: int = 1,
+        required_staff: int = 0,
+        description: str = "",
+        enabled: bool = True,
+    ) -> str:
+        """Add a workflow node that references one physical equipment instance."""
+
+        if self.current_document is None:
+            raise ValueError("Create or load a workflow first.")
+        if self.equipment_instance(equipment_id) is None:
+            raise ValueError(f"Equipment {equipment_id} is not available in the active project.")
+        settings = self._equipment_node_settings(
+            throughput, human_throughput, capacity, required_staff, description, enabled,
+        )
+        node = self.current_document.workflow.create_node(
+            "Equipment",
+            service_time=throughput,
+            kind="equipment",
+            metadata={"equipment_id": equipment_id, "node_type": "equipment", **settings},
+        )
+        node.widget.node_type = "equipment"
+        self.selected_node_id = node.node_id
+        self.persist_current_workflow(window)
+        return node.node_id
+
+    @staticmethod
+    def _equipment_node_settings(
+        throughput: float,
+        human_throughput: float,
+        capacity: int,
+        required_staff: int,
+        description: str,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        if not math.isfinite(throughput) or not math.isfinite(human_throughput) or throughput < 0 or human_throughput < 0:
+            raise ValueError("Processing rates must be finite, non-negative numbers.")
+        if capacity < 1 or required_staff < 0:
+            raise ValueError("Capacity must be at least 1 and required staff cannot be negative.")
+        return {
+            "throughput": float(throughput),
+            "human_throughput": float(human_throughput),
+            "capacity": int(capacity),
+            "required_staff": int(required_staff),
+            "description": str(description),
+            "enabled": bool(enabled),
+        }
+
+    def bind_selected_equipment(
+        self,
+        equipment_id: str,
+        window: sg.Window | None = None,
+        *,
+        throughput: float | None = None,
+        human_throughput: float | None = None,
+        capacity: int | None = None,
+        required_staff: int | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> None:
+        """Configure an equipment node while preserving its stable physical reference."""
+
+        node = self.selected_node()
+        if node is None or node.kind != "equipment":
+            raise ValueError("Select an Equipment Node first.")
+        if self.equipment_instance(equipment_id) is None and equipment_id != node.metadata.get("equipment_id"):
+            raise ValueError(f"Equipment {equipment_id} is not available in the active project.")
+        settings = self._equipment_node_settings(
+            node.widget.throughput if throughput is None else throughput,
+            node.widget.human_throughput if human_throughput is None else human_throughput,
+            node.widget.capacity if capacity is None else capacity,
+            node.widget.required_staff if required_staff is None else required_staff,
+            node.widget.description if description is None else description,
+            node.widget.enabled if enabled is None else enabled,
+        )
+        self.current_document.workflow.update_node_properties(
+            node.node_id,
+            service_time=settings["throughput"],
+            metadata={"equipment_id": equipment_id, **settings},
+        )
+        self.persist_current_workflow(window)
 
     def refresh_document_table(self, window: sg.Window) -> None:
         documents = self.repository.list_documents()
@@ -769,7 +792,7 @@ class WorkflowEditorController:
             values=[
                 [
                     node.node_id,
-                    node.widget.name,
+                    self.node_display_name(node),
                     node.kind,
                     node.widget.throughput,
                     len(workflow.graph.outgoing_edges(node.node_id)),
@@ -791,8 +814,9 @@ class WorkflowEditorController:
 
         incoming = len(self.current_document.workflow.graph.incoming_edges(node.node_id))
         outgoing = len(self.current_document.workflow.graph.outgoing_edges(node.node_id))
+        equipment_resolution = self.resolve_equipment_node(node) if node.kind == "equipment" else None
         details = [
-            f"Selected: {node.widget.name}",
+            f"Selected: {self.node_display_name(node)}",
             f"ID: {node.node_id}",
             f"Type: {node.widget.node_type}",
             f"Status: {'Enabled' if node.widget.enabled else 'Disabled'}",
@@ -803,6 +827,13 @@ class WorkflowEditorController:
             f"Incoming edges: {incoming}",
             f"Outgoing edges: {outgoing}",
         ]
+        if equipment_resolution is not None:
+            details.append(f"Equipment: {equipment_resolution.equipment_id}")
+            details.append(
+                "Equipment reference: Resolved"
+                if equipment_resolution.resolved
+                else "Equipment reference: Missing / unresolved"
+            )
         analyzer_tests = node.widget.metadata.get("analyzer_tests", [])
         if analyzer_tests:
             details.append(f"Analyzer tests: {', '.join(str(test) for test in analyzer_tests)}")
@@ -926,6 +957,17 @@ class WorkflowEditorController:
             available_nodes.append(node)
         return sorted(available_nodes, key=lambda node: node.widget.name.lower())
 
+    def connection_target_choices(self) -> list[tuple[str, str]]:
+        """Return legal connection targets with labels suitable for the editor UI."""
+
+        choices: list[tuple[str, str]] = []
+        for node in self._available_connection_targets():
+            display_name = self.node_display_name(node)
+            equipment_id = str(node.metadata.get("equipment_id", "")) if node.kind == "equipment" else ""
+            label = f"{display_name} — {equipment_id}" if equipment_id else display_name
+            choices.append((node.node_id, f"{label} [{node.node_id}]"))
+        return choices
+
     def _is_valid_connection_target(self, target_node_id: str, *, selected_node_id: str | None = None) -> bool:
         """Return whether the current selection can connect to ``target_node_id``.
 
@@ -1039,6 +1081,58 @@ class WorkflowEditorController:
             return None
         return self.current_document.workflow.get_node(self.selected_node_id)
 
+    def node_id_for_table_row(self, row_index: int) -> str | None:
+        """Map the visible workflow-node table row to its stable graph node ID."""
+
+        if self.current_document is None:
+            return None
+        nodes = self.current_document.workflow.graph.iter_nodes()
+        if 0 <= row_index < len(nodes):
+            return nodes[row_index].node_id
+        return None
+
+    def focus_node(self, window: sg.Window, node_id: str) -> None:
+        """Select a node and center it in the scrollable graph viewport."""
+
+        if self.current_document is None or self.current_document.workflow.get_node(node_id) is None:
+            return
+        self.selected_node_id = node_id
+        self.refresh_summary(window)
+        self.rerender(window)
+        bounds = self.bounds.get(node_id)
+        if bounds is not None:
+            self._center_graph_point(window, (bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2)
+
+    def focus_diagram(self, window: sg.Window) -> None:
+        """Center the rendered diagram when the workflow editor opens."""
+
+        if not self.bounds:
+            return
+        left = min(bounds.left for bounds in self.bounds.values())
+        right = max(bounds.right for bounds in self.bounds.values())
+        top = max(bounds.top for bounds in self.bounds.values())
+        bottom = min(bounds.bottom for bounds in self.bounds.values())
+        self._center_graph_point(window, (left + right) / 2, (top + bottom) / 2)
+
+    def _center_graph_point(self, window: sg.Window, x: float, y: float) -> None:
+        """Translate logical Graph coordinates into the containing Tk scroll canvas."""
+
+        graph_element = window["-WF-GRAPH-"]
+        graph_canvas = graph_element.Widget
+        scroll_canvas = _scroll_canvas_for_column(window["-WF-GRAPH-SCROLL-"])
+        if graph_canvas is None or scroll_canvas is None:
+            return
+        window.refresh()
+        pixel_x, pixel_y = graph_element._convert_xy_to_canvas_xy(x, y)
+        target_x = scroll_canvas.canvasx(0) + graph_canvas.winfo_rootx() - scroll_canvas.winfo_rootx() + pixel_x
+        target_y = scroll_canvas.canvasy(0) + graph_canvas.winfo_rooty() - scroll_canvas.winfo_rooty() + pixel_y
+        region = scroll_canvas.cget("scrollregion").split()
+        if len(region) != 4:
+            return
+        left, top, right, bottom = (float(value) for value in region)
+        scroll_canvas.xview_moveto(_center_scroll_fraction(target_x, scroll_canvas.winfo_width(), left, right))
+        scroll_canvas.yview_moveto(_center_scroll_fraction(target_y, scroll_canvas.winfo_height(), top, bottom))
+
     def update_node_from_form(
         self,
         node_id: str,
@@ -1113,6 +1207,20 @@ class WorkflowEditorController:
         self.persist_current_workflow(window)
         if window is not None:
             self.update_graph_context_menu(window)
+
+    def connect_selected_node_to_many(self, target_node_ids: list[str], window: sg.Window | None = None) -> None:
+        """Connect one source to multiple legal destinations and persist once."""
+
+        if not target_node_ids:
+            return
+        if self.current_document is None or self.selected_node_id is None:
+            raise ValueError("Select a source node in a workflow first.")
+        available_ids = {node_id for node_id, _ in self.connection_target_choices()}
+        if any(node_id not in available_ids for node_id in target_node_ids):
+            raise ValueError("One or more connection targets are no longer available.")
+        for target_node_id in dict.fromkeys(target_node_ids):
+            self.current_document.workflow.graph.connect_nodes(self.selected_node_id, target_node_id)
+        self.persist_current_workflow(window)
 
     def disconnect_selected_node_from(self, target_node_id: str, window: sg.Window | None = None) -> None:
         """Remove a connection from the selected node to another node."""
@@ -1221,7 +1329,7 @@ class WorkflowEditorController:
         incoming_connection_node_id: str | None,
         outgoing_connection_node_id: str | None,
     ) -> None:
-        """Reconcile connections chosen in a modal node form."""
+        """Add connections chosen in a single-choice form without removing other branches."""
 
         if self.current_document is None:
             return
@@ -1231,10 +1339,6 @@ class WorkflowEditorController:
         desired_incoming = {incoming_connection_node_id} if incoming_connection_node_id and incoming_connection_node_id != node_id else set()
         desired_outgoing = {outgoing_connection_node_id} if outgoing_connection_node_id and outgoing_connection_node_id != node_id else set()
 
-        for source_id in sorted(current_incoming - desired_incoming):
-            workflow.graph.disconnect_nodes(source_id, node_id)
-        for target_id in sorted(current_outgoing - desired_outgoing):
-            workflow.graph.disconnect_nodes(node_id, target_id)
         for source_id in sorted(desired_incoming - current_incoming):
             workflow.graph.connect_nodes(source_id, node_id)
         for target_id in sorted(desired_outgoing - current_outgoing):
@@ -1274,7 +1378,6 @@ class WorkflowEditorController:
 
 def _show_node_properties_dialog(
     node: WorkflowNode | None,
-    workflow: Workflow | None = None,
 ) -> dict[str, Any] | None:
     """Prompt for editable node properties."""
 
@@ -1300,13 +1403,6 @@ def _show_node_properties_dialog(
             sg.Multiline(node.metadata.get("description", ""), key="-DESC-", size=(42, 4), expand_x=True),
         ],
         [sg.Checkbox("Enabled", default=node.widget.enabled, key="-ENABLED-")],
-        [
-            sg.Frame(
-                "Connections",
-                _connection_panes(workflow, exclude_node_id=node.node_id, node_id=node.node_id),
-                expand_x=True,
-            )
-        ],
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
     window = sg.Window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
@@ -1332,9 +1428,118 @@ def _show_node_properties_dialog(
                     "kind": kind,
                     "description": description,
                     "enabled": bool(values.get("-ENABLED-", False)),
-                    "incoming_connection_node_id": _choice_to_node_id(str(values.get("-CONN-INCOMING-", ""))),
-                    "outgoing_connection_node_id": _choice_to_node_id(str(values.get("-CONN-OUTGOING-", ""))),
                 }
+    finally:
+        window.close()
+
+
+def _show_equipment_node_dialog(
+    controller: WorkflowEditorController,
+    node: WorkflowNode | None = None,
+) -> dict[str, Any] | None:
+    """Edit the physical reference and workflow-local operating settings."""
+
+    choice_items = controller.equipment_choices()
+    if not choice_items and node is None:
+        _notify("No equipment exists in Floor View. Place equipment before creating an Equipment Node.")
+        return None
+    current_id = str(node.metadata.get("equipment_id", "")) if node is not None else ""
+    if current_id and all(equipment_id != current_id for equipment_id, _ in choice_items):
+        choice_items.insert(0, (current_id, f"{current_id} — Missing Equipment"))
+    label_to_id = {label: equipment_id for equipment_id, label in choice_items}
+    default_label = next(
+        (label for equipment_id, label in choice_items if equipment_id == current_id),
+        choice_items[0][1],
+    )
+    layout = [
+        [sg.Text("Equipment Resource", font=("Arial", 16, "bold"))],
+        [
+            sg.Text("Resource", size=(12, 1)),
+            sg.Combo(
+                list(label_to_id),
+                default_value=default_label,
+                key="-WF-EQUIPMENT-",
+                readonly=True,
+                size=(38, 1),
+            ),
+        ],
+        [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput if node else 0.0), key="-WF-EQUIPMENT-THROUGHPUT-", size=(14, 1))],
+        [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput if node else 0.0), key="-WF-EQUIPMENT-HUMAN-", size=(14, 1))],
+        [sg.Text("Capacity"), sg.Input(str(node.widget.capacity if node else 1), key="-WF-EQUIPMENT-CAPACITY-", size=(14, 1))],
+        [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff if node else 0), key="-WF-EQUIPMENT-STAFF-", size=(14, 1))],
+        [sg.Text("Description"), sg.Multiline(node.widget.description if node else "", key="-WF-EQUIPMENT-DESC-", size=(42, 4))],
+        [sg.Checkbox("Enabled", default=node.widget.enabled if node else True, key="-WF-EQUIPMENT-ENABLED-")],
+        [sg.Text("Operating settings belong to this workflow node, not the floor equipment.", text_color="#64748b")],
+        [sg.Push(), sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
+    ]
+    window = sg.Window("Equipment Node", layout, modal=True, finalize=True, keep_on_top=True)
+    try:
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, "Cancel"):
+                return None
+            if event == "-SAVE-":
+                equipment_id = label_to_id.get(str(values.get("-WF-EQUIPMENT-", "")))
+                if equipment_id is None:
+                    _notify("Select an equipment resource.")
+                    continue
+                try:
+                    throughput = float(values["-WF-EQUIPMENT-THROUGHPUT-"])
+                    human_throughput = float(values["-WF-EQUIPMENT-HUMAN-"])
+                    capacity = int(values["-WF-EQUIPMENT-CAPACITY-"])
+                    required_staff = int(values["-WF-EQUIPMENT-STAFF-"])
+                    controller._equipment_node_settings(
+                        throughput, human_throughput, capacity, required_staff,
+                        str(values["-WF-EQUIPMENT-DESC-"]), bool(values["-WF-EQUIPMENT-ENABLED-"]),
+                    )
+                except (TypeError, ValueError) as exc:
+                    _notify(f"Invalid equipment settings: {exc}")
+                    continue
+                return {
+                    "equipment_id": equipment_id,
+                    "throughput": throughput,
+                    "human_throughput": human_throughput,
+                    "capacity": capacity,
+                    "required_staff": required_staff,
+                    "description": str(values["-WF-EQUIPMENT-DESC-"]).strip(),
+                    "enabled": bool(values["-WF-EQUIPMENT-ENABLED-"]),
+                }
+    finally:
+        window.close()
+
+
+def _show_connection_target_dialog(controller: WorkflowEditorController) -> list[str] | None:
+    """Select legal downstream nodes for the currently selected node."""
+
+    choice_items = controller.connection_target_choices()
+    if not choice_items:
+        _notify("No compatible unconnected nodes are available.")
+        return None
+    checkbox_rows = [
+        [sg.Checkbox(label, key=f"-WF-CONNECTION-TARGET-{index}-")]
+        for index, (_, label) in enumerate(choice_items)
+    ]
+    layout = [
+        [sg.Text("Connect Nodes", font=("Arial", 16, "bold"))],
+        [sg.Text("Check each destination to connect:")],
+        [sg.Column(checkbox_rows, size=(440, min(360, max(60, len(choice_items) * 32))), scrollable=True, vertical_scroll_only=True)],
+        [sg.Push(), sg.Button("Connect", key="-CONNECT-", bind_return_key=True), sg.Button("Cancel")],
+    ]
+    window = sg.Window("Connect Workflow Nodes", layout, modal=True, finalize=True, keep_on_top=True)
+    try:
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, "Cancel"):
+                return None
+            if event == "-CONNECT-":
+                selected = [
+                    node_id
+                    for index, (node_id, _) in enumerate(choice_items)
+                    if values.get(f"-WF-CONNECTION-TARGET-{index}-", False)
+                ]
+                if selected:
+                    return selected
+                _notify("Select at least one destination node.")
     finally:
         window.close()
 
@@ -1343,6 +1548,7 @@ def open_workflow_editor_window(
     current_document: WorkflowDocument | None = None,
     repository: WorkflowRepository | None = None,
     on_change: Callable[[], None] | None = None,
+    equipment_instances: list[ProjectEquipmentInstance] | None = None,
 ) -> None:
     """Open the interactive workflow editor window."""
 
@@ -1350,6 +1556,7 @@ def open_workflow_editor_window(
         repository=repository,
         current_document=current_document,
         on_change=on_change,
+        equipment_instances=equipment_instances,
     )
     project_mode = on_change is not None
 
@@ -1370,13 +1577,18 @@ def open_workflow_editor_window(
         ],
         [sg.Text("Create a workflow to begin.", key="-WF-SUMMARY-")],
         [
-            sg.Button("New Workflow", key="-WF-NEW-", button_color=("white", "green"), disabled=project_mode),
-            sg.Button("Load Selected", key="-WF-LOAD-", disabled=project_mode),
-            sg.Button("Save Current", key="-WF-SAVE-", disabled=project_mode),
+            *(
+                [
+                    sg.Button("New Workflow", key="-WF-NEW-", button_color=("white", "green")),
+                    sg.Button("Load Selected", key="-WF-LOAD-"),
+                    sg.Button("Save Current", key="-WF-SAVE-"),
+                ]
+                if not project_mode else []
+            ),
             sg.Button("Add Node", key="-WF-ADD-NODE-"),
-            sg.Button("Add Connected Node", key="-WF-ADD-CONNECTED-"),
             sg.Button("Add Branch Node", key="-WF-ADD-BRANCH-"),
-            sg.Button("Rename Node", key="-WF-RENAME-"),
+            *([sg.Button("Add Equipment Node", key="-WF-ADD-EQUIPMENT-")] if project_mode else []),
+            sg.Button("Connect Nodes", key="-WF-CONNECT-"),
             sg.Button("Edit Properties", key="-WF-PROPS-"),
             sg.Button("Select tests", key="-WF-SELECT-TESTS-", disabled=True),
             sg.Button("Delete Node", key="-WF-DELETE-", button_color=("white", "#b91c1c")),
@@ -1457,6 +1669,7 @@ def open_workflow_editor_window(
                             num_rows=10,
                             alternating_row_color="lightblue",
                             font=("Arial", 11),
+                            enable_events=True,
                         )
                     ],
                 ],
@@ -1480,7 +1693,7 @@ def open_workflow_editor_window(
     _bind_graph_right_click_selection(window["-WF-GRAPH-"], controller, window)
     _bind_graph_double_click_properties(window["-WF-GRAPH-"], controller, window)
     controller.refresh(window)
-    _reset_scrollable_view(window["-WF-GRAPH-SCROLL-"])
+    controller.focus_diagram(window)
     window.refresh()
 
     try:
@@ -1495,15 +1708,26 @@ def open_workflow_editor_window(
                     controller.refresh_summary(window)
                     controller.rerender(window)
                 continue
+            if event == "-WF-WIDGETS-":
+                selected_rows = values.get("-WF-WIDGETS-", [])
+                if selected_rows:
+                    node_id = controller.node_id_for_table_row(selected_rows[0])
+                    if node_id is not None:
+                        controller.focus_node(window, node_id)
+                continue
             if event == "-WF-GRAPH-DOUBLE-":
                 controller.refresh_summary(window)
                 controller.rerender(window)
                 node = controller.selected_node()
-                workflow = controller.current_document.workflow if controller.current_document else None
-                result = _show_node_form_dialog(node, workflow=workflow)
-                if result is not None and node is not None:
-                    controller.update_node_from_form(node.node_id, window=window, **result)
-                    controller.refresh(window)
+                if node is not None and node.kind == "equipment":
+                    settings = _show_equipment_node_dialog(controller, node)
+                    if settings is not None:
+                        controller.bind_selected_equipment(window=window, **settings)
+                else:
+                    result = _show_node_form_dialog(node)
+                    if result is not None and node is not None:
+                        controller.update_node_from_form(node.node_id, window=window, **result)
+                controller.refresh(window)
                 continue
 
             try:
@@ -1570,7 +1794,7 @@ def open_workflow_editor_window(
                     selected_row = values["-WF-DOCS-"][0]
                     controller.load_workflow_by_row(selected_row)
                     controller.refresh(window)
-                    _reset_scrollable_view(window["-WF-GRAPH-SCROLL-"])
+                    controller.focus_diagram(window)
                 elif event == "-WF-ADD-SCENARIO-":
                     scenario_name = controller.add_scenario(window)
                     controller.refresh_summary(window)
@@ -1578,25 +1802,31 @@ def open_workflow_editor_window(
                 elif event == "-WF-ADD-NODE-":
                     controller.add_node(window)
                     controller.refresh(window)
-                elif event == "-WF-ADD-CONNECTED-":
-                    controller.add_connected_node(window)
-                    controller.refresh(window)
                 elif event == "-WF-ADD-BRANCH-":
                     controller.add_branch_node(window)
                     controller.refresh(window)
-                elif event == "-WF-RENAME-":
-                    node = controller.selected_node()
-                    if node is None:
-                        _notify("Select a node first.")
+                elif event == "-WF-ADD-EQUIPMENT-":
+                    settings = _show_equipment_node_dialog(controller)
+                    if settings is not None:
+                        controller.add_equipment_node(window=window, **settings)
+                        controller.refresh(window)
+                elif event == "-WF-CONNECT-":
+                    if controller.selected_node() is None:
+                        _notify("Select the source node first.")
                         continue
-                    new_name = sg.popup_get_text("Rename node", default_text=node.widget.name, title="Workflow")
-                    if new_name:
-                        controller.rename_selected_node(new_name.strip(), window)
+                    target_node_ids = _show_connection_target_dialog(controller)
+                    if target_node_ids is not None:
+                        controller.connect_selected_node_to_many(target_node_ids, window)
                         controller.refresh(window)
                 elif event == "-WF-PROPS-":
                     node = controller.selected_node()
-                    workflow = controller.current_document.workflow if controller.current_document else None
-                    result = _show_node_properties_dialog(node, workflow=workflow)
+                    if node is not None and node.kind == "equipment":
+                        settings = _show_equipment_node_dialog(controller, node)
+                        if settings is not None:
+                            controller.bind_selected_equipment(window=window, **settings)
+                            controller.refresh(window)
+                        continue
+                    result = _show_node_properties_dialog(node)
                     if result is not None:
                         controller.update_selected_node(**result, window=window)
                         controller.refresh(window)
@@ -1613,6 +1843,7 @@ def create_workflow_window(
     current_document: WorkflowDocument | None = None,
     repository: WorkflowRepository | None = None,
     on_change: Callable[[], None] | None = None,
+    equipment_instances: list[ProjectEquipmentInstance] | None = None,
 ) -> None:
     """Backward-compatible alias for opening the editor window."""
 
@@ -1620,4 +1851,5 @@ def create_workflow_window(
         current_document=current_document,
         repository=repository,
         on_change=on_change,
+        equipment_instances=equipment_instances,
     )

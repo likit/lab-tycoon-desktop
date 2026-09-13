@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from app.system.floor_view import (
+    CHEMISTRY_ANALYZER_METADATA,
     CENTRIFUGE_METADATA,
     EQUIPMENT_CATALOG,
     EquipmentClearance,
@@ -31,6 +32,67 @@ class IsometricCoordinateTests(unittest.TestCase):
 
 
 class FloorPlanTests(unittest.TestCase):
+    def test_catalog_defines_multi_tile_chemistry_analyzer(self) -> None:
+        analyzer = EQUIPMENT_CATALOG["chemistry_analyzer"]
+
+        self.assertIs(analyzer, CHEMISTRY_ANALYZER_METADATA)
+        self.assertEqual(analyzer.name, "Chemistry Analyzer")
+        self.assertEqual(analyzer.category, "Analytical")
+        self.assertEqual(analyzer.sprite, "analyzer/chemistry_analyzer.png")
+        self.assertEqual(analyzer.footprint, (2, 3))
+        self.assertEqual(analyzer.clearance, EquipmentClearance(front=1))
+        self.assertEqual(analyzer.anchor, "s")
+        self.assertEqual(analyzer.sprite_anchor_cell, (1, 2))
+        self.assertEqual(analyzer.sprite_subsample, 4)
+        self.assertEqual(analyzer.id_prefix, "CHEM")
+        self.assertTrue(analyzer.workflow_capable)
+
+    def test_analyzer_occupied_cells_derive_from_anchor_and_footprint(self) -> None:
+        placement = EquipmentPlacement(4, 5, equipment=CHEMISTRY_ANALYZER_METADATA)
+
+        self.assertEqual(
+            set(placement.occupied_cells()),
+            {(4, 5), (4, 6), (4, 7), (5, 5), (5, 6), (5, 7)},
+        )
+        self.assertEqual(
+            set(placement.required_cells()) - set(placement.occupied_cells()),
+            {(6, 5), (6, 6), (6, 7)},
+        )
+
+    def test_analyzer_uses_generic_boundary_and_front_clearance_validation(self) -> None:
+        floor = FloorPlan(rows=10, columns=10)
+
+        self.assertTrue(floor.can_place(EquipmentPlacement(4, 5, CHEMISTRY_ANALYZER_METADATA)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(4, 8, CHEMISTRY_ANALYZER_METADATA)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(8, 5, CHEMISTRY_ANALYZER_METADATA)))
+        self.assertTrue(floor.can_place(EquipmentPlacement(7, 7, CHEMISTRY_ANALYZER_METADATA)))
+
+    def test_analyzer_blocks_other_equipment_across_complete_footprint(self) -> None:
+        floor = FloorPlan()
+        floor.begin_placement("chemistry_analyzer")
+        floor.select(4, 4)
+        analyzer = floor.place_selected()
+
+        self.assertEqual(analyzer.instance_id if analyzer else None, "CHEM-001")
+        self.assertFalse(floor.can_place(EquipmentPlacement(5, 6, CENTRIFUGE_METADATA)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(3, 3, CHEMISTRY_ANALYZER_METADATA)))
+
+    def test_analyzer_ids_continue_from_persisted_instances(self) -> None:
+        floor = FloorPlan()
+        floor.equipment_instances.extend(
+            [
+                EquipmentInstance("CHEM-001", "chemistry_analyzer", 1, 1),
+                EquipmentInstance("CHEM-002", "chemistry_analyzer", 5, 5),
+            ]
+        )
+        floor = FloorPlan(floor_state=floor.floor_state)
+        floor.begin_placement("chemistry_analyzer")
+        floor.select(7, 1)
+
+        placed = floor.place_selected()
+
+        self.assertEqual(placed.instance_id if placed else None, "CHEM-003")
+
     def test_selection_rejects_cells_outside_the_floor(self) -> None:
         floor = FloorPlan(rows=10, columns=10)
 

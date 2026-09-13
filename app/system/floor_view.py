@@ -58,6 +58,8 @@ class EquipmentMetadata:
     footprint: tuple[int, int] = (1, 1)
     clearance: EquipmentClearance = EquipmentClearance()
     anchor: str = "s"
+    sprite_anchor_cell: tuple[int, int] = (0, 0)
+    sprite_subsample: int = 1
     workflow_capable: bool = False
     id_prefix: str = "EQ"
 
@@ -73,8 +75,23 @@ CENTRIFUGE_METADATA = EquipmentMetadata(
     id_prefix="CENT",
 )
 
+CHEMISTRY_ANALYZER_METADATA = EquipmentMetadata(
+    equipment_type="chemistry_analyzer",
+    name="Chemistry Analyzer",
+    category="Analytical",
+    sprite="analyzer/chemistry_analyzer.png",
+    footprint=(2, 3),
+    clearance=EquipmentClearance(front=1),
+    anchor="s",
+    sprite_anchor_cell=(1, 2),
+    sprite_subsample=4,
+    workflow_capable=True,
+    id_prefix="CHEM",
+)
+
 EQUIPMENT_CATALOG: dict[str, EquipmentMetadata] = {
     CENTRIFUGE_METADATA.equipment_type: CENTRIFUGE_METADATA,
+    CHEMISTRY_ANALYZER_METADATA.equipment_type: CHEMISTRY_ANALYZER_METADATA,
 }
 
 
@@ -312,7 +329,20 @@ class FloorViewRenderer:
     def _equipment_image(self, equipment: EquipmentMetadata):
         image = self._equipment_images.get(equipment.equipment_type)
         if image is None:
-            image = self._load_png(self.assets_dir / equipment.sprite)
+            source = self._load_png(self.assets_dir / equipment.sprite)
+            if equipment.sprite_subsample > 1:
+                image = self.canvas.master.tk.call("image", "create", "photo")
+                self.canvas.master.tk.call(
+                    image,
+                    "copy",
+                    source,
+                    "-subsample",
+                    equipment.sprite_subsample,
+                    equipment.sprite_subsample,
+                )
+                self.canvas.master.tk.call("image", "delete", source)
+            else:
+                image = source
             self._equipment_images[equipment.equipment_type] = image
         return image
 
@@ -405,7 +435,11 @@ class FloorViewRenderer:
 
         for instance in self.floor_plan.equipment_instances:
             placement = self.floor_plan.placement_for_instance(instance)
-            x, y = grid_to_screen(instance.row, instance.col)
+            anchor_row_offset, anchor_col_offset = placement.equipment.sprite_anchor_cell
+            x, y = grid_to_screen(
+                instance.row + anchor_row_offset,
+                instance.col + anchor_col_offset,
+            )
             self.canvas.create_image(
                 self.origin_x + x,
                 self.origin_y + y + TILE_HEIGHT / 2,
