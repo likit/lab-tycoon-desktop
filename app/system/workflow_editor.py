@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 import FreeSimpleGUI as sg
 
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
 from app.project import ProjectEquipmentInstance
 from app.system.floor_view import EQUIPMENT_CATALOG, EquipmentMetadata
 from sqlalchemy import select
@@ -1916,7 +1916,7 @@ def open_workflow_editor_window(
     _bind_graph_double_click_properties(window["-WF-GRAPH-"], controller, window)
     controller.refresh(window)
     controller.focus_diagram(window)
-    window.refresh()
+    bring_window_to_front(window)
 
     try:
         while True:

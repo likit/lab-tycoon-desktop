@@ -15,7 +15,7 @@ from app.system.floor_view import create_floor_view_window
 from app.system.models import Customer, LabOrder, LabOrderItem, SimulationOrder, SimulationPatient, SimulationRun, engine
 from app.system.storage import WorkflowDocument
 from app.system.workflow_editor import create_workflow_window
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
 
 
 ORDER_HEADINGS = ["ID", "HN", "Patient", "Ordered At", "Priority", "Status", "Items", "Source", "Scenario", "Run"]
@@ -55,7 +55,8 @@ def choose_project_workflow(project: LabTycoonProject) -> str | None:
         [sg.Listbox(list(labels), default_values=[next(iter(labels))], key="-WORKFLOW-CHOICE-", size=(42, 7))],
         [sg.Button("Open"), sg.Button("Cancel")],
     ]
-    dialog = sg.Window("Project Workflows", layout, modal=True)
+    dialog = sg.Window("Project Workflows", layout, modal=True, finalize=True)
+    bring_window_to_front(dialog)
     try:
         while True:
             event, values = dialog.read()
@@ -291,14 +292,12 @@ def create_project_workspace_window(project: LabTycoonProject) -> None:
                 key="-OPEN-FLOOR-VIEW-",
                 size=(14, 1),
                 button_color=("white", "#2563eb"),
-                tooltip="Open the editable laboratory floor",
             ),
             sg.Button(
                 "◇  Workflow",
                 key="-OPEN-WORKFLOW-",
                 size=(14, 1),
                 button_color=("white", "#2563eb"),
-                tooltip="Open this laboratory's workflow editor",
             ),
         ],
         [

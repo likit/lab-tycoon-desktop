@@ -91,13 +91,11 @@ def build_main_layout(
                 size=(15, 1),
                 button_color=primary_button,
                 border_width=0,
-                tooltip="Create a new Lab Tycoon project",
             ),
             sg.Button(
                 "📂  Open Project...",
                 key="-OPEN-PROJECT-",
                 size=(15, 1),
-                tooltip="Open an existing .ltp project",
             ),
         ],
         [
@@ -108,7 +106,6 @@ def build_main_layout(
                 button_color=("white", "#0f766e"),
                 border_width=0,
                 visible=context.has_active_project,
-                tooltip="Open the active laboratory workspace",
             )
         ],
     ]

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+from pathlib import Path
+
+from app.system.floor_view import FloorViewRenderer
 
 from app.system.floor_view import (
     CHEMISTRY_ANALYZER_METADATA,
@@ -19,6 +24,28 @@ from app.system.floor_view import (
 )
 
 
+class EquipmentPreviewTests(unittest.TestCase):
+    def test_preview_preserves_transparency_and_caches_scaled_sprite(self) -> None:
+        renderer = FloorViewRenderer.__new__(FloorViewRenderer)
+        renderer.assets_dir = Path(__file__).resolve().parents[1] / "app" / "assets"
+        renderer.canvas = SimpleNamespace(master=object())
+        renderer._preview_images = {}
+        captured = []
+        def photo(image, **kwargs):
+            captured.append(image.copy())
+            return "preview"
+        with patch("app.system.floor_view.ImageTk.PhotoImage", side_effect=photo):
+            first = renderer._preview_image(CHEMISTRY_ANALYZER_METADATA)
+            self.assertEqual(renderer._preview_image(CHEMISTRY_ANALYZER_METADATA), first)
+        self.assertEqual(len(captured), 1)
+        from PIL import Image
+        with Image.open(renderer.assets_dir / CHEMISTRY_ANALYZER_METADATA.sprite) as source:
+            self.assertEqual(captured[0].size, ((source.width + 3) // 4, (source.height + 3) // 4))
+        low, high = captured[0].getchannel("A").getextrema()
+        self.assertEqual(low, 0)
+        self.assertEqual(high, round(255 * 0.45))
+
+
 class IsometricCoordinateTests(unittest.TestCase):
     def test_grid_cell_centers_round_trip(self) -> None:
         for row in range(10):
@@ -32,6 +59,44 @@ class IsometricCoordinateTests(unittest.TestCase):
 
 
 class FloorPlanTests(unittest.TestCase):
+    def test_move_preserves_identity_count_and_notifies_project(self) -> None:
+        changes = []
+        floor = FloorPlan(on_change=lambda: changes.append(True))
+        instance = EquipmentInstance("CENT-001", "centrifuge", 3, 4)
+        floor.equipment_instances.append(instance)
+        floor.select_equipment_at(3, 4)
+        self.assertTrue(floor.begin_move())
+        self.assertTrue(floor.move_selected_to(6, 6))
+        self.assertEqual(len(floor.equipment_instances), 1)
+        moved = floor.equipment_instances[0]
+        self.assertEqual(moved.instance_id, "CENT-001")
+        self.assertEqual((moved.row, moved.col), (6, 6))
+        self.assertIsNone(floor.moving_equipment_id)
+        self.assertFalse(floor.move_selected_to(7, 7))
+        self.assertEqual(changes, [True])
+
+    def test_invalid_move_keeps_original_and_allows_retry(self) -> None:
+        floor = FloorPlan()
+        instance = EquipmentInstance("CHEM-001", "chemistry_analyzer", 3, 3)
+        floor.equipment_instances.extend([instance, EquipmentInstance("CENT-001", "centrifuge", 7, 7)])
+        floor.select_equipment_at(4, 4)
+        self.assertTrue(floor.begin_move())
+        self.assertFalse(floor.move_selected_to(8, 8))
+        self.assertFalse(floor.move_selected_to(6, 6))
+        self.assertEqual((instance.row, instance.col), (3, 3))
+        self.assertTrue(floor.move_selected_to(3, 4))
+        self.assertEqual(len(floor.equipment_instances), 2)
+
+    def test_completed_single_placement_does_not_add_on_subsequent_clicks(self) -> None:
+        floor = FloorPlan()
+        floor.begin_placement("centrifuge")
+        floor.select(3, 4)
+        instance = floor.place_selected()
+        floor.finish_placement()
+        floor.select(6, 6)
+        self.assertIsNone(floor.place_selected())
+        self.assertEqual(floor.equipment_instances, [instance])
+
     def test_catalog_defines_multi_tile_chemistry_analyzer(self) -> None:
         analyzer = EQUIPMENT_CATALOG["chemistry_analyzer"]
 

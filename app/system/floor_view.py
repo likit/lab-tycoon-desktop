@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import floor
 from pathlib import Path
 import sys
 from typing import Callable, Iterable
 
 import FreeSimpleGUI as sg
+from PIL import Image, ImageFilter, ImageTk
 
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
 from app.project import LabTycoonProject, ProjectEquipmentInstance, ProjectFloor
 
 
@@ -142,6 +143,7 @@ class FloorPlan:
         self.selected_cell: tuple[int, int] | None = None
         self.selected_equipment_id: str | None = None
         self.placement_equipment_type: str | None = None
+        self.moving_equipment_id: str | None = None
         self.equipment_instances = self.floor_state.equipment_instances
         self._instance_sequences = self._derive_instance_sequences()
         self._placement_session_instance_ids: set[str] = set()
@@ -199,11 +201,38 @@ class FloorPlan:
             self.selected_equipment_id = None
             return None
         self.equipment_instances.remove(instance)
+        self.moving_equipment_id = None
         self._placement_session_instance_ids.discard(instance.instance_id)
         self.selected_equipment_id = None
         self.selected_cell = None
         self._notify_change()
         return instance
+
+    def begin_move(self) -> bool:
+        """Start moving the selected instance without creating a new one."""
+        if self.selected_equipment_id is None:
+            return False
+        self.finish_placement()
+        self.moving_equipment_id = self.selected_equipment_id
+        return True
+
+    def move_selected_to(self, row: int, col: int) -> bool:
+        instance = next((item for item in self.equipment_instances
+                         if item.instance_id == self.moving_equipment_id), None)
+        if instance is None:
+            return False
+        placement = EquipmentPlacement(row, col, self.equipment_catalog[instance.equipment_type])
+        others = {cell for item in self.equipment_instances if item is not instance
+                  for cell in self.placement_for_instance(item).occupied_cells()}
+        if (not all(self.contains(*cell) for cell in placement.required_cells())
+                or not set(placement.occupied_cells()).isdisjoint(others)):
+            return False
+        index = self.equipment_instances.index(instance)
+        self.equipment_instances[index] = replace(instance, row=row, col=col)
+        self.selected_cell = (row, col)
+        self.moving_equipment_id = None
+        self._notify_change()
+        return True
 
     def occupied_cells(self) -> set[tuple[int, int]]:
         return {
@@ -231,6 +260,7 @@ class FloorPlan:
     def begin_placement(self, equipment_type: str) -> None:
         if equipment_type not in self.equipment_catalog:
             raise KeyError(f"Unknown equipment type: {equipment_type}")
+        self.moving_equipment_id = None
         self.placement_equipment_type = equipment_type
         self.selected_cell = None
         self.selected_equipment_id = None
@@ -314,6 +344,8 @@ class FloorViewRenderer:
         self.origin_y = 28.0
         self._tile_image = self._load_tile_image()
         self._equipment_images: dict[str, object] = {}
+        self._preview_images: dict[str, object] = {}
+        self._selected_images: dict[str, object] = {}
 
     def _load_png(self, path: Path):
         """Load an RGBA PNG without changing its size or transparency."""
@@ -344,6 +376,37 @@ class FloorViewRenderer:
             else:
                 image = source
             self._equipment_images[equipment.equipment_type] = image
+        return image
+
+    def _selected_image(self, equipment: EquipmentMetadata):
+        """Cache a gold silhouette border around the equipment sprite."""
+        image = self._selected_images.get(equipment.equipment_type)
+        if image is None:
+            with Image.open(self.assets_dir / equipment.sprite) as source:
+                rgba = source.convert("RGBA")
+            scale = equipment.sprite_subsample
+            # Match Tk's integer subsampling used for the normal sprite.
+            rgba = rgba.resize(((rgba.width + scale - 1) // scale,
+                                (rgba.height + scale - 1) // scale), Image.Resampling.NEAREST)
+            mask = rgba.getchannel("A").point(lambda alpha: 255 if alpha > 32 else 0)
+            outline = Image.new("RGBA", rgba.size, self.EQUIPMENT_SELECTION_COLOR)
+            outline.putalpha(mask.filter(ImageFilter.MaxFilter(9)))
+            outline.alpha_composite(rgba)
+            image = ImageTk.PhotoImage(outline, master=self.canvas.master)
+            self._selected_images[equipment.equipment_type] = image
+        return image
+
+    def _preview_image(self, equipment: EquipmentMetadata):
+        image = self._preview_images.get(equipment.equipment_type)
+        if image is None:
+            with Image.open(self.assets_dir / equipment.sprite) as source:
+                rgba = source.convert("RGBA")
+            scale = equipment.sprite_subsample
+            rgba = rgba.resize(((rgba.width + scale - 1) // scale,
+                                (rgba.height + scale - 1) // scale))
+            rgba.putalpha(rgba.getchannel("A").point(lambda alpha: round(alpha * 0.45)))
+            image = ImageTk.PhotoImage(rgba, master=self.canvas.master)
+            self._preview_images[equipment.equipment_type] = image
         return image
 
     def _load_tile_image(self):
@@ -443,8 +506,25 @@ class FloorViewRenderer:
             self.canvas.create_image(
                 self.origin_x + x,
                 self.origin_y + y + TILE_HEIGHT / 2,
-                image=self._equipment_image(placement.equipment),
+                image=(self._selected_image(placement.equipment)
+                       if instance.instance_id == self.floor_plan.selected_equipment_id
+                       else self._equipment_image(placement.equipment)),
                 anchor=placement.equipment.anchor,
+            )
+
+        preview_type = self.floor_plan.placement_equipment_type
+        if self.floor_plan.moving_equipment_id is not None:
+            moving = next((item for item in self.floor_plan.equipment_instances
+                           if item.instance_id == self.floor_plan.moving_equipment_id), None)
+            preview_type = moving.equipment_type if moving else None
+        if preview_type is not None and self.floor_plan.selected_cell is not None:
+            equipment = self.floor_plan.equipment_catalog[preview_type]
+            row, col = self.floor_plan.selected_cell
+            offset_row, offset_col = equipment.sprite_anchor_cell
+            x, y = grid_to_screen(row + offset_row, col + offset_col)
+            self.canvas.create_image(
+                self.origin_x + x, self.origin_y + y + TILE_HEIGHT / 2,
+                image=self._preview_image(equipment), anchor=equipment.anchor,
             )
 
 
@@ -488,7 +568,7 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         [
             sg.Text("Experimental Floor View", font=("Arial", 18, "bold")),
             sg.Push(),
-            sg.Text("Select a tile to place equipment", key="-FLOOR-STATUS-"),
+            sg.Text("Select equipment to move, or choose equipment to add", key="-FLOOR-STATUS-"),
         ],
         [
             sg.Canvas(
@@ -508,6 +588,7 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             ),
         ],
         [
+            sg.Button("Move Equipment", key="-MOVE-EQUIPMENT-"),
             sg.Button("Remove Equipment", key="-REMOVE-EQUIPMENT-", disabled=True),
             sg.Push(),
             sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR),
@@ -536,6 +617,12 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         if cell is None:
             floor_plan.selected_cell = None
             window["-FLOOR-STATUS-"].update("Move over a floor tile")
+        elif floor_plan.moving_equipment_id is not None:
+            moving_id = floor_plan.moving_equipment_id
+            if floor_plan.move_selected_to(*cell):
+                window["-FLOOR-STATUS-"].update(f"Moved {moving_id} to row {cell[0]}, column {cell[1]}")
+            else:
+                window["-FLOOR-STATUS-"].update("Cannot move here; choose another tile or press Esc")
         elif floor_plan.placement_equipment_type is not None:
             existing_instance = floor_plan.equipment_at(*cell)
             if existing_instance is not None:
@@ -554,8 +641,11 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
                         f"Cannot place {equipment.name} at row {cell[0]}, column {cell[1]}"
                     )
                 else:
+                    floor_plan.finish_placement()
+                    floor_plan.select_equipment_at(*cell)
+                    window["-REMOVE-EQUIPMENT-"].update(disabled=False)
                     window["-FLOOR-STATUS-"].update(
-                        f"Placed {instance.instance_id} at row {cell[0]}, column {cell[1]}"
+                        f"Placed {instance.instance_id}; select Move Equipment to reposition it"
                     )
         else:
             instance = floor_plan.select_equipment_at(*cell)
@@ -570,7 +660,7 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         renderer.render()
 
     def preview_tile(event) -> None:
-        if floor_plan.placement_equipment_type is None:
+        if floor_plan.placement_equipment_type is None and floor_plan.moving_equipment_id is None:
             return
         cell = renderer.cell_at_canvas_point(event.x, event.y)
         if cell == floor_plan.selected_cell:
@@ -580,6 +670,10 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             window["-FLOOR-STATUS-"].update("Move over a floor tile")
         else:
             floor_plan.select(*cell)
+            if floor_plan.moving_equipment_id is not None:
+                window["-FLOOR-STATUS-"].update("Click to move here; Esc cancels")
+                renderer.render()
+                return
             equipment = floor_plan.equipment_catalog[floor_plan.placement_equipment_type]
             validity = "Click to place" if floor_plan.can_place_selected() else "Invalid placement"
             window["-FLOOR-STATUS-"].update(
@@ -588,6 +682,11 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         renderer.render()
 
     def cancel_placement(_event=None) -> None:
+        if floor_plan.moving_equipment_id is not None:
+            floor_plan.moving_equipment_id = None
+            window["-FLOOR-STATUS-"].update("Move cancelled")
+            renderer.render()
+            return
         if floor_plan.placement_equipment_type is None:
             return
         removed = floor_plan.cancel_placement()
@@ -605,11 +704,17 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
 
     canvas.bind("<Button-1>", select_tile)
     canvas.bind("<Motion>", preview_tile)
+    def clear_preview(_event=None) -> None:
+        if floor_plan.placement_equipment_type is not None or floor_plan.moving_equipment_id is not None:
+            floor_plan.selected_cell = None
+            renderer.render()
+    canvas.bind("<Leave>", clear_preview)
     canvas.bind("<Configure>", redraw_for_size)
     window.TKroot.bind_all("<Escape>", cancel_placement)
     window.TKroot.bind_all("<Delete>", remove_selected_equipment)
     window.TKroot.bind_all("<BackSpace>", remove_selected_equipment)
     redraw_for_size()
+    bring_window_to_front(window)
 
     while True:
         event, _values = window.read()
@@ -622,6 +727,12 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             equipment = floor_plan.equipment_catalog[equipment_type]
             window["-FLOOR-STATUS-"].update(f"Placing {equipment.name}: move over the floor and click")
             renderer.render()
+        elif event == "-MOVE-EQUIPMENT-":
+            if floor_plan.begin_move():
+                window["-FLOOR-STATUS-"].update("Moving selected equipment: click a destination tile; Esc cancels")
+                renderer.render()
+            else:
+                window["-FLOOR-STATUS-"].update("Select equipment on the floor first")
         elif event == "-REMOVE-EQUIPMENT-":
             remove_selected_equipment()
 
