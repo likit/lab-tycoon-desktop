@@ -12,6 +12,7 @@ from app.project import ProjectEquipmentInstance
 from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.system.workflow_editor import (
     WorkflowEditorController,
+    WorkflowGraphRenderer,
     WorkflowLayoutEngine,
     _center_scroll_fraction,
     _scroll_canvas_for_column,
@@ -20,6 +21,79 @@ from app.system.workflow_editor import (
 
 
 class WorkflowGraphModelTests(unittest.TestCase):
+    def test_patient_resource_is_an_unconnected_persistent_declaration(self) -> None:
+        workflow = Workflow()
+        controller = WorkflowEditorController(on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+
+        resource_id = controller.add_resource_node("patient", "generate_per_run")
+        controller.update_resource(resource_id, "patient", "generate_per_run", True)
+        self.assertEqual(workflow.get_node(resource_id).kind, "resource")
+        self.assertEqual(workflow.get_node(resource_id).metadata["adapter_type"], "generate_per_run")
+        with self.assertRaisesRegex(ValueError, "already has"):
+            controller.add_resource_node("patient", "generate_per_run")
+        with self.assertRaisesRegex(ValueError, "Unsupported Resource"):
+            controller.add_resource_node("doctor", "generate_per_run")
+
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(resource_id)
+        self.assertEqual(restored.metadata["resource_type"], "patient")
+        self.assertEqual(restored.metadata["adapter_type"], "generate_per_run")
+
+    def test_patient_resource_connects_to_order_adapter_but_not_processing_node(self) -> None:
+        workflow = Workflow()
+        controller = WorkflowEditorController(on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        resource_id = controller.add_resource_node("patient", "generate_per_run")
+        adapter_id = controller.add_order_adapter_node()
+        task_id = workflow.create_node("Registration").node_id
+        controller.selected_node_id = resource_id
+
+        self.assertEqual([item[0] for item in controller.connection_target_choices()], [adapter_id])
+        controller.connect_selected_node_to(adapter_id)
+        self.assertEqual([(edge.source, edge.target) for edge in workflow.graph.edges], [(resource_id, adapter_id)])
+        self.assertEqual(controller.connection_target_choices(), [])
+        with self.assertRaisesRegex(ValueError, "only connect"):
+            controller.connect_selected_node_to(task_id)
+        controller.update_order_adapter_from_form(
+            adapter_id, node_type="order adapter", name="Orders", adapter_type="simulation",
+            description="", enabled=True,
+        )
+
+    def test_order_adapter_node_creation_and_persistence(self) -> None:
+        workflow = Workflow()
+        dirty_events: list[bool] = []
+        controller = WorkflowEditorController(on_change=lambda: dirty_events.append(True))
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+
+        node_id = controller.add_order_adapter_node()
+        controller.update_order_adapter_from_form(
+            node_id, node_type="order adapter", name="Order Intake",
+            adapter_type="simulation", description="Synthetic arrivals", enabled=True,
+        )
+        node = workflow.get_node(node_id)
+        self.assertEqual(node.kind, "order_adapter")
+        self.assertEqual(node.widget.node_type, "order adapter")
+        self.assertEqual(node.metadata["adapter_type"], "simulation")
+        self.assertEqual(node.widget.throughput, 0.0)
+        self.assertEqual(len(dirty_events), 2)
+
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(node_id)
+        self.assertEqual(restored.kind, "order_adapter")
+        self.assertEqual(restored.widget.name, "Order Intake")
+        self.assertEqual(restored.metadata["adapter_type"], "simulation")
+
+    def test_order_adapter_rejects_incoming_editor_connections(self) -> None:
+        workflow = Workflow()
+        source = workflow.create_node("Source", 1.0)
+        controller = WorkflowEditorController(on_change=lambda: None)
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        adapter_id = controller.add_order_adapter_node()
+        controller.selected_node_id = source.node_id
+
+        self.assertNotIn(adapter_id, {node_id for node_id, _ in controller.connection_target_choices()})
+        with self.assertRaisesRegex(ValueError, "cannot have incoming"):
+            controller.connect_selected_node_to(adapter_id)
+
     def test_equipment_nodes_reference_and_resolve_project_equipment(self) -> None:
         equipment = [ProjectEquipmentInstance("CHEM-001", "chemistry_analyzer", 4, 5)]
         workflow = Workflow()
@@ -240,6 +314,31 @@ class WorkflowGraphModelTests(unittest.TestCase):
 
 
 class WorkflowLayoutTests(unittest.TestCase):
+    def test_order_adapter_renders_as_source_node(self) -> None:
+        class RecordingCanvas:
+            def __init__(self) -> None:
+                self.rectangles = 0
+                self.labels: list[str] = []
+
+            def draw_rectangle(self, *args: object, **kwargs: object) -> None:
+                self.rectangles += 1
+
+            def draw_text(self, label: str, *args: object, **kwargs: object) -> None:
+                self.labels.append(label)
+
+        workflow = Workflow()
+        node = workflow.create_node(
+            "Order Intake", kind="order_adapter",
+            metadata={"node_type": "order adapter", "adapter_type": "simulation"},
+        )
+        canvas = RecordingCanvas()
+
+        WorkflowGraphRenderer()._draw_node(canvas, node, (300, 300), selected=False)
+
+        self.assertEqual(canvas.rectangles, 1)
+        self.assertIn("Order Intake", canvas.labels)
+        self.assertIn("Source: simulation", canvas.labels)
+
     def test_scrollable_column_resolves_its_inner_canvas(self) -> None:
         canvas = object()
         wrapped_column = SimpleNamespace(Widget=SimpleNamespace(canvas=canvas))

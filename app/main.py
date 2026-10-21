@@ -17,10 +17,8 @@ from app.main_ui import MainWindowContext, build_main_layout, update_context_ele
 from app.lis_settings import create_lis_settings_window
 from app.database_explorer import create_database_explorer_window
 from app.project import LabTycoonProject, project_session
-from app.project_workspace import create_project_workspace_window
+from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow
 from app.project_serializer import ProjectFormatError, ProjectSerializer
-from app.system.storage import WorkflowDocument
-from app.system.workflow_editor import create_workflow_window as create_project_workflow_window
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
 from app.auth.windows import SessionManager
 from app.system.windows import *
@@ -293,17 +291,17 @@ def run_app():
         elif event == 'Settings...':
             if create_lis_settings_window() and may_replace_active_project():
                 break
-        elif event == 'Workflow':
+        elif event in ('Add Workflow...', 'Open Workflow...'):
             project = project_session.active_project
             if project is None:
                 sg.popup_error('No project is currently open. Create or open a Lab Tycoon project first.')
             else:
-                document = WorkflowDocument(project.project_id, f'{project.name} Workflow', project.workflow)
-                create_project_workflow_window(
-                    current_document=document,
-                    on_change=project.mark_dirty,
-                    equipment_instances=project.floor.equipment_instances,
+                workflow_id = (
+                    add_project_workflow(project) if event == 'Add Workflow...'
+                    else choose_project_workflow(project)
                 )
+                if workflow_id is not None:
+                    open_project_workflow(project, workflow_id)
                 refresh_project_display()
         elif event == 'Rule Preview':
             create_rule_preview_window()

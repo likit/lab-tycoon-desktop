@@ -56,6 +56,7 @@ def build_main_menu() -> list[list[object]]:
             ],
         ],
         ["Simulation", ["!Run Simulation", "!Scenarios", "!Simulation Results"]],
+        ["Workflow", ["Add Workflow...", "Open Workflow..."]],
         [
             "Analytics",
             [
@@ -67,7 +68,7 @@ def build_main_menu() -> list[list[object]]:
         ],
         [
             "Laboratory Design",
-            ["Floor Plan", "Workflow", "!SOPs", "!Equipment & Resources"],
+            ["Floor Plan", "!SOPs", "!Equipment & Resources"],
         ],
         ["Tools", ["Database Explorer", "Rule Preview", "SQL Editor"]],
         ["User", ["Profile", "Sign In", "Sign Out"]],

@@ -21,6 +21,75 @@ from app.system.storage import WorkflowDocument, WorkflowRepository
 
 
 class WorkflowSimulationEngineTests(unittest.TestCase):
+    def test_simulation_order_adapter_forwards_order_to_downstream_node(self) -> None:
+        workflow = Workflow()
+        adapter = workflow.create_node(
+            "Order Intake", kind="order_adapter",
+            metadata={"node_type": "order adapter", "adapter_type": "simulation"},
+        )
+        registration = workflow.create_connected_node(adapter.node_id, "Registration", 1.0)
+
+        result = run_workflow_simulation(
+            specimens_number=2,
+            workflow_document=WorkflowDocument.create("Workflow", workflow=workflow),
+            random_seed=7,
+        )
+
+        self.assertEqual(result.specimens_number, 2)
+        self.assertEqual(len(result.completed_specimens), 2)
+        self.assertEqual(result.node_stats[registration.node_id].specimens_processed, 2)
+        self.assertEqual(result.node_stats[adapter.node_id].specimens_processed, 0)
+        first = result.completed_specimens[0]
+        self.assertIsInstance(first.payload, InMemoryOrder)
+        self.assertEqual(first.metadata["order_source"], "simulation")
+        self.assertEqual(first.specimen_id, "SIM-O0001")
+        self.assertEqual(first.history[0]["event"], "order_created")
+        self.assertTrue(any(event["widget"] == "Registration" for event in first.history))
+
+    def test_order_adapter_with_incoming_edge_is_invalid(self) -> None:
+        workflow = Workflow()
+        source = workflow.create_node("Source", 1.0)
+        adapter = workflow.create_connected_node(
+            source.node_id, "Order Intake", kind="order_adapter",
+            metadata={"node_type": "order adapter", "adapter_type": "simulation"},
+        )
+        workflow.create_connected_node(adapter.node_id, "Registration", 1.0)
+
+        with self.assertRaisesRegex(ValueError, "incoming order-flow connections"):
+            run_workflow_simulation(
+                specimens_number=1,
+                workflow_document=WorkflowDocument.create("Workflow", workflow=workflow),
+            )
+
+    def test_disabled_order_adapter_does_not_generate_orders(self) -> None:
+        workflow = Workflow()
+        adapter = workflow.create_node(
+            "Order Intake", kind="order_adapter",
+            metadata={"node_type": "order adapter", "adapter_type": "simulation", "enabled": False},
+        )
+        workflow.create_connected_node(adapter.node_id, "Registration", 1.0)
+
+        result = run_workflow_simulation(
+            specimens_number=2,
+            workflow_document=WorkflowDocument.create("Workflow", workflow=workflow),
+        )
+
+        self.assertEqual(result.completed_specimens, [])
+
+    def test_legacy_workflow_without_adapter_uses_existing_synthetic_specimen(self) -> None:
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 1.0)
+        workflow.create_connected_node(intake.node_id, "Release", 1.0)
+
+        result = run_workflow_simulation(
+            specimens_number=1,
+            workflow_document=WorkflowDocument.create("Workflow", workflow=workflow),
+            random_seed=7,
+        )
+
+        self.assertEqual(result.completed_specimens[0].specimen_id, "specimen-1")
+        self.assertIsNone(result.completed_specimens[0].payload)
+
     def test_simulation_traverses_nodes_and_collects_metrics(self) -> None:
         workflow = Workflow()
         intake = workflow.create_node("Intake", 1.0, metadata={"capacity": 2})

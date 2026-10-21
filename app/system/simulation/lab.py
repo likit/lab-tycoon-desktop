@@ -21,6 +21,8 @@ from app.system.governance import (
     SopAsCodeGovernanceProvider,
 )
 from app.system.model import Scenario, Specimen, Workflow, WorkflowNode
+from app.system.order_adapter import create_order_adapter
+from app.system.resource_adapter import patient_adapter_for_workflow
 from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.system.signals.duplicate import detect_duplicate_candidate
 
@@ -71,6 +73,7 @@ def _build_specimens_from_orders(orders: list[object]) -> list[Specimen]:
                 "order_id": str(order_id),
                 "order_priority": str(getattr(order, "priority", "")),
                 "order_time": str(getattr(order, "order_datetime", "")),
+                "order_source": str(getattr(order, "source", "")),
                 "pending_tests": pending_tests,
                 "all_tests": list(pending_tests),
             },
@@ -313,12 +316,21 @@ class WorkflowRouter:
     """Route specimens through a workflow graph."""
 
     def start_node_id(self, workflow: Workflow) -> str | None:
+        for node in workflow.graph.iter_nodes():
+            if node.widget.node_type == "order adapter" and any(
+                workflow.get_node(edge.source).kind != "resource"
+                for edge in workflow.graph.incoming_edges(node.node_id)
+            ):
+                raise ValueError("Order Adapter nodes cannot have incoming order-flow connections.")
         roots = self.start_node_ids(workflow)
         if len(roots) > 1:
             raise ValueError(
                 "Workflow has multiple root nodes. Merge the flows into a single chain before simulation."
             )
         if roots:
+            root = workflow.get_node(roots[0])
+            if root is not None and root.widget.node_type == "order adapter" and not root.widget.enabled:
+                return None
             return self.first_enabled_reachable_node_id(workflow, roots[0])
         if any(
             workflow.graph.incoming_edges(node.node_id) or workflow.graph.outgoing_edges(node.node_id)
@@ -332,11 +344,16 @@ class WorkflowRouter:
     def start_node_ids(self, workflow: Workflow) -> list[str]:
         """Return the non-orphan root nodes for the workflow."""
 
-        roots = workflow.graph.root_node_ids()
         active_roots: list[str] = []
-        for node_id in roots:
-            if workflow.graph.incoming_edges(node_id) or workflow.graph.outgoing_edges(node_id):
-                active_roots.append(node_id)
+        for node in workflow.graph.iter_nodes():
+            if node.kind == "resource":
+                continue
+            incoming_flow = [
+                edge for edge in workflow.graph.incoming_edges(node.node_id)
+                if workflow.get_node(edge.source).kind != "resource"
+            ]
+            if not incoming_flow and workflow.graph.outgoing_edges(node.node_id):
+                active_roots.append(node.node_id)
         return active_roots
 
     def first_enabled_reachable_node_id(
@@ -417,6 +434,7 @@ class WorkflowSimulationEngine:
         router: WorkflowRouter | None = None,
         specimens: list[Specimen] | None = None,
         on_specimen_completed: Callable[[int, int], None] | None = None,
+        on_order_created: Callable[[object], None] | None = None,
         governance_provider: GovernanceProvider | None = None,
         debug_governance: bool = False,
     ) -> None:
@@ -426,6 +444,7 @@ class WorkflowSimulationEngine:
         self.scenario = scenario or (workflow.scenarios[0] if workflow.scenarios else None)
         self.router = router or WorkflowRouter()
         self.on_specimen_completed = on_specimen_completed
+        self.on_order_created = on_order_created
         if settings.realtime_factor is not None:
             self.env = simpy.rt.RealtimeEnvironment(factor=float(settings.realtime_factor), strict=False)
         else:
@@ -442,6 +461,15 @@ class WorkflowSimulationEngine:
             else [Specimen(specimen_id=f"specimen-{index + 1}") for index in range(settings.specimens_number)]
         )
         self.start_node_id = self.router.start_node_id(self.workflow)
+        start_node = self.workflow.get_node(self.start_node_id) if self.start_node_id else None
+        self.arrival_adapter_node = (
+            start_node if start_node is not None and start_node.widget.node_type == "order adapter" else None
+        )
+        self.arrival_adapter = (
+            create_order_adapter(str(self.arrival_adapter_node.metadata.get("adapter_type", "simulation")))
+            if self.arrival_adapter_node is not None else None
+        )
+        self.patient_adapter = patient_adapter_for_workflow(workflow) if self.arrival_adapter is not None else None
         if self.start_node_id is None:
             self.active_node_ids: list[str] = []
         else:
@@ -925,7 +953,10 @@ class WorkflowSimulationEngine:
 
     def _specimen_process(self, specimen_index: int):
         specimen = self.specimens[specimen_index]
-        current_node_id = self.start_node_id
+        current_node_id = (
+            self.router.next_node_id(self.workflow, self.arrival_adapter_node.node_id, specimen)
+            if self.arrival_adapter_node is not None else self.start_node_id
+        )
         if current_node_id is None:
             return
 
@@ -1034,6 +1065,23 @@ class WorkflowSimulationEngine:
     def _arrival_process(self):
         for specimen_index in range(len(self.specimens)):
             specimen = self.specimens[specimen_index]
+            if self.arrival_adapter is not None and specimen.payload is None:
+                order = self.arrival_adapter.create_order(
+                    specimen_index + 1,
+                    adapter_id=self.arrival_adapter_node.node_id,
+                    simulation_time=float(self.env.now),
+                    patient=self.patient_adapter.patient_for_order(specimen_index + 1),
+                )
+                if self.on_order_created is not None:
+                    self.on_order_created(order)
+                specimen = _build_specimens_from_orders([order])[0]
+                specimen.record_event(
+                    self.arrival_adapter_node.widget.name,
+                    "order_created",
+                    order_id=str(order.id), source=str(order.source),
+                    adapter_id=self.arrival_adapter_node.node_id, time=self.env.now,
+                )
+                self.specimens[specimen_index] = specimen
             specimen.metadata["arrival_index"] = specimen_index
             self._observed_orders.append(specimen.payload)
             self.env.process(self._specimen_process(specimen_index))
@@ -1114,7 +1162,9 @@ def run_workflow_simulation(
     random_seed: int | None = None,
     realtime_factor: float | None = None,
     orders: list[object] | None = None,
+    scenario: Scenario | None = None,
     on_specimen_completed: Callable[[int, int], None] | None = None,
+    on_order_created: Callable[[object], None] | None = None,
     governance_provider: GovernanceProvider | None = None,
     debug_governance: bool = False,
 ) -> WorkflowSimulationResult:
@@ -1127,7 +1177,7 @@ def run_workflow_simulation(
     )
     specimens = _build_specimens_from_orders(orders) if orders is not None else None
     resolved_specimens_number = len(specimens) if specimens is not None else specimens_number
-    scenario = workflow_document.workflow.scenarios[0] if workflow_document.workflow.scenarios else None
+    scenario = scenario or (workflow_document.workflow.scenarios[0] if workflow_document.workflow.scenarios else None)
     settings = WorkflowSimulationSettings.from_scenario(
         specimens_number=resolved_specimens_number,
         workflow=workflow_document.workflow,
@@ -1142,6 +1192,7 @@ def run_workflow_simulation(
         scenario=scenario,
         specimens=specimens,
         on_specimen_completed=on_specimen_completed,
+        on_order_created=on_order_created,
         governance_provider=governance_provider,
         debug_governance=debug_governance,
     )

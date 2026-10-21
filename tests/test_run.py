@@ -9,10 +9,20 @@ import run
 
 
 class RunEntryPointTests(unittest.TestCase):
+    def test_simulation_cli_keeps_specimen_count_flag(self) -> None:
+        with patch("run.run_and_print_workflow_simulation") as run_sim:
+            exit_code = run.main(["--simulate", "--specimens-number", "3", "--seed", "7"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run_sim.call_args.kwargs["specimens_number"], 3)
+        self.assertEqual(run_sim.call_args.kwargs["random_seed"], 7)
+
     def test_order_file_imports_uploaded_source_before_launching_app(self) -> None:
         with patch("run.load_uploaded_order_source") as load_source, patch(
             "run.use_uploaded_order_source"
-        ) as use_source, patch("app.main.run_app") as run_app:
+        ) as use_source, patch("app.system.models.ensure_db_schema"), patch(
+            "app.main.run_app"
+        ) as run_app:
             exit_code = run.main(["--order-file", "/tmp/orders.xlsx"])
 
         self.assertEqual(exit_code, 0)

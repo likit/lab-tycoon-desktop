@@ -304,6 +304,52 @@ class LabOrder(Base):
     doctor: Mapped["Doctor"] = relationship(foreign_keys=[doctor_id])
 
 
+class SimulationRun(Base):
+    """One execution of a reusable project workflow scenario."""
+
+    __tablename__ = 'simulation_runs'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    scenario_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    scenario_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    workflow_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    random_seed: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    requested_orders: Mapped[int] = mapped_column(Integer(), nullable=False)
+    patients: Mapped[List["SimulationPatient"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    orders: Mapped[List["SimulationOrder"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+
+
+class SimulationPatient(Base):
+    """Synthetic patient scoped to one simulation run, never a LIS customer."""
+
+    __tablename__ = 'simulation_patients'
+    id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey('simulation_runs.id'), nullable=False, index=True)
+    patient_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    hn: Mapped[str] = mapped_column(String(64), nullable=False)
+    fullname: Mapped[str] = mapped_column(String(255), nullable=False)
+    run: Mapped["SimulationRun"] = relationship(back_populates="patients")
+    orders: Mapped[List["SimulationOrder"]] = relationship(back_populates="patient")
+
+
+class SimulationOrder(Base):
+    """Generated order kept apart from operational LIS orders."""
+
+    __tablename__ = 'simulation_orders'
+    id: Mapped[int] = mapped_column(Integer(), autoincrement=True, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey('simulation_runs.id'), nullable=False, index=True)
+    order_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    patient_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    patient_ref_id: Mapped[int | None] = mapped_column(ForeignKey('simulation_patients.id'), nullable=True, index=True)
+    ordered_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False)
+    test_codes_json: Mapped[str] = mapped_column(Text(), nullable=False, default='[]')
+    metadata_json: Mapped[str] = mapped_column(Text(), nullable=False, default='{}')
+    run: Mapped["SimulationRun"] = relationship(back_populates="orders")
+    patient: Mapped["SimulationPatient | None"] = relationship(back_populates="orders")
+
+
 class LabOrderItem(Base):
     __versioned__ = {}
     __tablename__ = 'lab_order_items'
@@ -390,8 +436,9 @@ def database_is_initialized() -> bool:
     return inspector.has_table('users') and inspector.has_table('lab_orders')
 
 
-def ensure_db_schema():
-    with engine.begin() as connection:
+def ensure_db_schema(database_engine=None):
+    target_engine = database_engine or engine
+    with target_engine.begin() as connection:
         inspector = inspect(connection)
         if 'lab_orders' not in inspector.get_table_names():
             return
@@ -401,6 +448,30 @@ def ensure_db_schema():
             connection.execute(
                 text("ALTER TABLE lab_orders ADD COLUMN priority VARCHAR(7) NOT NULL DEFAULT 'routine'")
             )
+    Base.metadata.create_all(target_engine, tables=[SimulationRun.__table__, SimulationPatient.__table__, SimulationOrder.__table__])
+    with target_engine.begin() as connection:
+        columns = {column['name'] for column in inspect(connection).get_columns('simulation_orders')}
+        if 'patient_ref_id' not in columns:
+            connection.execute(text('ALTER TABLE simulation_orders ADD COLUMN patient_ref_id INTEGER REFERENCES simulation_patients(id)'))
+        # Older simulation orders stored only a synthetic patient ID. Preserve
+        # them by creating one patient per (run, ID), then linking those orders.
+        missing = connection.execute(text(
+            'SELECT DISTINCT run_id, patient_id FROM simulation_orders WHERE patient_ref_id IS NULL'
+        )).all()
+        for run_id, patient_id in missing:
+            existing = connection.execute(text(
+                'SELECT id FROM simulation_patients WHERE run_id = :run_id AND patient_id = :patient_id LIMIT 1'
+            ), {'run_id': run_id, 'patient_id': patient_id}).scalar()
+            if existing is None:
+                existing = connection.execute(text(
+                    'INSERT INTO simulation_patients (run_id, patient_id, hn, fullname) '
+                    'VALUES (:run_id, :patient_id, :hn, :fullname)'
+                ), {'run_id': run_id, 'patient_id': patient_id, 'hn': patient_id,
+                    'fullname': f'Simulated Patient {patient_id}'}).lastrowid
+            connection.execute(text(
+                'UPDATE simulation_orders SET patient_ref_id = :patient_ref_id '
+                'WHERE run_id = :run_id AND patient_id = :patient_id AND patient_ref_id IS NULL'
+            ), {'patient_ref_id': existing, 'run_id': run_id, 'patient_id': patient_id})
 
 
 def initialize_db(database_engine=None):

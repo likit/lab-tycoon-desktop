@@ -14,6 +14,7 @@ from app.project import (
     PROJECT_FORMAT_VERSION,
     LabTycoonProject,
     ProjectFloor,
+    ProjectWorkflow,
 )
 from app.system.model import Workflow
 
@@ -68,6 +69,14 @@ class ProjectSerializer:
                 self._write_json(archive, "laboratory/floor.json", project.floor.floor_dict())
                 self._write_json(archive, "laboratory/equipment.json", project.floor.equipment_dict())
                 self._write_json(archive, "workflows/main.json", project.workflow.to_dict())
+                self._write_json(archive, "workflows/index.json", {
+                    "workflows": [
+                        {"id": item.workflow_id, "name": item.name}
+                        for item in project.workflows
+                    ],
+                })
+                for item in project.additional_workflows:
+                    self._write_json(archive, f"workflows/{item.workflow_id}.json", item.workflow.to_dict())
             self._validate_archive(temporary_path)
             os.replace(temporary_path, output_path)
         finally:
@@ -88,6 +97,38 @@ class ProjectSerializer:
                 floor_data = self._read_json(archive, "laboratory/floor.json")
                 equipment_data = self._read_json(archive, "laboratory/equipment.json")
                 workflow_data = self._read_json(archive, "workflows/main.json")
+                workflow_index = (
+                    self._read_json(archive, "workflows/index.json")
+                    if "workflows/index.json" in archive.namelist() else None
+                )
+                additional_workflows: list[ProjectWorkflow] = []
+                workflow_name = "Main Workflow"
+                if workflow_index is not None:
+                    entries = workflow_index.get("workflows")
+                    if not isinstance(entries, list) or not entries:
+                        raise ProjectFormatError("Workflow index must list the main workflow.")
+                    seen_ids: set[str] = set()
+                    seen_names: set[str] = set()
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            raise ProjectFormatError("Workflow index entries must be objects.")
+                        workflow_id = str(entry.get("id", ""))
+                        name = str(entry.get("name", "")).strip()
+                        if not name or name.casefold() in seen_names or workflow_id in seen_ids:
+                            raise ProjectFormatError("Workflow names and IDs must be unique and nonempty.")
+                        if workflow_id != "main" and (len(workflow_id) != 32 or any(char not in "0123456789abcdef" for char in workflow_id)):
+                            raise ProjectFormatError("Workflow ID must be a lowercase UUID hex string.")
+                        seen_ids.add(workflow_id)
+                        seen_names.add(name.casefold())
+                        if workflow_id == "main":
+                            workflow_name = name
+                        else:
+                            additional_workflows.append(ProjectWorkflow(
+                                workflow_id, name,
+                                Workflow.from_dict(self._read_json(archive, f"workflows/{workflow_id}.json")),
+                            ))
+                    if "main" not in seen_ids:
+                        raise ProjectFormatError("Workflow index must include the main workflow.")
         except (BadZipFile, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, ProjectFormatError):
                 raise
@@ -103,6 +144,8 @@ class ProjectSerializer:
                 format_version=str(manifest["format_version"]),
                 floor=ProjectFloor.from_dicts(floor_data, equipment_data),
                 workflow=Workflow.from_dict(workflow_data),
+                workflow_name=workflow_name,
+                additional_workflows=additional_workflows,
                 is_dirty=False,
                 file_path=input_path,
             )

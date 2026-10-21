@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import csv
 from pathlib import Path
@@ -79,6 +79,8 @@ class InMemoryOrder:
     rejected_at: datetime | None = None
     cancelled_at: datetime | None = None
     received_at: datetime | None = None
+    source: str = "uploaded_file"
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 class SQLiteOrderSource:

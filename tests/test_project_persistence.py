@@ -52,6 +52,43 @@ class ProjectPersistenceTests(unittest.TestCase):
         self.assertEqual(project.workflow.get_node_ids(), [])
         self.assertTrue(project.is_dirty)
         self.assertIsNone(project.file_path)
+        self.assertEqual([(item.workflow_id, item.name) for item in project.workflows], [("main", "Main Workflow")])
+
+    def test_multiple_named_workflows_round_trip_without_changing_main_workflow(self) -> None:
+        main = self.project.workflow
+        alternate = self.project.add_workflow("HIS Orders")
+        alternate.workflow.create_node("HIS Intake")
+        simulation = self.project.add_workflow("Simulation")
+        simulation.workflow.create_node("Mock Intake")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.serializer.save(self.project, Path(directory) / "multi-workflow.ltp")
+            loaded = self.serializer.load(path)
+
+        self.assertIs(self.project.workflow, main)
+        self.assertEqual([item.name for item in loaded.workflows], ["Main Workflow", "HIS Orders", "Simulation"])
+        self.assertEqual(loaded.get_workflow(alternate.workflow_id).workflow.get_node_ids(), alternate.workflow.get_node_ids())
+        self.assertEqual(loaded.get_workflow(simulation.workflow_id).workflow.get_node_ids(), simulation.workflow.get_node_ids())
+        self.assertEqual(loaded.get_workflow("main").workflow.get_node_ids(), main.get_node_ids())
+        self.assertIsNone(loaded.get_workflow("unknown"))
+
+    def test_workflow_names_are_unique(self) -> None:
+        self.project.add_workflow("Simulation")
+        with self.assertRaisesRegex(ValueError, "unique"):
+            self.project.add_workflow(" simulation ")
+
+    def test_legacy_archive_without_workflow_index_still_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            saved = self.serializer.save(self.project, Path(directory) / "current.ltp")
+            legacy = Path(directory) / "legacy.ltp"
+            with ZipFile(saved) as source, ZipFile(legacy, "w") as target:
+                for member in source.namelist():
+                    if member != "workflows/index.json":
+                        target.writestr(member, source.read(member))
+            loaded = self.serializer.load(legacy)
+
+        self.assertEqual(len(loaded.workflows), 1)
+        self.assertEqual(loaded.workflow_name, "Main Workflow")
 
     def test_complete_create_edit_save_close_open_continue_cycle(self) -> None:
         project = LabTycoonProject.create("Test Chemistry Laboratory")
@@ -139,6 +176,46 @@ class ProjectPersistenceTests(unittest.TestCase):
         self.assertTrue(
             any(instance.instance_id == "CHEM-001" for instance in loaded.floor.equipment_instances)
         )
+
+    def test_order_adapter_configuration_survives_project_round_trip(self) -> None:
+        adapter = self.project.workflow.create_node(
+            "Order Intake",
+            kind="order_adapter",
+            metadata={
+                "node_type": "order adapter",
+                "adapter_type": "simulation",
+                "description": "Synthetic arrivals",
+                "enabled": True,
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            loaded = self.serializer.load(
+                self.serializer.save(self.project, Path(directory) / "order-adapter.ltp")
+            )
+
+        restored = loaded.workflow.get_node(adapter.node_id)
+        self.assertEqual(restored.kind, "order_adapter")
+        self.assertEqual(restored.widget.node_type, "order adapter")
+        self.assertEqual(restored.metadata["adapter_type"], "simulation")
+        self.assertEqual(restored.widget.description, "Synthetic arrivals")
+
+    def test_default_scenario_id_survives_project_round_trip(self) -> None:
+        scenario_id = self.project.workflow.scenarios[0].scenario_id
+        with tempfile.TemporaryDirectory() as directory:
+            loaded = self.serializer.load(
+                self.serializer.save(self.project, Path(directory) / "scenario-id.ltp")
+            )
+
+        self.assertEqual(loaded.workflow.scenarios[0].scenario_id, scenario_id)
+
+    def test_legacy_scenario_without_id_gets_stable_fallback(self) -> None:
+        payload = {"name": "Legacy Scenario", "parameters": {"staff_capacity": 2}}
+
+        first = Scenario.from_dict(payload)
+        second = Scenario.from_dict(payload)
+
+        self.assertEqual(first.scenario_id, second.scenario_id)
+        self.assertEqual(first.to_dict()["id"], first.scenario_id)
 
     def test_loaded_equipment_ids_continue_without_collisions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

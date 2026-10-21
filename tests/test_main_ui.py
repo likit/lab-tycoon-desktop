@@ -23,7 +23,7 @@ class MainMenuTests(unittest.TestCase):
 
         self.assertEqual(
             [section[0] for section in menu],
-            ["File", "LIS", "Simulation", "Analytics", "Laboratory Design", "Tools", "User", "Help"],
+            ["File", "LIS", "Simulation", "Workflow", "Analytics", "Laboratory Design", "Tools", "User", "Help"],
         )
 
     def test_existing_design_and_tool_windows_have_active_entries(self) -> None:
@@ -31,7 +31,9 @@ class MainMenuTests(unittest.TestCase):
 
         self.assertIn("Settings...", menu["LIS"])
         self.assertIn("Floor Plan", menu["Laboratory Design"])
-        self.assertIn("Workflow", menu["Laboratory Design"])
+        self.assertNotIn("Workflow", menu["Laboratory Design"])
+        self.assertIn("Add Workflow...", menu["Workflow"])
+        self.assertIn("Open Workflow...", menu["Workflow"])
         self.assertEqual(menu["Tools"], ["Database Explorer", "Rule Preview", "SQL Editor"])
 
     def test_unimplemented_features_are_disabled(self) -> None:

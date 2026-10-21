@@ -99,6 +99,15 @@ class ProjectFloor:
 
 
 @dataclass(slots=True)
+class ProjectWorkflow:
+    """A named workflow owned by one laboratory project."""
+
+    workflow_id: str
+    name: str
+    workflow: Workflow = field(default_factory=Workflow)
+
+
+@dataclass(slots=True)
 class LabTycoonProject:
     """Source of truth for one configured laboratory system model."""
 
@@ -110,6 +119,8 @@ class LabTycoonProject:
     format_version: str = PROJECT_FORMAT_VERSION
     floor: ProjectFloor = field(default_factory=ProjectFloor)
     workflow: Workflow = field(default_factory=Workflow)
+    workflow_name: str = "Main Workflow"
+    additional_workflows: list[ProjectWorkflow] = field(default_factory=list)
     is_dirty: bool = False
     file_path: Path | None = None
 
@@ -131,6 +142,26 @@ class LabTycoonProject:
     def mark_dirty(self) -> None:
         self.is_dirty = True
         self.modified_at = _utc_now()
+
+    @property
+    def workflows(self) -> list[ProjectWorkflow]:
+        """Include the legacy main workflow without changing existing callers."""
+
+        return [ProjectWorkflow("main", self.workflow_name, self.workflow), *self.additional_workflows]
+
+    def add_workflow(self, name: str) -> ProjectWorkflow:
+        name = name.strip()
+        if not name:
+            raise ValueError("Workflow name is required.")
+        if any(item.name.casefold() == name.casefold() for item in self.workflows):
+            raise ValueError("Workflow names must be unique within a project.")
+        item = ProjectWorkflow(uuid4().hex, name)
+        self.additional_workflows.append(item)
+        self.mark_dirty()
+        return item
+
+    def get_workflow(self, workflow_id: str) -> ProjectWorkflow | None:
+        return next((item for item in self.workflows if item.workflow_id == workflow_id), None)
 
     @property
     def display_name(self) -> str:

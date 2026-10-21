@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.system.models import Test, engine
 from app.system.model import Scenario, Workflow, WorkflowNode
+from app.system.order_adapter import ADAPTER_TYPES
 from app.system.storage import WorkflowDocument, WorkflowRepository
 
 
@@ -137,12 +138,14 @@ def _show_node_form_dialog(
         return None
 
     node_types = [
+        "specimen registration",
         "specimens processing",
         "automated analyzer",
         "manual analyzer",
         "result reporting",
         "result validating",
         "Evaluation",
+        "order adapter",
     ]
     current_type = _normalize_node_type_label(node.widget.node_type)
     if current_type not in node_types:
@@ -156,25 +159,19 @@ def _show_node_form_dialog(
                 key="-NODE-TYPE-",
                 readonly=True,
                 expand_x=True,
+                enable_events=True,
             ),
         ],
         [sg.Text("Name"), sg.Input(node.widget.name, key="-NAME-", expand_x=True)],
-        [
-            sg.Text("Processing Capacity (per hours)"),
-            sg.Input(str(node.widget.throughput), key="-THROUGHPUT-", size=(14, 1)),
-        ],
-        [
-            sg.Text("Human Processing Capacity (per hour)"),
-            sg.Input(str(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-", size=(14, 1)),
-        ],
-        [
-            sg.Text("Capacity"),
-            sg.Input(str(node.widget.capacity), key="-CAPACITY-", size=(14, 1)),
-        ],
-        [
-            sg.Text("Required staff"),
-            sg.Input(str(node.widget.required_staff), key="-STAFF-", size=(14, 1)),
-        ],
+        [sg.Column([
+            [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput), key="-THROUGHPUT-", size=(14, 1))],
+            [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-", size=(14, 1))],
+            [sg.Text("Capacity"), sg.Input(str(node.widget.capacity), key="-CAPACITY-", size=(14, 1))],
+            [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff), key="-STAFF-", size=(14, 1))],
+        ], key="-PROCESSING-FIELDS-", visible=current_type != "order adapter")],
+        [sg.Column([
+            [sg.Text("Adapter type"), sg.Combo(list(ADAPTER_TYPES), default_value=str(node.metadata.get("adapter_type", "simulation")), key="-ADAPTER-TYPE-", readonly=True, size=(20, 1))],
+        ], key="-ADAPTER-FIELDS-", visible=current_type == "order adapter")],
         [
             sg.Text("Description"),
             sg.Multiline(node.widget.description, key="-DESC-", size=(46, 4), expand_x=True),
@@ -188,7 +185,23 @@ def _show_node_form_dialog(
             event, values = window.read()
             if event in ("Cancel", sg.WIN_CLOSED):
                 return None
+            if event == "-NODE-TYPE-":
+                is_adapter = values.get("-NODE-TYPE-") == "order adapter"
+                window["-PROCESSING-FIELDS-"].update(visible=not is_adapter)
+                window["-ADAPTER-FIELDS-"].update(visible=is_adapter)
+                continue
             if event == "-SAVE-":
+                name = str(values["-NAME-"]).strip() or "Unnamed Node"
+                description = str(values["-DESC-"]).strip()
+                node_type = str(values["-NODE-TYPE-"])
+                if node_type == "order adapter":
+                    return {
+                        "node_type": node_type,
+                        "name": name,
+                        "description": description,
+                        "adapter_type": str(values["-ADAPTER-TYPE-"]),
+                        "enabled": bool(values.get("-ENABLED-", False)),
+                    }
                 try:
                     throughput = float(values["-THROUGHPUT-"])
                     human_throughput = float(values["-HUMAN-THROUGHPUT-"])
@@ -200,9 +213,6 @@ def _show_node_form_dialog(
                     )
                     continue
 
-                name = str(values["-NAME-"]).strip() or "Unnamed Node"
-                description = str(values["-DESC-"]).strip()
-                node_type = str(values["-NODE-TYPE-"])
                 return {
                     "node_type": node_type,
                     "name": name,
@@ -215,6 +225,52 @@ def _show_node_form_dialog(
                 }
     finally:
         window.close()
+
+
+RESOURCE_ADAPTERS = {"patient": {"generate_per_run": "Generate per run"}}
+
+
+def _show_resource_dialog(node: WorkflowNode | None = None) -> tuple[str, str, bool] | None:
+    """Select a resource type, then one of its implemented adapters."""
+
+    resource_labels = {resource.title(): resource for resource in RESOURCE_ADAPTERS}
+    initial_type = str(node.metadata.get("resource_type", "patient")) if node else "patient"
+    initial_label = initial_type.title()
+    adapter_labels = {label: key for key, label in RESOURCE_ADAPTERS[initial_type].items()}
+    initial_adapter = str(node.metadata.get("adapter_type", "generate_per_run")) if node else "generate_per_run"
+    initial_adapter_label = RESOURCE_ADAPTERS[initial_type].get(initial_adapter, "")
+    layout = [
+        [sg.Text("Resource"), sg.Combo(list(resource_labels), default_value=initial_label,
+                                        key="-RESOURCE-TYPE-", readonly=True, enable_events=True, disabled=node is not None)],
+        [sg.Text("Adapter"), sg.Combo(list(adapter_labels), default_value=initial_adapter_label,
+                                       key="-RESOURCE-ADAPTER-", readonly=True, size=(24, 1))],
+        [sg.Checkbox("Enabled", default=node.widget.enabled if node else True, key="-RESOURCE-ENABLED-")],
+        [sg.Button("Save"), sg.Button("Cancel")],
+    ]
+    dialog = sg.Window("Resource Settings", layout, modal=True, finalize=True, keep_on_top=True)
+    try:
+        while True:
+            event, values = dialog.read()
+            if event in (sg.WIN_CLOSED, "Cancel"):
+                return None
+            if event == "-RESOURCE-TYPE-":
+                resource_type = resource_labels[str(values["-RESOURCE-TYPE-"])]
+                choices = list(RESOURCE_ADAPTERS[resource_type].values())
+                dialog["-RESOURCE-ADAPTER-"].update(values=choices, value=choices[0])
+            if event == "Save":
+                resource_type = resource_labels.get(str(values.get("-RESOURCE-TYPE-", "")))
+                if resource_type is None:
+                    _notify("Select a resource type.")
+                    continue
+                adapter_type = {label: key for key, label in RESOURCE_ADAPTERS[resource_type].items()}.get(
+                    str(values.get("-RESOURCE-ADAPTER-", ""))
+                )
+                if adapter_type is None:
+                    _notify("Select an adapter.")
+                    continue
+                return resource_type, adapter_type, bool(values.get("-RESOURCE-ENABLED-", False))
+    finally:
+        dialog.close()
 
 
 def _load_available_tests() -> list[dict[str, str]]:
@@ -602,6 +658,8 @@ class WorkflowGraphRenderer:
             label_parts = [equipment_resolution.equipment_id or "No equipment selected"]
             if not equipment_resolution.resolved:
                 label_parts.append("Unresolved")
+        elif node.widget.node_type == "order adapter":
+            label_parts = [f"Source: {node.metadata.get('adapter_type', 'simulation')}"]
         else:
             test_count = len(node.widget.metadata.get("analyzer_tests", []))
             label_parts = [f"Tests: {test_count}", f"Staff: {node.widget.required_staff}", f"Capacity: {node.widget.capacity}"]
@@ -820,13 +878,19 @@ class WorkflowEditorController:
             f"ID: {node.node_id}",
             f"Type: {node.widget.node_type}",
             f"Status: {'Enabled' if node.widget.enabled else 'Disabled'}",
-            f"Processing Capacity (per hours): {node.widget.throughput:g}",
-            f"Human Processing Capacity (per hour): {node.widget.human_throughput:g}",
-            f"Capacity: {node.widget.capacity}",
-            f"Required staff: {node.widget.required_staff}",
             f"Incoming edges: {incoming}",
             f"Outgoing edges: {outgoing}",
         ]
+        if node.widget.node_type == "order adapter":
+            details.append(f"Adapter type: {node.metadata.get('adapter_type', 'simulation')}")
+            details.append(f"Description: {node.widget.description}")
+        else:
+            details.extend([
+                f"Processing Capacity (per hours): {node.widget.throughput:g}",
+                f"Human Processing Capacity (per hour): {node.widget.human_throughput:g}",
+                f"Capacity: {node.widget.capacity}",
+                f"Required staff: {node.widget.required_staff}",
+            ])
         if equipment_resolution is not None:
             details.append(f"Equipment: {equipment_resolution.equipment_id}")
             details.append(
@@ -950,6 +1014,13 @@ class WorkflowEditorController:
         for node in workflow.graph.iter_nodes():
             if node.node_id == selected_node_id:
                 continue
+            if source_node.kind == "resource":
+                if source_node.metadata.get("resource_type") != "patient" or node.widget.node_type != "order adapter":
+                    continue
+            elif node.widget.node_type == "order adapter":
+                continue
+            if node.kind == "resource":
+                continue
             if node.node_id in connected_ids:
                 continue
             if not self._is_valid_connection_target(node.node_id, selected_node_id=selected_node_id):
@@ -1041,6 +1112,53 @@ class WorkflowEditorController:
         if window is not None:
             self.update_graph_context_menu(window)
         return node.node_id
+
+    def add_order_adapter_node(self, window: sg.Window | None = None) -> str:
+        """Create an explicit workflow source with simulation adapter defaults."""
+
+        if self.current_document is None:
+            raise ValueError("Create or load a workflow first.")
+        node = self.current_document.workflow.create_node(
+            "Order Adapter",
+            kind="order_adapter",
+            metadata={"node_type": "order adapter", "adapter_type": "simulation", "enabled": True},
+        )
+        self.selected_node_id = node.node_id
+        self.persist_current_workflow(window)
+        return node.node_id
+
+    def add_resource_node(self, resource_type: str, adapter_type: str, enabled: bool = True,
+                          window: sg.Window | None = None) -> str:
+        """Declare a configured resource outside the order-routing graph."""
+
+        if self.current_document is None:
+            raise ValueError("Create or load a workflow first.")
+        if adapter_type not in RESOURCE_ADAPTERS.get(resource_type, {}):
+            raise ValueError("Unsupported Resource type or adapter.")
+        if any(node.kind == "resource" and node.metadata.get("resource_type") == resource_type
+               for node in self.current_document.workflow.graph.iter_nodes()):
+            raise ValueError(f"This workflow already has a {resource_type.title()} Resource node.")
+        node = self.current_document.workflow.create_node(
+            f"{resource_type.title()} Resource", kind="resource",
+            metadata={"node_type": "resource", "resource_type": resource_type,
+                      "adapter_type": adapter_type, "enabled": enabled},
+        )
+        self.selected_node_id = node.node_id
+        self.persist_current_workflow(window)
+        return node.node_id
+
+    def update_resource(self, node_id: str, resource_type: str, adapter_type: str, enabled: bool,
+                        window: sg.Window | None = None) -> None:
+        if adapter_type not in RESOURCE_ADAPTERS.get(resource_type, {}):
+            raise ValueError("Unsupported Resource type or adapter.")
+        node = self.current_document.workflow.get_node(node_id) if self.current_document else None
+        if node is None or node.kind != "resource" or node.metadata.get("resource_type") != resource_type:
+            raise ValueError("Select a matching Resource node first.")
+        node.metadata["adapter_type"] = adapter_type
+        node.metadata["enabled"] = enabled
+        node.widget.metadata.update(node.metadata)
+        node.widget.enabled = enabled
+        self.persist_current_workflow(window)
 
     def save_current_workflow(self, window: sg.Window | None = None) -> str:
         if self.current_document is None:
@@ -1154,6 +1272,12 @@ class WorkflowEditorController:
         node = self.current_document.workflow.get_node(node_id) if self.current_document else None
         if node is None:
             raise ValueError("Selected node is no longer available.")
+        if node_type == "order adapter":
+            raise ValueError("Use Order Adapter settings for this node type.")
+
+        if node.kind == "order_adapter":
+            node.metadata.pop("adapter_type", None)
+            node.widget.metadata.pop("adapter_type", None)
 
         self.current_document.workflow.update_node_properties(
             node_id,
@@ -1168,7 +1292,7 @@ class WorkflowEditorController:
                 "capacity": capacity,
                 "enabled": enabled,
             },
-            kind=node.kind,
+            kind="task" if node.kind == "order_adapter" else node.kind,
         )
         node.widget.node_type = node_type
         node.widget.throughput = throughput
@@ -1186,6 +1310,45 @@ class WorkflowEditorController:
         if window is not None:
             self.update_graph_context_menu(window)
 
+    def update_order_adapter_from_form(
+        self,
+        node_id: str,
+        *,
+        node_type: str,
+        name: str,
+        adapter_type: str,
+        description: str,
+        enabled: bool = True,
+        window: sg.Window | None = None,
+    ) -> None:
+        """Configure an order-arrival source without specimen-processing fields."""
+
+        node = self.current_document.workflow.get_node(node_id) if self.current_document else None
+        if node is None:
+            raise ValueError("Selected node is no longer available.")
+        if node_type != "order adapter" or adapter_type not in ADAPTER_TYPES:
+            raise ValueError("Unsupported order adapter type.")
+        if any(self.current_document.workflow.get_node(edge.source).kind != "resource"
+               for edge in self.current_document.workflow.graph.incoming_edges(node_id)):
+            raise ValueError("Order Adapter nodes cannot have incoming order-flow connections.")
+        self.current_document.workflow.update_node_properties(
+            node_id,
+            name=name,
+            service_time=0.0,
+            kind="order_adapter",
+            metadata={
+                "node_type": "order adapter",
+                "adapter_type": adapter_type,
+                "description": description,
+                "enabled": enabled,
+                "throughput": 0.0,
+                "human_throughput": 0.0,
+                "required_staff": 0,
+                "capacity": 1,
+            },
+        )
+        self.persist_current_workflow(window)
+
     def connect_selected_node_to(self, target_node_id: str, window: sg.Window | None = None) -> None:
         """Add a connection from the selected node to another node."""
 
@@ -1202,6 +1365,17 @@ class WorkflowEditorController:
         target_node = self.current_document.workflow.get_node(target_node_id)
         if source_node is None or target_node is None:
             raise ValueError("Selected nodes are no longer available.")
+        resource_link = (
+            source_node.kind == "resource"
+            and source_node.metadata.get("resource_type") == "patient"
+            and target_node.widget.node_type == "order adapter"
+        )
+        if target_node.widget.node_type == "order adapter" and not resource_link:
+            raise ValueError("Order Adapter nodes cannot have incoming connections.")
+        if target_node.kind == "resource" or (source_node.kind == "resource" and not resource_link):
+            raise ValueError("Patient Resources may only connect to Order Adapters.")
+        if not self._is_valid_connection_target(target_node_id):
+            raise ValueError("This connection would create a cycle.")
 
         self.current_document.workflow.graph.connect_nodes(source_node.node_id, target_node.node_id)
         self.persist_current_workflow(window)
@@ -1254,6 +1428,8 @@ class WorkflowEditorController:
             raise ValueError("Create or load a workflow first.")
         if self.selected_node_id is None:
             raise ValueError("Select a node first.")
+        if self.current_document.workflow.get_node(self.selected_node_id).kind == "resource":
+            raise ValueError("Use Connect Nodes to link a Patient Resource to an Order Adapter.")
         node = self.current_document.workflow.create_connected_node(
             self.selected_node_id,
             self._next_node_name("Step"),
@@ -1270,6 +1446,8 @@ class WorkflowEditorController:
             raise ValueError("Create or load a workflow first.")
         if self.selected_node_id is None:
             raise ValueError("Select a node first.")
+        if self.current_document.workflow.get_node(self.selected_node_id).kind == "resource":
+            raise ValueError("Resource nodes cannot create processing branches.")
         node = self.current_document.workflow.create_branch_node(
             self.selected_node_id,
             self._next_node_name("Branch"),
@@ -1544,11 +1722,52 @@ def _show_connection_target_dialog(controller: WorkflowEditorController) -> list
         window.close()
 
 
+def _show_run_workflow_dialog(workflow: Workflow) -> tuple[str, int, int | None] | None:
+    """Choose a persisted scenario and size for one project simulation run."""
+
+    choices = [(scenario.scenario_id, scenario.name) for scenario in workflow.scenarios]
+    if not choices:
+        _notify("This workflow has no scenario to run.")
+        return None
+    labels = [f"{name} [{scenario_id[:8]}]" for scenario_id, name in choices]
+    layout = [
+        [sg.Text("Run Workflow", font=("Arial", 16, "bold"))],
+        [sg.Text("Scenario"), sg.Combo(labels, default_value=labels[0], key="-RUN-SCENARIO-", readonly=True, size=(36, 1))],
+        [sg.Text("Orders to generate"), sg.Input("10", key="-RUN-ORDERS-", size=(12, 1))],
+        [sg.Text("Random seed (optional)"), sg.Input("", key="-RUN-SEED-", size=(12, 1))],
+        [sg.Push(), sg.Button("Run", key="-RUN-", bind_return_key=True), sg.Button("Cancel")],
+    ]
+    window = sg.Window("Run Workflow", layout, modal=True, finalize=True, keep_on_top=True)
+    try:
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, "Cancel"):
+                return None
+            if event == "-RUN-":
+                try:
+                    orders_number = int(values["-RUN-ORDERS-"])
+                    seed_text = str(values["-RUN-SEED-"]).strip()
+                    random_seed = int(seed_text) if seed_text else None
+                    if orders_number <= 0:
+                        raise ValueError("Number of orders must be positive.")
+                except (TypeError, ValueError) as exc:
+                    _notify(f"Invalid run settings: {exc}")
+                    continue
+                selected_label = str(values.get("-RUN-SCENARIO-", ""))
+                if selected_label not in labels:
+                    _notify("Select a scenario.")
+                    continue
+                return choices[labels.index(selected_label)][0], orders_number, random_seed
+    finally:
+        window.close()
+
+
 def open_workflow_editor_window(
     current_document: WorkflowDocument | None = None,
     repository: WorkflowRepository | None = None,
     on_change: Callable[[], None] | None = None,
     equipment_instances: list[ProjectEquipmentInstance] | None = None,
+    run_simulation: Callable[[str, int, int | None], Any] | None = None,
 ) -> None:
     """Open the interactive workflow editor window."""
 
@@ -1586,6 +1805,8 @@ def open_workflow_editor_window(
                 if not project_mode else []
             ),
             sg.Button("Add Node", key="-WF-ADD-NODE-"),
+            sg.Button("Add Order Adapter", key="-WF-ADD-ORDER-ADAPTER-"),
+            sg.Button("Add Resource", key="-WF-ADD-RESOURCE-"),
             sg.Button("Add Branch Node", key="-WF-ADD-BRANCH-"),
             *([sg.Button("Add Equipment Node", key="-WF-ADD-EQUIPMENT-")] if project_mode else []),
             sg.Button("Connect Nodes", key="-WF-CONNECT-"),
@@ -1593,6 +1814,7 @@ def open_workflow_editor_window(
             sg.Button("Select tests", key="-WF-SELECT-TESTS-", disabled=True),
             sg.Button("Delete Node", key="-WF-DELETE-", button_color=("white", "#b91c1c")),
             sg.Button("Add Scenario", key="-WF-ADD-SCENARIO-"),
+            *([sg.Button("Run Workflow", key="-WF-RUN-")] if run_simulation is not None else []),
             sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR),
         ],
         [
@@ -1719,14 +1941,21 @@ def open_workflow_editor_window(
                 controller.refresh_summary(window)
                 controller.rerender(window)
                 node = controller.selected_node()
-                if node is not None and node.kind == "equipment":
+                if node is not None and node.kind == "resource":
+                    settings = _show_resource_dialog(node)
+                    if settings is not None:
+                        controller.update_resource(node.node_id, *settings, window=window)
+                elif node is not None and node.kind == "equipment":
                     settings = _show_equipment_node_dialog(controller, node)
                     if settings is not None:
                         controller.bind_selected_equipment(window=window, **settings)
                 else:
                     result = _show_node_form_dialog(node)
                     if result is not None and node is not None:
-                        controller.update_node_from_form(node.node_id, window=window, **result)
+                        if result["node_type"] == "order adapter":
+                            controller.update_order_adapter_from_form(node.node_id, window=window, **result)
+                        else:
+                            controller.update_node_from_form(node.node_id, window=window, **result)
                 controller.refresh(window)
                 continue
 
@@ -1799,9 +2028,32 @@ def open_workflow_editor_window(
                     scenario_name = controller.add_scenario(window)
                     controller.refresh_summary(window)
                     _notify(f"{scenario_name} added.")
+                elif event == "-WF-RUN-" and run_simulation is not None:
+                    if controller.current_document is None:
+                        _notify("Create or load a workflow before running it.")
+                        continue
+                    run_settings = _show_run_workflow_dialog(controller.current_document.workflow)
+                    if run_settings is not None:
+                        summary = run_simulation(*run_settings)
+                        sg.popup(
+                            f"Scenario: {summary.scenario_name}\n"
+                            f"Run ID: {summary.run_id}\n"
+                            f"Orders generated: {summary.generated_orders}\n"
+                            f"Specimens completed: {summary.completed_specimens}",
+                            title="Workflow Run Complete",
+                            keep_on_top=True,
+                        )
                 elif event == "-WF-ADD-NODE-":
                     controller.add_node(window)
                     controller.refresh(window)
+                elif event == "-WF-ADD-ORDER-ADAPTER-":
+                    controller.add_order_adapter_node(window)
+                    controller.refresh(window)
+                elif event == "-WF-ADD-RESOURCE-":
+                    settings = _show_resource_dialog()
+                    if settings is not None:
+                        controller.add_resource_node(*settings, window=window)
+                        controller.refresh(window)
                 elif event == "-WF-ADD-BRANCH-":
                     controller.add_branch_node(window)
                     controller.refresh(window)
@@ -1820,15 +2072,24 @@ def open_workflow_editor_window(
                         controller.refresh(window)
                 elif event == "-WF-PROPS-":
                     node = controller.selected_node()
+                    if node is not None and node.kind == "resource":
+                        settings = _show_resource_dialog(node)
+                        if settings is not None:
+                            controller.update_resource(node.node_id, *settings, window=window)
+                            controller.refresh(window)
+                        continue
                     if node is not None and node.kind == "equipment":
                         settings = _show_equipment_node_dialog(controller, node)
                         if settings is not None:
                             controller.bind_selected_equipment(window=window, **settings)
                             controller.refresh(window)
                         continue
-                    result = _show_node_properties_dialog(node)
-                    if result is not None:
-                        controller.update_selected_node(**result, window=window)
+                    result = _show_node_form_dialog(node)
+                    if result is not None and node is not None:
+                        if result["node_type"] == "order adapter":
+                            controller.update_order_adapter_from_form(node.node_id, window=window, **result)
+                        else:
+                            controller.update_node_from_form(node.node_id, window=window, **result)
                         controller.refresh(window)
                 elif event == "-WF-DELETE-":
                     controller.delete_selected_node(window)
@@ -1844,6 +2105,7 @@ def create_workflow_window(
     repository: WorkflowRepository | None = None,
     on_change: Callable[[], None] | None = None,
     equipment_instances: list[ProjectEquipmentInstance] | None = None,
+    run_simulation: Callable[[str, int, int | None], Any] | None = None,
 ) -> None:
     """Backward-compatible alias for opening the editor window."""
 
@@ -1852,4 +2114,5 @@ def create_workflow_window(
         repository=repository,
         on_change=on_change,
         equipment_instances=equipment_instances,
+        run_simulation=run_simulation,
     )

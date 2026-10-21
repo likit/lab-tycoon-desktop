@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .workflow_graph import WorkflowGraph
 from .workflow_graph import WorkflowNode
@@ -25,11 +26,13 @@ class Scenario:
     description: str = ""
     widget_service_times: dict[str, float] = field(default_factory=dict)
     parameters: dict[str, float | int | str | bool] = field(default_factory=dict)
+    scenario_id: str = field(default_factory=lambda: uuid4().hex)
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the scenario for storage."""
 
         return {
+            "id": self.scenario_id,
             "name": self.name,
             "description": self.description,
             "widget_service_times": dict(self.widget_service_times),
@@ -45,6 +48,7 @@ class Scenario:
             description=str(data.get("description", "")),
             widget_service_times=dict(data.get("widget_service_times", {})),
             parameters=dict(data.get("parameters", {})),
+            scenario_id=str(data.get("id") or uuid5(NAMESPACE_URL, f"labtycoon-scenario:{data.get('name', 'Default Scenario')}").hex),
         )
 
 
