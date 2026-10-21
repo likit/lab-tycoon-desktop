@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import tkinter as tk
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -89,6 +90,23 @@ def _bind_graph_right_click_selection(
             return
 
         selected_node_id = controller.select_node_at(graph_x, graph_y)
+        if selected_node_id is None:
+            edge = controller.edge_at(graph_x, graph_y)
+            if edge is not None:
+                previous_menu = getattr(graph, "_edge_context_menu", None)
+                if previous_menu is not None:
+                    previous_menu.destroy()
+                menu = tk.Menu(graph.Widget, tearoff=False)
+                graph._edge_context_menu = menu
+                menu.add_command(
+                    label="Remove Edge",
+                    command=lambda: window.write_event_value("-WF-REMOVE-EDGE-", edge),
+                )
+                try:
+                    menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    menu.grab_release()
+                return "break"
         if selected_node_id is not None:
             controller.refresh_summary(window)
             controller.rerender(window)
@@ -726,6 +744,17 @@ class WorkflowEditorController:
             return self.resolve_equipment_node(node).display_name
         return node.widget.name
 
+    def is_reporting_station(self, equipment_id: str) -> bool:
+        instance = self.equipment_instance(equipment_id)
+        return bool(instance and instance.equipment_type == "reporting_station")
+
+    def _apply_equipment_role(self, equipment_id: str, settings: dict[str, Any]) -> None:
+        terminal = self.is_reporting_station(equipment_id)
+        settings["terminal_output"] = terminal
+        if terminal:
+            settings.update(throughput=0.0, human_throughput=0.0, required_staff=0,
+                            output_data=False, output_specimens=False)
+
     def add_equipment_node(
         self,
         equipment_id: str,
@@ -737,6 +766,8 @@ class WorkflowEditorController:
         required_staff: int = 0,
         description: str = "",
         enabled: bool = True,
+        output_data: bool = False,
+        output_specimens: bool = False,
     ) -> str:
         """Add a workflow node that references one physical equipment instance."""
 
@@ -746,10 +777,12 @@ class WorkflowEditorController:
             raise ValueError(f"Equipment {equipment_id} is not available in the active project.")
         settings = self._equipment_node_settings(
             throughput, human_throughput, capacity, required_staff, description, enabled,
+            output_data, output_specimens,
         )
+        self._apply_equipment_role(equipment_id, settings)
         node = self.current_document.workflow.create_node(
-            "Equipment",
-            service_time=throughput,
+            "Reporting Station" if settings["terminal_output"] else "Equipment",
+            service_time=settings["throughput"],
             kind="equipment",
             metadata={"equipment_id": equipment_id, "node_type": "equipment", **settings},
         )
@@ -766,7 +799,8 @@ class WorkflowEditorController:
         required_staff: int,
         description: str,
         enabled: bool,
-    ) -> dict[str, Any]:
+        output_data: bool = False,
+        output_specimens: bool = False,    ) -> dict[str, Any]:
         if not math.isfinite(throughput) or not math.isfinite(human_throughput) or throughput < 0 or human_throughput < 0:
             raise ValueError("Processing rates must be finite, non-negative numbers.")
         if capacity < 1 or required_staff < 0:
@@ -778,6 +812,8 @@ class WorkflowEditorController:
             "required_staff": int(required_staff),
             "description": str(description),
             "enabled": bool(enabled),
+            "output_data": bool(output_data),
+            "output_specimens": bool(output_specimens),
         }
 
     def bind_selected_equipment(
@@ -791,6 +827,8 @@ class WorkflowEditorController:
         required_staff: int | None = None,
         description: str | None = None,
         enabled: bool | None = None,
+        output_data: bool | None = None,
+        output_specimens: bool | None = None,
     ) -> None:
         """Configure an equipment node while preserving its stable physical reference."""
 
@@ -806,7 +844,12 @@ class WorkflowEditorController:
             node.widget.required_staff if required_staff is None else required_staff,
             node.widget.description if description is None else description,
             node.widget.enabled if enabled is None else enabled,
+            node.metadata.get("output_data", False) if output_data is None else output_data,
+            node.metadata.get("output_specimens", False) if output_specimens is None else output_specimens,
         )
+        if self.is_reporting_station(equipment_id) and self.current_document.workflow.graph.outgoing_edges(node.node_id):
+            raise ValueError("Remove outgoing connections before choosing a Reporting Station.")
+        self._apply_equipment_role(equipment_id, settings)
         self.current_document.workflow.update_node_properties(
             node.node_id,
             service_time=settings["throughput"],
@@ -1006,7 +1049,7 @@ class WorkflowEditorController:
             return []
 
         source_node = workflow.get_node(selected_node_id)
-        if source_node is None:
+        if source_node is None or source_node.metadata.get("terminal_output"):
             return []
 
         connected_ids = {edge.target for edge in workflow.graph.outgoing_edges(selected_node_id)}
@@ -1396,6 +1439,43 @@ class WorkflowEditorController:
             self.current_document.workflow.graph.connect_nodes(self.selected_node_id, target_node_id)
         self.persist_current_workflow(window)
 
+    def edge_at(self, x: float, y: float, tolerance: float = 8) -> tuple[str, str] | None:
+        """Find the nearest rendered connection within a small click tolerance."""
+        if self.current_document is None:
+            return None
+        workflow = self.current_document.workflow
+        layout = self.renderer.layout_engine
+        positions = layout.layout(workflow)
+        nearest = None
+        distance = tolerance
+        for edge in workflow.graph.edges:
+            source, target = workflow.get_node(edge.source), workflow.get_node(edge.target)
+            if source is None or target is None:
+                continue
+            sx, sy = positions[edge.source]
+            tx, ty = positions[edge.target]
+            sy -= layout.node_size(source)[1] / 2
+            ty += layout.node_size(target)[1] / 2
+            middle = (sy + ty) / 2
+            points = [(sx, sy), (sx, middle), (tx, middle), (tx, ty)]
+            for (ax, ay), (bx, by) in zip(points, points[1:]):
+                length_squared = (bx - ax) ** 2 + (by - ay) ** 2
+                fraction = max(0, min(1, ((x - ax) * (bx - ax) + (y - ay) * (by - ay))
+                                      / length_squared)) if length_squared else 0
+                candidate = math.hypot(x - ax - fraction * (bx - ax), y - ay - fraction * (by - ay))
+                if candidate <= distance:
+                    distance, nearest = candidate, (edge.source, edge.target)
+        return nearest
+
+    def remove_edge(self, source_id: str, target_id: str, window: sg.Window | None = None) -> None:
+        if self.current_document is None:
+            return
+        graph = self.current_document.workflow.graph
+        if not any(edge.source == source_id and edge.target == target_id for edge in graph.edges):
+            return
+        graph.disconnect_nodes(source_id, target_id)
+        self.persist_current_workflow(window)
+
     def disconnect_selected_node_from(self, target_node_id: str, window: sg.Window | None = None) -> None:
         """Remove a connection from the selected node to another node."""
 
@@ -1637,6 +1717,7 @@ def _show_equipment_node_dialog(
                 list(label_to_id),
                 default_value=default_label,
                 key="-WF-EQUIPMENT-",
+                enable_events=True,
                 readonly=True,
                 size=(38, 1),
             ),
@@ -1646,16 +1727,37 @@ def _show_equipment_node_dialog(
         [sg.Text("Capacity"), sg.Input(str(node.widget.capacity if node else 1), key="-WF-EQUIPMENT-CAPACITY-", size=(14, 1))],
         [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff if node else 0), key="-WF-EQUIPMENT-STAFF-", size=(14, 1))],
         [sg.Text("Description"), sg.Multiline(node.widget.description if node else "", key="-WF-EQUIPMENT-DESC-", size=(42, 4))],
+        [sg.Frame("Output", [[
+            sg.Checkbox("Data", default=bool(node.metadata.get("output_data", False)) if node else False,
+                        key="-WF-EQUIPMENT-OUTPUT-DATA-"),
+            sg.Checkbox("Specimens", default=bool(node.metadata.get("output_specimens", False)) if node else False,
+                        key="-WF-EQUIPMENT-OUTPUT-SPECIMENS-"),
+        ]])],
         [sg.Checkbox("Enabled", default=node.widget.enabled if node else True, key="-WF-EQUIPMENT-ENABLED-")],
+        [sg.Text("Reporting Station: visual endpoint; no processing time or outgoing flow.",
+                 key="-WF-EQUIPMENT-ENDPOINT-", visible=False, text_color="#2563eb")],
         [sg.Text("Operating settings belong to this workflow node, not the floor equipment.", text_color="#64748b")],
         [sg.Push(), sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
     window = sg.Window("Equipment Node", layout, modal=True, finalize=True, keep_on_top=True)
+    def update_role_fields() -> None:
+        equipment_id = label_to_id.get(window["-WF-EQUIPMENT-"].get(), "")
+        terminal = controller.is_reporting_station(equipment_id)
+        window["-WF-EQUIPMENT-ENDPOINT-"].update(visible=terminal)
+        for key in ("THROUGHPUT", "HUMAN", "STAFF", "OUTPUT-DATA", "OUTPUT-SPECIMENS"):
+            window[f"-WF-EQUIPMENT-{key}-"].update(disabled=terminal)
+            if terminal:
+                window[f"-WF-EQUIPMENT-{key}-"].update(False if key.startswith("OUTPUT") else "0")
+
+    update_role_fields()
     try:
         while True:
             event, values = window.read()
             if event in (sg.WIN_CLOSED, "Cancel"):
                 return None
+            if event == "-WF-EQUIPMENT-":
+                update_role_fields()
+                continue
             if event == "-SAVE-":
                 equipment_id = label_to_id.get(str(values.get("-WF-EQUIPMENT-", "")))
                 if equipment_id is None:
@@ -1681,6 +1783,8 @@ def _show_equipment_node_dialog(
                     "required_staff": required_staff,
                     "description": str(values["-WF-EQUIPMENT-DESC-"]).strip(),
                     "enabled": bool(values["-WF-EQUIPMENT-ENABLED-"]),
+                    "output_data": bool(values.get("-WF-EQUIPMENT-OUTPUT-DATA-", False)),
+                    "output_specimens": bool(values.get("-WF-EQUIPMENT-OUTPUT-SPECIMENS-", False)),
                 }
     finally:
         window.close()
@@ -1960,6 +2064,10 @@ def open_workflow_editor_window(
                 continue
 
             try:
+                if event == "-WF-REMOVE-EDGE-":
+                    controller.remove_edge(*values[event], window=window)
+                    controller.refresh(window)
+                    continue
                 if isinstance(event, str) and "::" in event:
                     _, target_node_id = event.rsplit("::", 1)
                     if event.endswith("::select_analyzer_tests"):

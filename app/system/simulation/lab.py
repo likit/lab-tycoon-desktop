@@ -969,6 +969,10 @@ class WorkflowSimulationEngine:
                 continue
 
             specimen.record_event(node.widget.name, "arrived", time=self.env.now)
+            if node.metadata.get("terminal_output"):
+                # The floor reporting station visualizes completion only.
+                specimen.record_event(node.widget.name, "report_received", time=self.env.now)
+                break
             if self._node_uses_duplicate_detection(node):
                 self._run_duplicate_detection_adapter(node=node, specimen=specimen)
                 current_node_id = self.router.next_node_id(self.workflow, node.node_id, specimen)

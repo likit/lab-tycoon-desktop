@@ -210,6 +210,9 @@ class WorkflowGraph:
         if target_id not in self.nodes:
             raise KeyError(target_id)
 
+        if self.nodes[source_id].metadata.get("terminal_output"):
+            raise ValueError("Reporting Station is the end of the workflow and cannot have outgoing connections.")
+
         edge = WorkflowEdge(source=source_id, target=target_id, label=label)
         if edge not in self.edges:
             self.edges.append(edge)

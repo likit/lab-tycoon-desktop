@@ -21,6 +21,70 @@ from app.system.workflow_editor import (
 
 
 class WorkflowGraphModelTests(unittest.TestCase):
+    def test_reporting_station_is_terminal_and_has_no_processing_or_outputs(self):
+        workflow = Workflow()
+        controller = WorkflowEditorController(on_change=lambda: None,
+            equipment_instances=[ProjectEquipmentInstance("REPORT-001", "reporting_station", 3, 3)])
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        station_id = controller.add_equipment_node("REPORT-001", throughput=20,
+            human_throughput=10, required_staff=1, output_data=True, output_specimens=True)
+        station = workflow.get_node(station_id)
+        self.assertTrue(station.metadata["terminal_output"])
+        self.assertEqual(station.widget.throughput, 0)
+        self.assertEqual(station.widget.human_throughput, 0)
+        self.assertEqual(station.widget.required_staff, 0)
+        self.assertFalse(station.metadata["output_data"])
+        self.assertFalse(station.metadata["output_specimens"])
+        next_node = workflow.create_node("Other")
+        self.assertEqual(controller.connection_target_choices(), [])
+        with self.assertRaisesRegex(ValueError, "end of the workflow"):
+            controller.connect_selected_node_to(next_node.node_id)
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(station_id)
+        self.assertTrue(restored.metadata["terminal_output"])
+
+    def test_equipment_outputs_are_independent_and_persisted(self) -> None:
+        workflow = Workflow()
+        controller = WorkflowEditorController(
+            on_change=lambda: None,
+            equipment_instances=[ProjectEquipmentInstance("CENT-001", "centrifuge", 3, 3)],
+        )
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        node_id = controller.add_equipment_node("CENT-001", output_data=True, output_specimens=False)
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(node_id)
+        self.assertTrue(restored.metadata["output_data"])
+        self.assertFalse(restored.metadata["output_specimens"])
+        controller.bind_selected_equipment("CENT-001", output_specimens=True)
+        node = workflow.get_node(node_id)
+        self.assertTrue(node.metadata["output_data"])
+        self.assertTrue(node.metadata["output_specimens"])
+        controller.bind_selected_equipment("CENT-001", output_data=False)
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(node_id)
+        self.assertFalse(restored.metadata["output_data"])
+        self.assertTrue(restored.metadata["output_specimens"])
+
+    def test_edge_hit_detection_and_removal_preserve_nodes_and_mark_dirty(self) -> None:
+        workflow = Workflow()
+        source = workflow.create_node("Intake", 1.0)
+        target = workflow.create_connected_node(source.node_id, "Reception", 1.0)
+        changes = []
+        controller = WorkflowEditorController(on_change=lambda: changes.append(True))
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        layout = controller.renderer.layout_engine
+        positions = layout.layout(workflow)
+        sx, sy = positions[source.node_id]
+        tx, ty = positions[target.node_id]
+        sy -= layout.node_size(source)[1] / 2
+        ty += layout.node_size(target)[1] / 2
+        self.assertEqual(controller.edge_at((sx + tx) / 2, (sy + ty) / 2),
+                         (source.node_id, target.node_id))
+        self.assertIsNone(controller.edge_at(-1000, -1000))
+        controller.remove_edge(source.node_id, target.node_id)
+        self.assertEqual(workflow.graph.edges, [])
+        self.assertEqual(len(workflow.graph.nodes), 2)
+        self.assertEqual(changes, [True])
+        controller.remove_edge(source.node_id, target.node_id)
+        self.assertEqual(changes, [True])
+
     def test_patient_resource_is_an_unconnected_persistent_declaration(self) -> None:
         workflow = Workflow()
         controller = WorkflowEditorController(on_change=lambda: None)

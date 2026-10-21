@@ -21,6 +21,21 @@ from app.system.storage import WorkflowDocument, WorkflowRepository
 
 
 class WorkflowSimulationEngineTests(unittest.TestCase):
+    def test_reporting_station_adds_no_processing_time(self):
+        workflow = Workflow()
+        analyzer = workflow.create_node("Analyzer", 10)
+        reporting = workflow.create_connected_node(analyzer.node_id, "Reporting", 20)
+        validating = workflow.create_connected_node(reporting.node_id, "Validating", 30)
+        document = WorkflowDocument.create("Workflow", workflow=workflow)
+        baseline = run_workflow_simulation(specimens_number=2, workflow_document=document, random_seed=7)
+        station = workflow.create_connected_node(validating.node_id, "Reporting Station", 999,
+            kind="equipment", metadata={"terminal_output": True, "required_staff": 1, "human_throughput": 1})
+        result = run_workflow_simulation(specimens_number=2, workflow_document=document, random_seed=7)
+        self.assertEqual(result.makespan, baseline.makespan)
+        self.assertEqual(len(result.completed_specimens), 2)
+        self.assertEqual(result.node_stats[station.node_id].specimens_processed, 0)
+        self.assertTrue(any(event["event"] == "report_received" for event in result.completed_specimens[0].history))
+
     def test_simulation_order_adapter_forwards_order_to_downstream_node(self) -> None:
         workflow = Workflow()
         adapter = workflow.create_node(

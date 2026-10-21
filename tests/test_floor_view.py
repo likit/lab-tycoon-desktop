@@ -97,6 +97,20 @@ class FloorPlanTests(unittest.TestCase):
         self.assertIsNone(floor.place_selected())
         self.assertEqual(floor.equipment_instances, [instance])
 
+    def test_reception_station_placement_and_workflow_metadata(self) -> None:
+        equipment = EQUIPMENT_CATALOG["specimens_reception_station"]
+        self.assertEqual(equipment.name, "Specimens Reception Station")
+        self.assertTrue(equipment.workflow_capable)
+        self.assertEqual(equipment.footprint, (1, 2))
+        floor = FloorPlan()
+        floor.begin_placement(equipment.equipment_type)
+        floor.select(3, 4)
+        station = floor.place_selected()
+        self.assertEqual(station.instance_id, "RECP-001")
+        self.assertEqual(floor.occupied_cells(), {(3, 4), (3, 5)})
+        self.assertFalse(floor.can_place(EquipmentPlacement(9, 4, equipment)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(3, 9, equipment)))
+
     def test_catalog_defines_multi_tile_chemistry_analyzer(self) -> None:
         analyzer = EQUIPMENT_CATALOG["chemistry_analyzer"]
 

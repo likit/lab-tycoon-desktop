@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import floor
+from math import floor, sin, tau
 from pathlib import Path
 import sys
+from time import monotonic
 from typing import Callable, Iterable
 
 import FreeSimpleGUI as sg
-from PIL import Image, ImageFilter, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
 from app.project import LabTycoonProject, ProjectEquipmentInstance, ProjectFloor
+from app.system.equipment_animation import animation_frame, FRAME_COUNT
+from app.system.floor_playback import FloorPlayback, floor_connections, tile_path, path_position
 
 
 TILE_WIDTH = 128
@@ -90,8 +93,36 @@ CHEMISTRY_ANALYZER_METADATA = EquipmentMetadata(
     id_prefix="CHEM",
 )
 
+SPECIMENS_RECEPTION_METADATA = EquipmentMetadata(
+    equipment_type="specimens_reception_station",
+    name="Specimens Reception Station",
+    category="Pre-analytical",
+    sprite="reception/specimens_reception_station_staff.png",
+    footprint=(1, 2),
+    clearance=EquipmentClearance(front=1),
+    sprite_anchor_cell=(0, 1),
+    workflow_capable=True,
+    id_prefix="RECP",
+)
+
+
+REPORTING_STATION_METADATA = EquipmentMetadata(
+    equipment_type="reporting_station",
+    name="Reporting Station",
+    category="Post-analytical",
+    sprite="reporting/reporting_station.png",
+    footprint=(1, 2),
+    clearance=EquipmentClearance(front=1),
+    sprite_anchor_cell=(0, 1),
+    workflow_capable=True,
+    id_prefix="REPORT",
+)
+
+
 EQUIPMENT_CATALOG: dict[str, EquipmentMetadata] = {
     CENTRIFUGE_METADATA.equipment_type: CENTRIFUGE_METADATA,
+    REPORTING_STATION_METADATA.equipment_type: REPORTING_STATION_METADATA,
+    SPECIMENS_RECEPTION_METADATA.equipment_type: SPECIMENS_RECEPTION_METADATA,
     CHEMISTRY_ANALYZER_METADATA.equipment_type: CHEMISTRY_ANALYZER_METADATA,
 }
 
@@ -346,6 +377,14 @@ class FloorViewRenderer:
         self._equipment_images: dict[str, object] = {}
         self._preview_images: dict[str, object] = {}
         self._selected_images: dict[str, object] = {}
+        self.playback = FloorPlayback()
+        self.workflow = None
+        self.show_directional_lines = True
+        self._flow_icons: dict[str, object] = {}
+        self._flow_glows: dict[tuple, object] = {}
+        self._activity_images: dict[tuple, object] = {}
+        self._equipment_canvas_items: dict[str, int] = {}
+        self._last_activity_frame = None
 
     def _load_png(self, path: Path):
         """Load an RGBA PNG without changing its size or transparency."""
@@ -377,6 +416,109 @@ class FloorViewRenderer:
                 image = source
             self._equipment_images[equipment.equipment_type] = image
         return image
+
+    def _activity_image(self, equipment: EquipmentMetadata, frame: int, selected: bool):
+        key = (equipment.equipment_type, frame, selected)
+        if key not in self._activity_images:
+            with Image.open(self.assets_dir / "animation" / f"{equipment.equipment_type}_running.png") as atlas:
+                width = atlas.width // FRAME_COUNT
+                rgba = atlas.crop((frame * width, 0, (frame + 1) * width, atlas.height)).convert("RGBA")
+            if selected:
+                outline = Image.new("RGBA", rgba.size, self.EQUIPMENT_SELECTION_COLOR)
+                mask = rgba.getchannel("A").point(lambda alpha: 255 if alpha > 32 else 0)
+                outline.putalpha(mask.filter(ImageFilter.MaxFilter(9)))
+                outline.alpha_composite(rgba)
+                rgba = outline
+            self._activity_images[key] = ImageTk.PhotoImage(rgba, master=self.canvas.master)
+        return self._activity_images[key]
+
+    def _instance_image(self, instance: EquipmentInstance):
+        equipment = self.floor_plan.equipment_catalog[instance.equipment_type]
+        selected = instance.instance_id == self.floor_plan.selected_equipment_id
+        frame = animation_frame(self.playback.state, self.playback.elapsed)
+        if frame is not None and (self.assets_dir / "animation" / f"{equipment.equipment_type}_running.png").exists():
+            return self._activity_image(equipment, frame, selected)
+        return self._selected_image(equipment) if selected else self._equipment_image(equipment)
+
+    def render_equipment_activity(self) -> None:
+        frame = animation_frame(self.playback.state, self.playback.elapsed)
+        if frame == self._last_activity_frame:
+            return
+        self._last_activity_frame = frame
+        for instance in self.floor_plan.equipment_instances:
+            item = self._equipment_canvas_items.get(instance.instance_id)
+            if item is not None:
+                self.canvas.itemconfigure(item, image=self._instance_image(instance))
+
+    def _flow_icon(self, kind: str):
+        if kind not in self._flow_icons:
+            filename = "blood_specimen.png" if kind == "specimens" else "laboratory_report.png"
+            with Image.open(self.assets_dir / "flow" / filename) as source:
+                image = source.convert("RGBA")
+            self._flow_icons[kind] = ImageTk.PhotoImage(image, master=self.canvas.master)
+        return self._flow_icons[kind]
+
+    def _draw_flow_glow(self, points: list[float], pulse: float) -> None:
+        """Composite an alpha-blurred cyan halo over the visible floor."""
+        padding = 20
+        left, top = min(points[::2]) - padding, min(points[1::2]) - padding
+        local = tuple((points[i] - left, points[i + 1] - top) for i in range(0, len(points), 2))
+        level = round(pulse * 7)
+        key = (local, level)
+        image = self._flow_glows.get(key)
+        if image is None:
+            size = (int(max(x for x, _ in local)) + padding + 1,
+                    int(max(y for _, y in local)) + padding + 1)
+            halo = Image.new("RGBA", size)
+            ImageDraw.Draw(halo).line(local, fill=(0, 205, 255, 65 + level * 5), width=11, joint="curve")
+            halo = halo.filter(ImageFilter.GaussianBlur(6))
+            inner = Image.new("RGBA", size)
+            ImageDraw.Draw(inner).line(local, fill=(34, 211, 238, 90 + level * 7), width=5, joint="curve")
+            halo.alpha_composite(inner.filter(ImageFilter.GaussianBlur(2)))
+            image = ImageTk.PhotoImage(halo, master=self.canvas.master)
+            if len(self._flow_glows) >= 128:
+                self._flow_glows.clear()
+            self._flow_glows[key] = image
+        self.canvas.create_image(left, top, image=image, anchor="nw", tags="workflow-flow")
+
+    def render_flow(self) -> None:
+        """Update only the overlay during playback, leaving floor sprites cached."""
+        self.canvas.delete("workflow-flow")
+        if self.workflow is None:
+            return
+        instances = {item.instance_id: item for item in self.floor_plan.equipment_instances}
+        for connection in floor_connections(self.workflow, set(instances)):
+            path = tile_path(
+                set(self.floor_plan.placement_for_instance(instances[connection.source_id]).occupied_cells()),
+                set(self.floor_plan.placement_for_instance(instances[connection.target_id]).occupied_cells()),
+            )
+            if len(path) < 2:
+                continue
+            points = []
+            for row, col in path:
+                x, y = grid_to_screen(row, col)
+                points.extend((self.origin_x + x, self.origin_y + y + TILE_HEIGHT / 2))
+            if self.show_directional_lines:
+                if self.playback.state == "playing":
+                    pulse = (sin(self.playback.elapsed * tau / 1.8) + 1) / 2
+                    self._draw_flow_glow(points, pulse)
+                    core = "#e0faff" if pulse > 0.5 else "#a5f3fc"
+                else:
+                    core = "#38bdf8"
+                self.canvas.create_line(*points, fill=core, width=2 if self.playback.state == "playing" else 3,
+                                        arrow="last", tags="workflow-flow")
+            if self.playback.state == "stopped":
+                continue
+            kinds = [kind for kind, enabled in (("specimens", connection.output_specimens),
+                                                ("data", connection.output_data)) if enabled]
+            for lane, kind in enumerate(kinds):
+                for index in range(3):
+                    phase = (self.playback.elapsed / 4 + index / 3 + lane / 6) % 1
+                    row, col = path_position(path, phase)
+                    x, y = grid_to_screen(row, col)
+                    self.canvas.create_image(self.origin_x + x,
+                                             self.origin_y + y + TILE_HEIGHT / 2,
+                                             image=self._flow_icon(kind), tags="workflow-flow")
 
     def _selected_image(self, equipment: EquipmentMetadata):
         """Cache a gold silhouette border around the equipment sprite."""
@@ -453,6 +595,7 @@ class FloorViewRenderer:
 
     def render(self) -> None:
         self.canvas.delete("all")
+        self._equipment_canvas_items.clear()
         self.canvas.configure(background=self.BACKGROUND_COLOR)
         for row in range(self.floor_plan.rows):
             for col in range(self.floor_plan.columns):
@@ -503,12 +646,10 @@ class FloorViewRenderer:
                 instance.row + anchor_row_offset,
                 instance.col + anchor_col_offset,
             )
-            self.canvas.create_image(
+            self._equipment_canvas_items[instance.instance_id] = self.canvas.create_image(
                 self.origin_x + x,
                 self.origin_y + y + TILE_HEIGHT / 2,
-                image=(self._selected_image(placement.equipment)
-                       if instance.instance_id == self.floor_plan.selected_equipment_id
-                       else self._equipment_image(placement.equipment)),
+                image=self._instance_image(instance),
                 anchor=placement.equipment.anchor,
             )
 
@@ -526,6 +667,8 @@ class FloorViewRenderer:
                 self.origin_x + x, self.origin_y + y + TILE_HEIGHT / 2,
                 image=self._preview_image(equipment), anchor=equipment.anchor,
             )
+
+        self.render_flow()
 
 
 def _asset_path(*parts: str) -> Path:
@@ -560,16 +703,35 @@ def _equipment_panel_layout() -> list[list[object]]:
     return rows
 
 
+def _advance_floor_frame(renderer: FloorViewRenderer, event, seconds: float) -> bool:
+    """Never access Tk widgets after a window-close event."""
+    if event in (sg.WIN_CLOSED, "Close"):
+        renderer.playback.stop()
+        return False
+    renderer.playback.advance(seconds)
+    if renderer.playback.state == "playing":
+        renderer.render_equipment_activity()
+        renderer.render_flow()
+    return True
+
+
 def create_floor_view_window(project: LabTycoonProject) -> None:
     """Open the experimental isometric floor view in its own window."""
 
     floor_plan = FloorPlan(floor_state=project.floor, on_change=project.mark_dirty)
+    workflow_labels = {f"{item.name} [{item.workflow_id[:8]}]": item.workflow for item in project.workflows}
     layout = [
         [
             sg.Text("Experimental Floor View", font=("Arial", 18, "bold")),
             sg.Push(),
             sg.Text("Select equipment to move, or choose equipment to add", key="-FLOOR-STATUS-"),
         ],
+        [sg.Text("Workflow"), sg.Combo(list(workflow_labels), default_value=next(iter(workflow_labels)),
+                                       key="-FLOOR-WORKFLOW-", readonly=True, enable_events=True, size=(32, 1)),
+         sg.Button("Play", key="-FLOW-PLAY-", button_color=("#ffffff", "#1e3a8a"), disabled_button_color=("#374151", "#e5e7eb"), use_ttk_buttons=True), sg.Button("Pause", key="-FLOW-PAUSE-", disabled=True, button_color=("#ffffff", "#1e3a8a"), disabled_button_color=("#374151", "#e5e7eb"), use_ttk_buttons=True),
+         sg.Button("Stop", key="-FLOW-STOP-", disabled=True, button_color=("#ffffff", "#1e3a8a"), disabled_button_color=("#374151", "#e5e7eb"), use_ttk_buttons=True),
+         sg.Text("Stopped — illustrative flow", key="-FLOW-STATE-"),
+         sg.Checkbox("Show directional lines", default=True, key="-FLOW-SHOW-LINES-", enable_events=True)],
         [
             sg.Canvas(
                 key="-FLOOR-CANVAS-",
@@ -582,7 +744,7 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             sg.Column(
                 _equipment_panel_layout(),
                 key="-EQUIPMENT-PANEL-",
-                size=(190, 720),
+                size=(250, 720),
                 vertical_alignment="top",
                 expand_y=True,
             ),
@@ -608,6 +770,8 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         _asset_path("tiles", "floor_lab.png"),
         _asset_path(),
     )
+
+    renderer.workflow = next(iter(workflow_labels.values()))
 
     def redraw_for_size(_event=None) -> None:
         renderer.resize(max(canvas.winfo_width(), 1))
@@ -694,7 +858,29 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         window["-FLOOR-STATUS-"].update(f"Placement cancelled{suffix}")
         renderer.render()
 
+    removal_confirmation_open = False
+
     def remove_selected_equipment(_event=None) -> None:
+        nonlocal removal_confirmation_open
+        if removal_confirmation_open:
+            return
+        instance = next((item for item in floor_plan.equipment_instances
+                         if item.instance_id == floor_plan.selected_equipment_id), None)
+        if instance is None:
+            return
+        equipment = floor_plan.equipment_catalog[instance.equipment_type]
+        removal_confirmation_open = True
+        try:
+            answer = sg.popup_yes_no(
+                f"Remove {equipment.name} ({instance.instance_id}) from the floor?\n\n"
+                "Workflow nodes linked to this equipment will show Missing Equipment.",
+                title="Remove Equipment",
+                keep_on_top=True,
+            )
+        finally:
+            removal_confirmation_open = False
+        if answer != "Yes":
+            return
         removed = floor_plan.remove_selected_equipment()
         if removed is None:
             return
@@ -710,16 +896,19 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             renderer.render()
     canvas.bind("<Leave>", clear_preview)
     canvas.bind("<Configure>", redraw_for_size)
-    window.TKroot.bind_all("<Escape>", cancel_placement)
-    window.TKroot.bind_all("<Delete>", remove_selected_equipment)
-    window.TKroot.bind_all("<BackSpace>", remove_selected_equipment)
+    window.TKroot.bind("<Escape>", cancel_placement, add="+")
+    window.TKroot.bind("<Delete>", remove_selected_equipment, add="+")
+    window.TKroot.bind("<BackSpace>", remove_selected_equipment, add="+")
     redraw_for_size()
     bring_window_to_front(window)
 
+    last_frame = monotonic()
     while True:
-        event, _values = window.read()
-        if event in (sg.WIN_CLOSED, "Close"):
+        event, _values = window.read(timeout=33)
+        now = monotonic()
+        if not _advance_floor_frame(renderer, event, now - last_frame):
             break
+        last_frame = now
         if isinstance(event, str) and event.startswith("-EQUIPMENT-") and event.endswith("-"):
             equipment_type = event.removeprefix("-EQUIPMENT-").removesuffix("-")
             floor_plan.begin_placement(equipment_type)
@@ -733,10 +922,30 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
                 renderer.render()
             else:
                 window["-FLOOR-STATUS-"].update("Select equipment on the floor first")
+        elif event == "-FLOW-SHOW-LINES-":
+            renderer.show_directional_lines = bool(_values[event])
+            renderer.render_flow()
+        elif event in ("-FLOW-PLAY-", "-FLOW-PAUSE-", "-FLOW-STOP-", "-FLOOR-WORKFLOW-"):
+            if event == "-FLOOR-WORKFLOW-":
+                renderer.playback.stop()
+                renderer.workflow = workflow_labels[_values[event]]
+            elif event == "-FLOW-PLAY-":
+                renderer.playback.play()
+            elif event == "-FLOW-PAUSE-":
+                renderer.playback.pause()
+            else:
+                renderer.playback.stop()
+            state = renderer.playback.state
+            window["-FLOW-STATE-"].update(f"{state.title()} — illustrative flow")
+            for key, disabled in (("-FLOW-PLAY-", state == "playing"),
+                                  ("-FLOW-PAUSE-", state != "playing"),
+                                  ("-FLOW-STOP-", state == "stopped")):
+                window[key].update(disabled=disabled,
+                                   disabled_button_color=("#374151", "#e5e7eb"))
+            renderer.render_equipment_activity()
+            renderer.render_flow()
         elif event == "-REMOVE-EQUIPMENT-":
             remove_selected_equipment()
 
-    window.TKroot.unbind_all("<Escape>")
-    window.TKroot.unbind_all("<Delete>")
-    window.TKroot.unbind_all("<BackSpace>")
+    renderer.playback.stop()
     window.close()
