@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.system.models import Test, engine
 from app.system.model import Scenario, Workflow, WorkflowNode
 from app.system.order_adapter import ADAPTER_TYPES
+from app.system.staff_batching import DEFAULT_BATCH_SIZE, DEFAULT_BATCH_WAIT_MINUTES, validate_batch_settings
 from app.system.storage import WorkflowDocument, WorkflowRepository
 
 
@@ -149,12 +150,19 @@ def _bind_graph_double_click_properties(
 
 def _show_node_form_dialog(
     node: WorkflowNode | None,
+    equipment_choices: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     """Prompt for node configuration values."""
 
     if node is None:
         return None
 
+    attendance_choices = {"Automatic": ""}
+    attendance_choices.update({label: equipment_id for equipment_id, label in (equipment_choices or [])})
+    current_attendance = str(node.metadata.get("attend_equipment_id", ""))
+    if current_attendance and current_attendance not in attendance_choices.values():
+        attendance_choices[f"{current_attendance} — Missing Equipment"] = current_attendance
+    attendance_label = next(label for label, value in attendance_choices.items() if value == current_attendance)
     node_types = [
         "specimen registration",
         "specimens processing",
@@ -182,11 +190,18 @@ def _show_node_form_dialog(
         ],
         [sg.Text("Name"), sg.Input(node.widget.name, key="-NAME-", expand_x=True)],
         [sg.Column([
-            [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput), key="-THROUGHPUT-", size=(14, 1))],
-            [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-", size=(14, 1))],
+            [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput), key="-THROUGHPUT-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.throughput), key="-THROUGHPUT-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
+            [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
             [sg.Text("Capacity"), sg.Input(str(node.widget.capacity), key="-CAPACITY-", size=(14, 1))],
             [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff), key="-STAFF-", size=(14, 1))],
+            [sg.Text("Attend at"), sg.Combo(list(attendance_choices), default_value=attendance_label,
+                                          key="-ATTEND-AT-", readonly=True, size=(38, 1))],
         ], key="-PROCESSING-FIELDS-", visible=current_type != "order adapter")],
+        [sg.Frame("Staff batching", [
+            [sg.Text("Maximum specimens per batch"), sg.Input(str(node.metadata.get("batch_size", DEFAULT_BATCH_SIZE)), key="-BATCH-SIZE-", size=(10, 1))],
+            [sg.Text("Maximum collection wait (minutes)"), sg.Input(str(node.metadata.get("batch_wait_minutes", DEFAULT_BATCH_WAIT_MINUTES)), key="-BATCH-WAIT-", size=(10, 1))],
+            [sg.Text("Set batch size to 1 for individual processing. Human capacity remains per specimen.")],
+        ], key="-BATCH-FIELDS-", visible=current_type == "specimens processing")],
         [sg.Column([
             [sg.Text("Adapter type"), sg.Combo(list(ADAPTER_TYPES), default_value=str(node.metadata.get("adapter_type", "simulation")), key="-ADAPTER-TYPE-", readonly=True, size=(20, 1))],
         ], key="-ADAPTER-FIELDS-", visible=current_type == "order adapter")],
@@ -203,10 +218,14 @@ def _show_node_form_dialog(
             event, values = window.read()
             if event in ("Cancel", sg.WIN_CLOSED):
                 return None
+            if event in ("-THROUGHPUT-", "-HUMAN-THROUGHPUT-"):
+                window[f"{event}TIME-"].update(_capacity_time_label(values.get(event)))
+                continue
             if event == "-NODE-TYPE-":
                 is_adapter = values.get("-NODE-TYPE-") == "order adapter"
                 window["-PROCESSING-FIELDS-"].update(visible=not is_adapter)
                 window["-ADAPTER-FIELDS-"].update(visible=is_adapter)
+                window["-BATCH-FIELDS-"].update(visible=values.get("-NODE-TYPE-") == "specimens processing")
                 continue
             if event == "-SAVE-":
                 name = str(values["-NAME-"]).strip() or "Unnamed Node"
@@ -225,9 +244,11 @@ def _show_node_form_dialog(
                     human_throughput = float(values["-HUMAN-THROUGHPUT-"])
                     capacity = int(values["-CAPACITY-"])
                     required_staff = int(values["-STAFF-"])
+                    batch_size, batch_wait_minutes = validate_batch_settings(
+                        int(values["-BATCH-SIZE-"]), float(values["-BATCH-WAIT-"]))
                 except (TypeError, ValueError):
                     _notify(
-                        "Processing capacity and human processing capacity must be numeric, capacity and staff must be integers."
+                        "Capacities and batch wait must be numeric; capacity, staff and batch size must be integers. Batch size must be positive and batch wait non-negative."
                     )
                     continue
 
@@ -239,6 +260,9 @@ def _show_node_form_dialog(
                     "human_throughput": human_throughput,
                     "capacity": capacity,
                     "required_staff": required_staff,
+                    "batch_size": batch_size,
+                    "batch_wait_minutes": batch_wait_minutes,
+                    "attend_equipment_id": attendance_choices.get(values.get("-ATTEND-AT-"), ""),
                     "enabled": bool(values.get("-ENABLED-", False)),
                 }
     finally:
@@ -416,7 +440,7 @@ class WorkflowLayoutEngine:
         self.left_margin = left_margin
         self.top_margin = top_margin
 
-    def layout(self, workflow: Workflow) -> dict[str, tuple[float, float]]:
+    def layout(self, workflow: Workflow, *, use_stored_positions: bool = True) -> dict[str, tuple[float, float]]:
         """Return node center points keyed by node id."""
 
         graph = workflow.graph
@@ -430,6 +454,10 @@ class WorkflowLayoutEngine:
 
         positions: dict[str, tuple[float, float]] = {}
         max_level = max(grouped) if grouped else 0
+        self.canvas_height = max(self.canvas_height, 2 * self.top_margin + max_level * self.row_gap)
+        self.canvas_width = max(self.canvas_width,
+            2 * self.left_margin + max(self.node_width, self.branch_size)
+            + (max(map(len, grouped.values())) - 1) * self.column_gap)
         for level in sorted(grouped):
             node_ids = sorted(
                 grouped[level],
@@ -438,18 +466,17 @@ class WorkflowLayoutEngine:
             total_width = max(0, (len(node_ids) - 1) * self.column_gap)
             start_x = max(self.left_margin, (self.canvas_width - total_width) / 2)
             y = self.canvas_height - self.top_margin - level * self.row_gap
-            if y < self.top_margin:
-                y = self.top_margin + (max_level - level) * 20
             for index, node_id in enumerate(node_ids):
                 node = graph.nodes[node_id]
                 stored_position = node.metadata.get("editor_position")
                 if (
-                    isinstance(stored_position, (list, tuple))
+                    use_stored_positions
+                    and isinstance(stored_position, (list, tuple))
                     and len(stored_position) == 2
                     and all(isinstance(value, (int, float)) for value in stored_position)
                 ):
                     positions[node_id] = (float(stored_position[0]), float(stored_position[1]))
-                elif isinstance(node.metadata.get("x"), (int, float)) and isinstance(
+                elif use_stored_positions and isinstance(node.metadata.get("x"), (int, float)) and isinstance(
                     node.metadata.get("y"), (int, float)
                 ):
                     # Keep compatibility with early editor metadata while using
@@ -460,6 +487,14 @@ class WorkflowLayoutEngine:
                     )
                 else:
                     positions[node_id] = (start_x + index * self.column_gap, y)
+        if use_stored_positions:
+            bounds = [self.node_bounds(graph.nodes[node_id], *center)
+                      for node_id, center in positions.items()]
+            overlaps = any(a.left < b.right + 20 and a.right + 20 > b.left
+                           and a.bottom < b.top + 20 and a.top + 20 > b.bottom
+                           for index, a in enumerate(bounds) for b in bounds[index + 1:])
+            if overlaps or any(b.left < 0 or b.bottom < 0 for b in bounds):
+                return self.layout(workflow, use_stored_positions=False)
         return positions
 
     def node_size(self, node: WorkflowNode) -> tuple[int, int]:
@@ -536,6 +571,17 @@ class WorkflowGraphRenderer:
 
         graph_canvas.erase()
         positions = self.layout_engine.layout(workflow)
+        layout = self.layout_engine
+        extents = [layout.node_bounds(workflow.graph.nodes[node_id], *center)
+                   for node_id, center in positions.items()]
+        canvas_size = (
+            max(2400, layout.canvas_width,
+                int(max((bounds.right for bounds in extents), default=0) + layout.left_margin)),
+            max(1800, layout.canvas_height,
+                int(max((bounds.top for bounds in extents), default=0) + layout.top_margin)),
+        )
+        graph_canvas.set_size(canvas_size)
+        graph_canvas.change_coordinates((0, 0), canvas_size)
         bounds: dict[str, NodeBounds] = {}
 
         for edge in workflow.graph.edges:
@@ -929,11 +975,14 @@ class WorkflowEditorController:
             details.append(f"Description: {node.widget.description}")
         else:
             details.extend([
-                f"Processing Capacity (per hours): {node.widget.throughput:g}",
-                f"Human Processing Capacity (per hour): {node.widget.human_throughput:g}",
+                f"Processing Capacity (per hours): {node.widget.throughput:g} ({_capacity_time_label(node.widget.throughput)})",
+                f"Human Processing Capacity (per hour): {node.widget.human_throughput:g} ({_capacity_time_label(node.widget.human_throughput)})",
                 f"Capacity: {node.widget.capacity}",
                 f"Required staff: {node.widget.required_staff}",
             ])
+        if node.widget.node_type == "specimens processing" and node.kind != "equipment":
+            details.append(f"Staff batch size: {node.metadata.get('batch_size', DEFAULT_BATCH_SIZE)}")
+            details.append(f"Maximum batch wait: {node.metadata.get('batch_wait_minutes', DEFAULT_BATCH_WAIT_MINUTES):g} minutes")
         if equipment_resolution is not None:
             details.append(f"Equipment: {equipment_resolution.equipment_id}")
             details.append(
@@ -968,6 +1017,7 @@ class WorkflowEditorController:
             self.current_document.workflow,
             selected_node_id=self.selected_node_id,
         )
+        window["-WF-GRAPH-SCROLL-"].contents_changed()
         window.refresh()
 
     def refresh(self, window: sg.Window) -> None:
@@ -1306,6 +1356,9 @@ class WorkflowEditorController:
         capacity: int,
         required_staff: int,
         enabled: bool = True,
+        batch_size: int | None = None,
+        batch_wait_minutes: float | None = None,
+        attend_equipment_id: str | None = None,
         incoming_connection_node_id: str | None = None,
         outgoing_connection_node_id: str | None = None,
         window: sg.Window | None = None,
@@ -1315,8 +1368,14 @@ class WorkflowEditorController:
         node = self.current_document.workflow.get_node(node_id) if self.current_document else None
         if node is None:
             raise ValueError("Selected node is no longer available.")
+        if attend_equipment_id and self.equipment_instance(attend_equipment_id) is None and attend_equipment_id != node.metadata.get("attend_equipment_id"):
+            raise ValueError("The staff attendance equipment is not available in this project.")
         if node_type == "order adapter":
             raise ValueError("Use Order Adapter settings for this node type.")
+
+        batch_size, batch_wait_minutes = validate_batch_settings(
+            node.metadata.get("batch_size", DEFAULT_BATCH_SIZE) if batch_size is None else batch_size,
+            node.metadata.get("batch_wait_minutes", DEFAULT_BATCH_WAIT_MINUTES) if batch_wait_minutes is None else batch_wait_minutes)
 
         if node.kind == "order_adapter":
             node.metadata.pop("adapter_type", None)
@@ -1333,7 +1392,10 @@ class WorkflowEditorController:
                 "description": description,
                 "required_staff": required_staff,
                 "capacity": capacity,
+                "batch_size": batch_size,
+                "batch_wait_minutes": batch_wait_minutes,
                 "enabled": enabled,
+                "attend_equipment_id": node.metadata.get("attend_equipment_id", "") if attend_equipment_id is None else attend_equipment_id,
             },
             kind="task" if node.kind == "order_adapter" else node.kind,
         )
@@ -1634,6 +1696,23 @@ class WorkflowEditorController:
             self.update_graph_context_menu(window)
 
 
+def _capacity_time_label(value: object) -> str:
+    """Display nominal minutes for one test/specimen at a per-hour rate."""
+
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return "— min/item"
+    if not math.isfinite(rate) or rate < 0:
+        return "— min/item"
+    if rate == 0:
+        return "— min/item (capacity is 0)"
+    return f"{60 / rate:.4g} min/item"
+
+
+_CAPACITY_TIME_TOOLTIP = "60 ÷ capacity per hour. One item is a test for analyzers or a specimen for other equipment."
+
+
 def _show_node_properties_dialog(
     node: WorkflowNode | None,
 ) -> dict[str, Any] | None:
@@ -1646,7 +1725,8 @@ def _show_node_properties_dialog(
         [sg.Text("Name"), sg.Input(node.widget.name, key="-NAME-", expand_x=True)],
         [
             sg.Text("Processing Capacity (per hours)"),
-            sg.Input(str(node.widget.service_time), key="-SERVICE-", size=(12, 1)),
+            sg.Input(str(node.widget.service_time), key="-SERVICE-", size=(12, 1), enable_events=True),
+            sg.Text(_capacity_time_label(node.widget.service_time), key="-SERVICE-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP),
         ],
         [
             sg.Text("Capacity"),
@@ -1669,6 +1749,9 @@ def _show_node_properties_dialog(
             event, values = window.read()
             if event in ("Cancel", sg.WIN_CLOSED):
                 return None
+            if event == "-SERVICE-":
+                window["-SERVICE-TIME-"].update(_capacity_time_label(values.get("-SERVICE-")))
+                continue
             if event == "-SAVE-":
                 try:
                     service_time = float(values["-SERVICE-"])
@@ -1722,8 +1805,8 @@ def _show_equipment_node_dialog(
                 size=(38, 1),
             ),
         ],
-        [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput if node else 0.0), key="-WF-EQUIPMENT-THROUGHPUT-", size=(14, 1))],
-        [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput if node else 0.0), key="-WF-EQUIPMENT-HUMAN-", size=(14, 1))],
+        [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput if node else 0.0), key="-WF-EQUIPMENT-THROUGHPUT-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.throughput if node else 0.0), key="-WF-EQUIPMENT-THROUGHPUT-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
+        [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput if node else 0.0), key="-WF-EQUIPMENT-HUMAN-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.human_throughput if node else 0.0), key="-WF-EQUIPMENT-HUMAN-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
         [sg.Text("Capacity"), sg.Input(str(node.widget.capacity if node else 1), key="-WF-EQUIPMENT-CAPACITY-", size=(14, 1))],
         [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff if node else 0), key="-WF-EQUIPMENT-STAFF-", size=(14, 1))],
         [sg.Text("Description"), sg.Multiline(node.widget.description if node else "", key="-WF-EQUIPMENT-DESC-", size=(42, 4))],
@@ -1749,7 +1832,13 @@ def _show_equipment_node_dialog(
             if terminal:
                 window[f"-WF-EQUIPMENT-{key}-"].update(False if key.startswith("OUTPUT") else "0")
 
+    def update_capacity_times() -> None:
+        for field in ("THROUGHPUT", "HUMAN"):
+            window[f"-WF-EQUIPMENT-{field}-TIME-"].update(
+                _capacity_time_label(window[f"-WF-EQUIPMENT-{field}-"].get()))
+
     update_role_fields()
+    update_capacity_times()
     try:
         while True:
             event, values = window.read()
@@ -1757,6 +1846,10 @@ def _show_equipment_node_dialog(
                 return None
             if event == "-WF-EQUIPMENT-":
                 update_role_fields()
+                update_capacity_times()
+                continue
+            if event in ("-WF-EQUIPMENT-THROUGHPUT-", "-WF-EQUIPMENT-HUMAN-"):
+                update_capacity_times()
                 continue
             if event == "-SAVE-":
                 equipment_id = label_to_id.get(str(values.get("-WF-EQUIPMENT-", "")))
@@ -2054,7 +2147,7 @@ def open_workflow_editor_window(
                     if settings is not None:
                         controller.bind_selected_equipment(window=window, **settings)
                 else:
-                    result = _show_node_form_dialog(node)
+                    result = _show_node_form_dialog(node, controller.equipment_choices())
                     if result is not None and node is not None:
                         if result["node_type"] == "order adapter":
                             controller.update_order_adapter_from_form(node.node_id, window=window, **result)
@@ -2192,7 +2285,7 @@ def open_workflow_editor_window(
                             controller.bind_selected_equipment(window=window, **settings)
                             controller.refresh(window)
                         continue
-                    result = _show_node_form_dialog(node)
+                    result = _show_node_form_dialog(node, controller.equipment_choices())
                     if result is not None and node is not None:
                         if result["node_type"] == "order adapter":
                             controller.update_order_adapter_from_form(node.node_id, window=window, **result)

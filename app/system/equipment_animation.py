@@ -51,3 +51,24 @@ def report_screen_content(frame: int) -> Image.Image:
     image.alpha_composite(body, (27, 31))
     draw.rectangle((174, 30, 176, 111), fill='#c4d0db')
     return image
+
+
+def project_report_screen(frame, size, corners):
+    """Map content into the monitor's inner quadrilateral and clip every pixel."""
+    import numpy as np
+    from PIL import ImageChops
+    content = report_screen_content(frame)
+    source = [(0, 0), (content.width - 1, 0),
+              (content.width - 1, content.height - 1), (0, content.height - 1)]
+    matrix, values = [], []
+    for (x, y), (u, v) in zip(corners, source):
+        matrix.extend(((x, y, 1, 0, 0, 0, -u*x, -u*y),
+                       (0, 0, 0, x, y, 1, -v*x, -v*y)))
+        values.extend((u, v))
+    coefficients = np.linalg.solve(np.array(matrix, dtype=float), np.array(values, dtype=float))
+    layer = content.transform(size, Image.Transform.PERSPECTIVE, coefficients,
+                              resample=Image.Resampling.BICUBIC)
+    clip = Image.new('L', size)
+    ImageDraw.Draw(clip).polygon(corners, fill=255)
+    layer.putalpha(ImageChops.multiply(layer.getchannel('A'), clip))
+    return layer

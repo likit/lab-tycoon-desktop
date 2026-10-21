@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import floor, sin, tau
+from math import floor, hypot
 from pathlib import Path
 import sys
+import tkinter as tk
 from time import monotonic
+from queue import Empty
 from typing import Callable, Iterable
 
 import FreeSimpleGUI as sg
@@ -14,6 +16,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
 from app.project import LabTycoonProject, ProjectEquipmentInstance, ProjectFloor
+from app.system.live_simulation import LiveSimulationSession
+from app.simulation_runs import persist_generated_run
 from app.system.equipment_animation import animation_frame, FRAME_COUNT
 from app.system.floor_playback import FloorPlayback, floor_connections, tile_path, path_position
 
@@ -64,6 +68,7 @@ class EquipmentMetadata:
     anchor: str = "s"
     sprite_anchor_cell: tuple[int, int] = (0, 0)
     sprite_subsample: int = 1
+    sprite_scale: float = 1.0
     workflow_capable: bool = False
     id_prefix: str = "EQ"
 
@@ -77,6 +82,7 @@ CENTRIFUGE_METADATA = EquipmentMetadata(
     clearance=EquipmentClearance(left=1, right=1, rear=1),
     workflow_capable=True,
     id_prefix="CENT",
+    sprite_scale=0.8,
 )
 
 CHEMISTRY_ANALYZER_METADATA = EquipmentMetadata(
@@ -97,7 +103,7 @@ SPECIMENS_RECEPTION_METADATA = EquipmentMetadata(
     equipment_type="specimens_reception_station",
     name="Specimens Reception Station",
     category="Pre-analytical",
-    sprite="reception/specimens_reception_station_staff.png",
+    sprite="reception/specimens_reception_station_empty.png",
     footprint=(1, 2),
     clearance=EquipmentClearance(front=1),
     sprite_anchor_cell=(0, 1),
@@ -110,7 +116,7 @@ REPORTING_STATION_METADATA = EquipmentMetadata(
     equipment_type="reporting_station",
     name="Reporting Station",
     category="Post-analytical",
-    sprite="reporting/reporting_station.png",
+    sprite="reporting/reporting_station_empty.png",
     footprint=(1, 2),
     clearance=EquipmentClearance(front=1),
     sprite_anchor_cell=(0, 1),
@@ -381,10 +387,16 @@ class FloorViewRenderer:
         self.workflow = None
         self.show_directional_lines = True
         self._flow_icons: dict[str, object] = {}
-        self._flow_glows: dict[tuple, object] = {}
+        self._transport_images: dict[tuple, object] = {}
         self._activity_images: dict[tuple, object] = {}
         self._equipment_canvas_items: dict[str, int] = {}
         self._last_activity_frame = None
+        self.live_session = None
+        self.live_counts = {}
+        self.live_staff = []
+        self._staff_images = {}
+        self.live_transfers = []
+        self._last_equipment = {}
 
     def _load_png(self, path: Path):
         """Load an RGBA PNG without changing its size or transparency."""
@@ -397,25 +409,56 @@ class FloorViewRenderer:
             str(path),
         )
 
+    def _base_equipment_sprite(self, equipment: EquipmentMetadata):
+        with Image.open(self.assets_dir / equipment.sprite) as source:
+            rgba = source.convert('RGBA')
+        scale = equipment.sprite_subsample
+        size = (round(((rgba.width + scale - 1) // scale) * equipment.sprite_scale),
+                round(((rgba.height + scale - 1) // scale) * equipment.sprite_scale))
+        return rgba.resize(size, Image.Resampling.LANCZOS)
+
     def _equipment_image(self, equipment: EquipmentMetadata):
         image = self._equipment_images.get(equipment.equipment_type)
         if image is None:
-            source = self._load_png(self.assets_dir / equipment.sprite)
-            if equipment.sprite_subsample > 1:
-                image = self.canvas.master.tk.call("image", "create", "photo")
-                self.canvas.master.tk.call(
-                    image,
-                    "copy",
-                    source,
-                    "-subsample",
-                    equipment.sprite_subsample,
-                    equipment.sprite_subsample,
-                )
-                self.canvas.master.tk.call("image", "delete", source)
-            else:
-                image = source
+            rgba = self._base_equipment_sprite(equipment)
+            image = ImageTk.PhotoImage(rgba, master=self.canvas.master)
             self._equipment_images[equipment.equipment_type] = image
         return image
+
+    def sync_live_session(self) -> dict | None:
+        if self.live_session is None:
+            return None
+        snapshot = self.live_session.snapshot()
+        self.live_counts = snapshot['counts'] if snapshot['state'] != 'cancelled' else {}
+        self.live_staff = snapshot.get('staff_assignments', []) if snapshot['state'] in ('playing', 'paused') else []
+        self.playback.state = {'playing': 'playing', 'paused': 'paused'}.get(snapshot['state'], 'stopped')
+        self.playback.elapsed = snapshot['time'] / self.live_session.speed
+        # Drain notifications; state and transfers remain owned by the session,
+        # so closing/reopening a floor view never loses simulation progress.
+        while True:
+            try:
+                self.live_session.events.get_nowait()
+            except Empty:
+                break
+        self.live_transfers = [transfer for transfer in snapshot['transfers']
+                               if not transfer.get('delivered') or snapshot['time'] - transfer['time'] < .04]
+        if snapshot['state'] not in ('playing', 'paused'):
+            self.live_transfers = []
+        return snapshot
+
+    def equipment_activity(self, instance_id: str) -> bool:
+        if self.live_session is None:
+            return True
+        clock = self.live_session.snapshot()['time']
+        for node in self.workflow.graph.iter_nodes():
+            if node.metadata.get('equipment_id') != instance_id:
+                continue
+            counts = self.live_counts.get(node.node_id, {})
+            if counts.get('active', 0) > 0:
+                return True
+            if node.metadata.get('terminal_output') and counts.get('finished', 0) > 0:
+                return clock - counts.get('last_finished', 0) < .03
+        return False
 
     def _activity_image(self, equipment: EquipmentMetadata, frame: int, selected: bool):
         key = (equipment.equipment_type, frame, selected)
@@ -423,6 +466,9 @@ class FloorViewRenderer:
             with Image.open(self.assets_dir / "animation" / f"{equipment.equipment_type}_running.png") as atlas:
                 width = atlas.width // FRAME_COUNT
                 rgba = atlas.crop((frame * width, 0, (frame + 1) * width, atlas.height)).convert("RGBA")
+                if equipment.sprite_scale != 1:
+                    rgba = rgba.resize((round(rgba.width * equipment.sprite_scale),
+                                        round(rgba.height * equipment.sprite_scale)), Image.Resampling.LANCZOS)
             if selected:
                 outline = Image.new("RGBA", rgba.size, self.EQUIPMENT_SELECTION_COLOR)
                 mask = rgba.getchannel("A").point(lambda alpha: 255 if alpha > 32 else 0)
@@ -436,13 +482,18 @@ class FloorViewRenderer:
         equipment = self.floor_plan.equipment_catalog[instance.equipment_type]
         selected = instance.instance_id == self.floor_plan.selected_equipment_id
         frame = animation_frame(self.playback.state, self.playback.elapsed)
-        if frame is not None and (self.assets_dir / "animation" / f"{equipment.equipment_type}_running.png").exists():
+        if self.live_session is not None and self.live_session.snapshot()['state'] == 'completed':
+            if any(node.metadata.get('equipment_id') == instance.instance_id and node.metadata.get('terminal_output')
+                   and self.live_counts.get(node.node_id, {}).get('finished', 0) > 0
+                   for node in self.workflow.graph.iter_nodes()):
+                return self._activity_image(equipment, FRAME_COUNT - 1, selected)
+        if frame is not None and self.equipment_activity(instance.instance_id) and (self.assets_dir / "animation" / f"{equipment.equipment_type}_running.png").exists():
             return self._activity_image(equipment, frame, selected)
         return self._selected_image(equipment) if selected else self._equipment_image(equipment)
 
     def render_equipment_activity(self) -> None:
         frame = animation_frame(self.playback.state, self.playback.elapsed)
-        if frame == self._last_activity_frame:
+        if frame == self._last_activity_frame and self.live_session is None:
             return
         self._last_activity_frame = frame
         for instance in self.floor_plan.equipment_instances:
@@ -458,28 +509,110 @@ class FloorViewRenderer:
             self._flow_icons[kind] = ImageTk.PhotoImage(image, master=self.canvas.master)
         return self._flow_icons[kind]
 
-    def _draw_flow_glow(self, points: list[float], pulse: float) -> None:
-        """Composite an alpha-blurred cyan halo over the visible floor."""
-        padding = 20
+    def render_staff(self) -> None:
+        self.canvas.delete('attending-staff')
+        groups = {}
+        for allocation in self.live_staff:
+            key = (allocation['equipment_id'], allocation.get('activity', 'processing'))
+            group = groups.setdefault(key, dict(allocation, staff_count=0))
+            group['staff_count'] += allocation['staff_count']
+        instances = {item.instance_id: item for item in self.floor_plan.equipment_instances}
+        slots = {}
+        for (equipment_id, activity), allocation in groups.items():
+            instance = instances.get(equipment_id)
+            if instance is None:
+                continue
+            equipment = self.floor_plan.equipment_catalog[instance.equipment_type]
+            slot = slots.get(equipment_id, 0)
+            slots[equipment_id] = slot + 1
+            x, y = grid_to_screen(instance.row + equipment.footprint[0], instance.col)
+            x, y = self.origin_x + x - 20 + slot * 88, self.origin_y + y + TILE_HEIGHT / 2 + 10 + slot * 8
+            if equipment.equipment_type == 'reporting_station':
+                x += 42
+                y -= 18
+            frame = animation_frame(self.playback.state, self.playback.elapsed) or 0
+            key = (allocation['gender'], activity, frame)
+            if key not in self._staff_images:
+                with Image.open(self.assets_dir / 'staff' / f"{allocation['gender']}_{activity}.png") as atlas:
+                    width = atlas.width // FRAME_COUNT
+                    sprite = atlas.crop((frame * width, 0, (frame + 1) * width, atlas.height))
+                    self._staff_images[key] = ImageTk.PhotoImage(sprite, master=self.canvas.master)
+            self.canvas.create_image(x, y, image=self._staff_images[key], anchor='s', tags='attending-staff')
+            self.canvas.create_oval(x - 12, y - 196, x + 12, y - 173,
+                                    fill='#1e3a8a', outline='white', tags='attending-staff')
+            self.canvas.create_text(x, y - 184, text=str(allocation['staff_count']),
+                                    fill='white', font=('Arial', 11, 'bold'), tags='attending-staff')
+            self.canvas.create_text(x, y + 12, text=activity.title(), fill='white',
+                                    font=('Arial', 9, 'bold'), tags='attending-staff')
+
+    def _draw_queue_badge(self, x: float, y: float, counts: dict) -> None:
+        self.canvas.create_text(x, y,
+            text=f"Queue {counts.get('queued', 0)} · Active {counts.get('active', 0)} · Done {counts.get('finished', 0)}",
+            fill="#4ade80", font=("Arial", 10, "bold"), tags="workflow-flow")
+
+    def _draw_transport(self, points: list[float], kind: str) -> None:
+        """Draw a conveyor or data cord at 80% opacity along a workflow route."""
+        padding = 16
         left, top = min(points[::2]) - padding, min(points[1::2]) - padding
         local = tuple((points[i] - left, points[i + 1] - top) for i in range(0, len(points), 2))
-        level = round(pulse * 7)
-        key = (local, level)
-        image = self._flow_glows.get(key)
+        key = (local, kind)
+        image = self._transport_images.get(key)
         if image is None:
-            size = (int(max(x for x, _ in local)) + padding + 1,
-                    int(max(y for _, y in local)) + padding + 1)
-            halo = Image.new("RGBA", size)
-            ImageDraw.Draw(halo).line(local, fill=(0, 205, 255, 65 + level * 5), width=11, joint="curve")
-            halo = halo.filter(ImageFilter.GaussianBlur(6))
-            inner = Image.new("RGBA", size)
-            ImageDraw.Draw(inner).line(local, fill=(34, 211, 238, 90 + level * 7), width=5, joint="curve")
-            halo.alpha_composite(inner.filter(ImageFilter.GaussianBlur(2)))
-            image = ImageTk.PhotoImage(halo, master=self.canvas.master)
-            if len(self._flow_glows) >= 128:
-                self._flow_glows.clear()
-            self._flow_glows[key] = image
-        self.canvas.create_image(left, top, image=image, anchor="nw", tags="workflow-flow")
+            overlay = Image.new("RGBA", (int(max(x for x, _ in local)) + padding + 1,
+                                         int(max(y for _, y in local)) + padding + 1))
+            draw = ImageDraw.Draw(overlay)
+            if kind == "specimens":
+                # Render in floor-plane proportions, then downsample for smooth edges.
+                scale = 3
+                surface = Image.new("RGBA", (overlay.width * scale, overlay.height * scale * 2))
+                detail = ImageDraw.Draw(surface)
+                route = [(x * scale, y * scale * 2) for x, y in local]
+
+                def rail(offset: float, width: int, color: tuple) -> None:
+                    track = [(x, y + offset * scale * 2) for x, y in route]
+                    detail.line(track, fill=color, width=width * scale, joint="curve")
+                    radius = width * scale / 2
+                    for x, y in track:
+                        detail.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+
+                rail(3, 17, (50, 65, 75, 204))  # Low steel chassis.
+                rail(1, 17, (139, 157, 166, 204))
+                rail(0, 16, (215, 225, 229, 204))
+                rail(0, 11, (66, 84, 94, 204))  # Recessed rubber surface.
+                # Fine belt seams, spaced continuously along the route.
+                travelled = 0.0
+                for (x, y), (end_x, end_y) in zip(route, route[1:]):
+                    length = hypot(end_x - x, end_y - y)
+                    if not length:
+                        continue
+                    dx, dy = (end_x - x) / length, (end_y - y) / length
+                    distance = (12 * scale - travelled) % (18 * scale)
+                    while distance < length:
+                        cx, cy = x + dx * distance, y + dy * distance
+                        detail.line([(cx - dy * 4 * scale, cy + dx * 4 * scale),
+                                     (cx + dy * 4 * scale, cy - dx * 4 * scale)],
+                                    fill=(104, 123, 132, 204), width=scale)
+                        distance += 18 * scale
+                    travelled += length
+                overlay = surface.resize(overlay.size, Image.Resampling.LANCZOS)
+                # Resampling can overshoot alpha around hard edges.
+                overlay.putalpha(overlay.getchannel("A").point(lambda alpha: min(alpha, 204)))
+            else:
+                # A round insulated blue cord with a highlight and plug at each end.
+                draw.line(local, fill=(23, 48, 72, 204), width=7, joint="curve")
+                draw.line(local, fill=(68, 155, 210, 204), width=4, joint="curve")
+                draw.line([(x, y - 1) for x, y in local], fill=(156, 215, 240, 204), width=1)
+                for x, y in (local[0], local[-1]):
+                    draw.rounded_rectangle((x - 5, y - 4, x + 5, y + 4), radius=2,
+                                           fill=(168, 189, 199, 204), outline=(43, 67, 83, 204))
+            image = ImageTk.PhotoImage(overlay, master=self.canvas.master)
+            if len(self._transport_images) >= 128:
+                self._transport_images.clear()
+            self._transport_images[key] = image
+        item = self.canvas.create_image(left, top, image=image, anchor="nw", tags="workflow-flow")
+        # Infrastructure lies on the floor beneath machines, people and transfer icons.
+        self.canvas.tag_lower(item)
+        self.canvas.tag_raise(item, "floor-tile")
 
     def render_flow(self) -> None:
         """Update only the overlay during playback, leaving floor sprites cached."""
@@ -498,38 +631,48 @@ class FloorViewRenderer:
             for row, col in path:
                 x, y = grid_to_screen(row, col)
                 points.extend((self.origin_x + x, self.origin_y + y + TILE_HEIGHT / 2))
-            if self.show_directional_lines:
-                if self.playback.state == "playing":
-                    pulse = (sin(self.playback.elapsed * tau / 1.8) + 1) / 2
-                    self._draw_flow_glow(points, pulse)
-                    core = "#e0faff" if pulse > 0.5 else "#a5f3fc"
-                else:
-                    core = "#38bdf8"
-                self.canvas.create_line(*points, fill=core, width=2 if self.playback.state == "playing" else 3,
-                                        arrow="last", tags="workflow-flow")
-            if self.playback.state == "stopped":
-                continue
             kinds = [kind for kind, enabled in (("specimens", connection.output_specimens),
                                                 ("data", connection.output_data)) if enabled]
-            for lane, kind in enumerate(kinds):
-                for index in range(3):
-                    phase = (self.playback.elapsed / 4 + index / 3 + lane / 6) % 1
-                    row, col = path_position(path, phase)
-                    x, y = grid_to_screen(row, col)
-                    self.canvas.create_image(self.origin_x + x,
-                                             self.origin_y + y + TILE_HEIGHT / 2,
-                                             image=self._flow_icon(kind), tags="workflow-flow")
+            # Keep the cord beside the belt when a connection carries both outputs.
+            cord_offset = 17 if len(kinds) == 2 else 0
+            if self.show_directional_lines:
+                for kind in kinds:
+                    route = [value + (cord_offset if kind == "data" and index % 2 else 0)
+                             for index, value in enumerate(points)]
+                    self._draw_transport(route, kind)
+            if self.playback.state == "stopped":
+                continue
+            if self.live_session is None:
+                markers = [(kind, (self.playback.elapsed / 4 + index / 3 + lane / 6) % 1)
+                           for lane, kind in enumerate(kinds) for index in range(3)]
+            else:
+                clock = self.live_session.snapshot()['time']
+                markers = [(kind, min(.9, (clock - transfer['time']) / .04))
+                           for transfer in self.live_transfers
+                           if transfer['source'] == connection.source_id and transfer['target'] == connection.target_id
+                           for kind in kinds]
+            for kind, phase in markers:
+                row, col = path_position(path, phase)
+                x, y = grid_to_screen(row, col)
+                self.canvas.create_image(self.origin_x + x, self.origin_y + y + TILE_HEIGHT / 2 + (cord_offset if kind == "data" else 0),
+                                         image=self._flow_icon(kind), tags="workflow-flow")
+        if self.live_session is not None:
+            for node in self.workflow.graph.iter_nodes():
+                equipment_id = node.metadata.get('equipment_id')
+                instance = instances.get(equipment_id)
+                if instance is None:
+                    continue
+                counts = self.live_counts.get(node.node_id, {})
+                x, y = grid_to_screen(instance.row, instance.col)
+                self._draw_queue_badge(self.origin_x + x, self.origin_y + y + TILE_HEIGHT, counts)
+
+        self.render_staff()
 
     def _selected_image(self, equipment: EquipmentMetadata):
         """Cache a gold silhouette border around the equipment sprite."""
         image = self._selected_images.get(equipment.equipment_type)
         if image is None:
-            with Image.open(self.assets_dir / equipment.sprite) as source:
-                rgba = source.convert("RGBA")
-            scale = equipment.sprite_subsample
-            # Match Tk's integer subsampling used for the normal sprite.
-            rgba = rgba.resize(((rgba.width + scale - 1) // scale,
-                                (rgba.height + scale - 1) // scale), Image.Resampling.NEAREST)
+            rgba = self._base_equipment_sprite(equipment)
             mask = rgba.getchannel("A").point(lambda alpha: 255 if alpha > 32 else 0)
             outline = Image.new("RGBA", rgba.size, self.EQUIPMENT_SELECTION_COLOR)
             outline.putalpha(mask.filter(ImageFilter.MaxFilter(9)))
@@ -541,11 +684,7 @@ class FloorViewRenderer:
     def _preview_image(self, equipment: EquipmentMetadata):
         image = self._preview_images.get(equipment.equipment_type)
         if image is None:
-            with Image.open(self.assets_dir / equipment.sprite) as source:
-                rgba = source.convert("RGBA")
-            scale = equipment.sprite_subsample
-            rgba = rgba.resize(((rgba.width + scale - 1) // scale,
-                                (rgba.height + scale - 1) // scale))
+            rgba = self._base_equipment_sprite(equipment)
             rgba.putalpha(rgba.getchannel("A").point(lambda alpha: round(alpha * 0.45)))
             image = ImageTk.PhotoImage(rgba, master=self.canvas.master)
             self._preview_images[equipment.equipment_type] = image
@@ -575,7 +714,10 @@ class FloorViewRenderer:
         return scaled
 
     def resize(self, width: int) -> None:
-        self.origin_x = width / 2
+        content_width = (self.floor_plan.rows + self.floor_plan.columns) * TILE_WIDTH / 2 + 60
+        self.origin_x = max(width, content_width) / 2
+        content_height = (self.floor_plan.rows + self.floor_plan.columns) * TILE_HEIGHT / 2 + 100
+        self.canvas.configure(scrollregion=(0, 0, max(width, content_width), content_height))
         self.render()
 
     def grid_polygon(self, row: int, col: int) -> tuple[float, ...]:
@@ -590,6 +732,7 @@ class FloorViewRenderer:
         )
 
     def cell_at_canvas_point(self, x: float, y: float) -> tuple[int, int] | None:
+        x, y = self.canvas.canvasx(x), self.canvas.canvasy(y)
         row, col = screen_to_grid(x - self.origin_x, y - self.origin_y)
         return (row, col) if self.floor_plan.contains(row, col) else None
 
@@ -604,6 +747,7 @@ class FloorViewRenderer:
                     self.origin_x + x,
                     self.origin_y + y + TILE_HEIGHT / 2,
                     image=self._tile_image,
+                    tags="floor-tile",
                 )
 
         if self.floor_plan.selected_cell is not None:
@@ -708,6 +852,11 @@ def _advance_floor_frame(renderer: FloorViewRenderer, event, seconds: float) -> 
     if event in (sg.WIN_CLOSED, "Close"):
         renderer.playback.stop()
         return False
+    if renderer.live_session is not None:
+        renderer.sync_live_session()
+        renderer.render_equipment_activity()
+        renderer.render_flow()
+        return True
     renderer.playback.advance(seconds)
     if renderer.playback.state == "playing":
         renderer.render_equipment_activity()
@@ -715,55 +864,76 @@ def _advance_floor_frame(renderer: FloorViewRenderer, event, seconds: float) -> 
     return True
 
 
+def floor_window_geometry(screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
+    """Use the available desktop area with a compact toolbar and status bar."""
+    width = max(1, screen_width - 40)
+    height = max(1, screen_height - 100)
+    return width, height, max(100, width - 24), max(100, height - 150)
+
+
 def create_floor_view_window(project: LabTycoonProject) -> None:
     """Open the experimental isometric floor view in its own window."""
 
+    screen_width, screen_height = sg.Window.get_screen_size()
+    window_width, window_height, canvas_width, canvas_height = floor_window_geometry(screen_width, screen_height)
+    sidebar_width = 310
+    text_width = max(24, (window_width - 50) // 9)
     floor_plan = FloorPlan(floor_state=project.floor, on_change=project.mark_dirty)
     workflow_labels = {f"{item.name} [{item.workflow_id[:8]}]": item.workflow for item in project.workflows}
+    settings_layout = [
+        [sg.Text("Setup", font=("Arial", 16, "bold"))],
+        [sg.Text("Scenario", size=(16, 1)),
+         sg.Combo([], key="-LIVE-SCENARIO-", readonly=True, size=(12, 1))],
+        [sg.Text("Specimens/orders", size=(16, 1)),
+         sg.Input("10", key="-LIVE-COUNT-", size=(12, 1))],
+        [sg.Text("Seed", size=(16, 1)),
+         sg.Input("", key="-LIVE-SEED-", size=(12, 1))],
+        [sg.Text("Speed (h/sec)", size=(16, 1), tooltip="Simulation hours per second"),
+         sg.Input("0.05", key="-LIVE-SPEED-", size=(12, 1), tooltip="Simulation hours per second")],
+        [sg.Text("Available staff", size=(16, 1)),
+         sg.Input("", key="-LIVE-STAFF-", size=(12, 1))],
+        [sg.Text("Blank staff uses scenario settings", text_color="#64748b")],
+        [sg.Text("", key="-LIVE-STAFF-STATUS-", size=(30, 1))],
+        [sg.Text("", key="-LIVE-NODES-", size=(32, 2))],
+        [sg.HorizontalSeparator()],
+        *_equipment_panel_layout(),
+    ]
     layout = [
-        [
-            sg.Text("Experimental Floor View", font=("Arial", 18, "bold")),
-            sg.Push(),
-            sg.Text("Select equipment to move, or choose equipment to add", key="-FLOOR-STATUS-"),
-        ],
-        [sg.Text("Workflow"), sg.Combo(list(workflow_labels), default_value=next(iter(workflow_labels)),
-                                       key="-FLOOR-WORKFLOW-", readonly=True, enable_events=True, size=(32, 1)),
+        [sg.Button("Setup & Equipment", key="-TOGGLE-FLOOR-PANEL-"), sg.Text("Workflow"), sg.Combo(list(workflow_labels), default_value=next(iter(workflow_labels)),
+                                       key="-FLOOR-WORKFLOW-", readonly=True, enable_events=True, size=(24, 1)),
          sg.Button("Play", key="-FLOW-PLAY-", button_color=("#ffffff", "#1e3a8a"), disabled_button_color=("#374151", "#e5e7eb"), use_ttk_buttons=True), sg.Button("Pause", key="-FLOW-PAUSE-", disabled=True, button_color=("#ffffff", "#1e3a8a"), disabled_button_color=("#374151", "#e5e7eb"), use_ttk_buttons=True),
          sg.Button("Stop", key="-FLOW-STOP-", disabled=True, button_color=("#ffffff", "#1e3a8a"), disabled_button_color=("#374151", "#e5e7eb"), use_ttk_buttons=True),
-         sg.Text("Stopped — illustrative flow", key="-FLOW-STATE-"),
-         sg.Checkbox("Show directional lines", default=True, key="-FLOW-SHOW-LINES-", enable_events=True)],
-        [
-            sg.Canvas(
-                key="-FLOOR-CANVAS-",
-                size=(920, 720),
-                background_color=FloorViewRenderer.BACKGROUND_COLOR,
-                expand_x=True,
-                expand_y=True,
-            ),
-            sg.VSeparator(),
-            sg.Column(
-                _equipment_panel_layout(),
-                key="-EQUIPMENT-PANEL-",
-                size=(250, 720),
-                vertical_alignment="top",
-                expand_y=True,
-            ),
         ],
-        [
-            sg.Button("Move Equipment", key="-MOVE-EQUIPMENT-"),
-            sg.Button("Remove Equipment", key="-REMOVE-EQUIPMENT-", disabled=True),
-            sg.Push(),
-            sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR),
-        ],
+        [sg.Text("Stopped", key="-FLOW-STATE-", expand_x=True),
+         sg.Checkbox("Show belts & cords", default=True, key="-FLOW-SHOW-LINES-", enable_events=True)],
+        [sg.Canvas(key="-FLOOR-CANVAS-", size=(canvas_width, canvas_height),
+                   background_color=FloorViewRenderer.BACKGROUND_COLOR, expand_x=True, expand_y=True),
+         sg.pin(sg.Column(settings_layout, key="-EQUIPMENT-PANEL-", size=(sidebar_width, canvas_height),
+                          scrollable=True, vertical_scroll_only=True, vertical_alignment="top",
+                          expand_y=True, visible=False))],
+        [sg.Text("Select equipment to move, or open Setup & Equipment to add",
+                 key="-FLOOR-STATUS-", size=(text_width, 1), expand_x=True)],
+        [sg.Button("Move Equipment", key="-MOVE-EQUIPMENT-"),
+         sg.Button("Remove Equipment", key="-REMOVE-EQUIPMENT-", disabled=True),
+         sg.Push(), sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
     ]
     window = sg.Window(
         "Lab Tycoon — Floor View",
         layout,
+        size=(window_width, window_height),
+        location=(20, 30),
+        margins=(4, 4),
+        element_padding=(3, 2),
         resizable=True,
         modal=False,
         finalize=True,
     )
     canvas = window["-FLOOR-CANVAS-"].TKCanvas
+    horizontal_scroll = tk.Scrollbar(canvas.master, orient="horizontal", command=canvas.xview)
+    vertical_scroll = tk.Scrollbar(canvas.master, orient="vertical", command=canvas.yview)
+    horizontal_scroll.pack(side="bottom", fill="x", before=canvas)
+    vertical_scroll.pack(side="right", fill="y", before=canvas)
+    canvas.configure(xscrollcommand=horizontal_scroll.set, yscrollcommand=vertical_scroll.set)
     renderer = FloorViewRenderer(
         canvas,
         floor_plan,
@@ -772,6 +942,47 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
     )
 
     renderer.workflow = next(iter(workflow_labels.values()))
+    if project.live_simulation is not None:
+        renderer.live_session = project.live_simulation
+        renderer.workflow = renderer.live_session.workflow
+        window['-FLOOR-WORKFLOW-'].update(value=getattr(renderer.live_session, 'workflow_key', next(iter(workflow_labels))))
+        renderer.sync_live_session()
+
+    def update_live_controls() -> None:
+        session = renderer.live_session
+        snapshot = session.snapshot() if session else {'state': 'stopped'}
+        state = snapshot['state']
+        active = state in ('playing', 'paused', 'saving')
+        window["-FLOW-PLAY-"].update(disabled=state in ('playing', 'saving'), disabled_button_color=("#374151", "#e5e7eb"))
+        window["-FLOW-PAUSE-"].update(disabled=state != 'playing', disabled_button_color=("#374151", "#e5e7eb"))
+        window["-FLOW-STOP-"].update(disabled=not active or state == 'saving', disabled_button_color=("#374151", "#e5e7eb"))
+        for key in ('-FLOOR-WORKFLOW-', '-LIVE-SCENARIO-', '-LIVE-COUNT-', '-LIVE-SEED-', '-LIVE-SPEED-', '-LIVE-STAFF-'):
+            window[key].update(disabled=active)
+        detail = f" · {snapshot.get('time', 0):.3f} h · {snapshot.get('completed', 0)}/{snapshot.get('total', 0)} completed" if session else ''
+        if session is not None and state == 'completed' and session.result:
+            detail += f" · Run {session.result[:8]} saved"
+        window['-FLOW-STATE-'].update(state.title() + detail)
+        window['-LIVE-STAFF-STATUS-'].update(
+            f"Free {snapshot['staff_available']} / {snapshot['staff_capacity']} staff" if session else '')
+        counts = snapshot.get('counts', {}) if state in ('playing', 'paused', 'saving') else {}
+        work = [f"{node.widget.name}: {counts[node.node_id]['queued']} queued, {counts[node.node_id]['active']} active"
+                for node in renderer.workflow.graph.iter_nodes()
+                if node.node_id in counts and (counts[node.node_id]['queued'] or counts[node.node_id]['active'])]
+        window['-LIVE-NODES-'].update(' | '.join(work) if work else ('No pending work' if session else ''))
+        if snapshot.get('error'):
+            window['-FLOOR-STATUS-'].update('Simulation failed: ' + snapshot['error'])
+
+    def refresh_scenarios() -> None:
+        choices = [f"{item.name} [{item.scenario_id[:8]}]" for item in renderer.workflow.scenarios]
+        selected = choices[0] if choices else ''
+        if renderer.live_session is not None:
+            scenario_id = renderer.live_session.scenario.scenario_id
+            selected = next((label for label, item in zip(choices, renderer.workflow.scenarios)
+                             if item.scenario_id == scenario_id), selected)
+        window['-LIVE-SCENARIO-'].update(values=choices, value=selected)
+
+    refresh_scenarios()
+    update_live_controls()
 
     def redraw_for_size(_event=None) -> None:
         renderer.resize(max(canvas.winfo_width(), 1))
@@ -902,6 +1113,7 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
     redraw_for_size()
     bring_window_to_front(window)
 
+    panel_visible = False
     last_frame = monotonic()
     while True:
         event, _values = window.read(timeout=33)
@@ -909,6 +1121,7 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
         if not _advance_floor_frame(renderer, event, now - last_frame):
             break
         last_frame = now
+        update_live_controls()
         if isinstance(event, str) and event.startswith("-EQUIPMENT-") and event.endswith("-"):
             equipment_type = event.removeprefix("-EQUIPMENT-").removesuffix("-")
             floor_plan.begin_placement(equipment_type)
@@ -916,6 +1129,13 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             equipment = floor_plan.equipment_catalog[equipment_type]
             window["-FLOOR-STATUS-"].update(f"Placing {equipment.name}: move over the floor and click")
             renderer.render()
+        elif event == "-TOGGLE-FLOOR-PANEL-":
+            panel_visible = not panel_visible
+            canvas.configure(width=max(100, window.TKroot.winfo_width() -
+                                       (sidebar_width + 45 if panel_visible else 24)))
+            window["-EQUIPMENT-PANEL-"].update(visible=panel_visible)
+            window.refresh()
+            redraw_for_size()
         elif event == "-MOVE-EQUIPMENT-":
             if floor_plan.begin_move():
                 window["-FLOOR-STATUS-"].update("Moving selected equipment: click a destination tile; Esc cancels")
@@ -926,24 +1146,53 @@ def create_floor_view_window(project: LabTycoonProject) -> None:
             renderer.show_directional_lines = bool(_values[event])
             renderer.render_flow()
         elif event in ("-FLOW-PLAY-", "-FLOW-PAUSE-", "-FLOW-STOP-", "-FLOOR-WORKFLOW-"):
-            if event == "-FLOOR-WORKFLOW-":
-                renderer.playback.stop()
-                renderer.workflow = workflow_labels[_values[event]]
-            elif event == "-FLOW-PLAY-":
-                renderer.playback.play()
-            elif event == "-FLOW-PAUSE-":
-                renderer.playback.pause()
-            else:
-                renderer.playback.stop()
-            state = renderer.playback.state
-            window["-FLOW-STATE-"].update(f"{state.title()} — illustrative flow")
-            for key, disabled in (("-FLOW-PLAY-", state == "playing"),
-                                  ("-FLOW-PAUSE-", state != "playing"),
-                                  ("-FLOW-STOP-", state == "stopped")):
-                window[key].update(disabled=disabled,
-                                   disabled_button_color=("#374151", "#e5e7eb"))
-            renderer.render_equipment_activity()
-            renderer.render_flow()
+            try:
+                if event == '-FLOOR-WORKFLOW-':
+                    renderer.live_session = None
+                    project.live_simulation = None
+                    renderer.workflow = workflow_labels[_values[event]]
+                    renderer.playback.stop()
+                    refresh_scenarios()
+                elif event == '-FLOW-PLAY-':
+                    session = renderer.live_session
+                    if session is None or session.state in ('completed', 'cancelled', 'failed'):
+                        count = int(_values['-LIVE-COUNT-'])
+                        seed_text = str(_values['-LIVE-SEED-']).strip()
+                        seed = int(seed_text) if seed_text else None
+                        speed = float(_values['-LIVE-SPEED-'])
+                        staff_text = str(_values['-LIVE-STAFF-']).strip()
+                        staff_capacity = int(staff_text) if staff_text else None
+                        selected_workflow = workflow_labels[_values['-FLOOR-WORKFLOW-']]
+                        scenarios = selected_workflow.scenarios
+                        labels = [f"{item.name} [{item.scenario_id[:8]}]" for item in scenarios]
+                        scenario = scenarios[labels.index(_values['-LIVE-SCENARIO-'])]
+                        workflow_name = next((item.name for item in project.workflows
+                            if item.workflow is selected_workflow), 'Workflow')
+                        def save_completed(live):
+                            return persist_generated_run(project_id=project.project_id, scenario=live.scenario,
+                                workflow_name=workflow_name, requested_orders=count, random_seed=seed,
+                                generated_orders=live.generated_orders)
+                        session = LiveSimulationSession(selected_workflow, scenario=scenario,
+                            count=count, seed=seed, speed=speed, staff_capacity=staff_capacity,
+                            equipment_types={item.instance_id: item.equipment_type for item in project.floor.equipment_instances},
+                            on_complete=save_completed)
+                        session.workflow_key = _values['-FLOOR-WORKFLOW-']
+                        renderer.live_session = session
+                        project.live_simulation = session
+                        renderer.workflow = session.workflow
+                        renderer.live_transfers.clear()
+                        renderer._last_equipment.clear()
+                    session.play()
+                elif event == '-FLOW-PAUSE-':
+                    renderer.live_session.pause()
+                elif renderer.live_session is not None:
+                    renderer.live_session.stop()
+                renderer.sync_live_session()
+                renderer.render_equipment_activity()
+                renderer.render_flow()
+                update_live_controls()
+            except (ValueError, TypeError, IndexError) as exc:
+                sg.popup_error(f'Cannot start simulation: {exc}', keep_on_top=True)
         elif event == "-REMOVE-EQUIPMENT-":
             remove_selected_equipment()
 

@@ -150,7 +150,9 @@ class GovernanceSimulationTests(unittest.TestCase):
                 "plugin": "duplicate_order_detector",
             },
         )
-        workflow.create_connected_node(evaluation.node_id, "Release", 1.0)
+        analyzer = workflow.create_connected_node(evaluation.node_id, "Analyzer", 1.0,
+            metadata={"node_type": "automated analyzer", "analyzer_tests": ["CBC"]})
+        workflow.create_connected_node(analyzer.node_id, "Release", 1.0)
         return workflow
 
     def test_registration_node_logs_governance_consultations_and_continues(self) -> None:
@@ -162,7 +164,9 @@ class GovernanceSimulationTests(unittest.TestCase):
                 "node_type": "specimen registration",
             },
         )
-        workflow.create_connected_node(registration.node_id, "Release", 1.0)
+        analyzer = workflow.create_connected_node(registration.node_id, "Analyzer", 1.0,
+            metadata={"node_type": "automated analyzer", "analyzer_tests": ["CBC"]})
+        workflow.create_connected_node(analyzer.node_id, "Release", 1.0)
 
         first_order = _make_order(
             order_id="ORD-1",
@@ -272,7 +276,9 @@ class GovernanceSimulationTests(unittest.TestCase):
     def test_workflows_without_evaluation_node_remain_unchanged(self) -> None:
         workflow = Workflow()
         intake = workflow.create_node("Intake", 1.0)
-        workflow.create_connected_node(intake.node_id, "Release", 1.0)
+        analyzer = workflow.create_connected_node(intake.node_id, "Analyzer", 1.0,
+            metadata={"node_type": "automated analyzer", "analyzer_tests": ["CBC"]})
+        workflow.create_connected_node(analyzer.node_id, "Release", 1.0)
         order = _make_order(
             order_id="ORD-14",
             customer_id="P014",

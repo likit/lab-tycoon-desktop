@@ -123,6 +123,7 @@ class LabTycoonProject:
     additional_workflows: list[ProjectWorkflow] = field(default_factory=list)
     is_dirty: bool = False
     file_path: Path | None = None
+    live_simulation: object | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create(cls, name: str, description: str = "") -> "LabTycoonProject":
@@ -175,9 +176,13 @@ class ProjectSession:
         self.active_project: LabTycoonProject | None = None
 
     def activate(self, project: LabTycoonProject) -> None:
+        if self.active_project is not project:
+            self.close()
         self.active_project = project
 
     def close(self) -> None:
+        if self.active_project is not None and self.active_project.live_simulation is not None:
+            self.active_project.live_simulation.stop()
         self.active_project = None
 
 

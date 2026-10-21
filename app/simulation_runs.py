@@ -60,16 +60,32 @@ def run_project_scenario(
         on_order_created=generated_orders.append,
     )
 
+    run_id = persist_generated_run(project_id=project.project_id, scenario=scenario,
+        workflow_name=document.name, requested_orders=orders_number, random_seed=random_seed,
+        generated_orders=generated_orders, database_engine=database_engine)
+
+    return SimulationRunSummary(
+        run_id=run_id,
+        scenario_name=scenario.name,
+        generated_orders=len(generated_orders),
+        completed_specimens=len(result.completed_specimens),
+        makespan=result.makespan,
+    )
+
+
+def persist_generated_run(*, project_id, scenario, workflow_name, requested_orders,
+                          random_seed, generated_orders, database_engine=None):
+    """Persist one completed execution without running the engine again."""
     run_id = uuid4().hex
     run = SimulationRun(
         id=run_id,
-        project_id=project.project_id,
+        project_id=project_id,
         scenario_id=scenario.scenario_id,
         scenario_name=scenario.name,
-        workflow_name=document.name,
+        workflow_name=workflow_name,
         started_at=datetime.now(timezone.utc),
         random_seed=random_seed,
-        requested_orders=orders_number,
+        requested_orders=requested_orders,
     )
     patients: dict[str, SimulationPatient] = {}
     for order in generated_orders:
@@ -95,10 +111,4 @@ def run_project_scenario(
     with Session(database_engine or engine) as session, session.begin():
         session.add(run)
 
-    return SimulationRunSummary(
-        run_id=run_id,
-        scenario_name=scenario.name,
-        generated_orders=len(generated_orders),
-        completed_specimens=len(result.completed_specimens),
-        makespan=result.makespan,
-    )
+    return run_id

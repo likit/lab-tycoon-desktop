@@ -18,10 +18,53 @@ from app.system.floor_view import (
     EquipmentMetadata,
     EquipmentPlacement,
     FloorPlan,
+    floor_window_geometry,
     TILE_HEIGHT,
     grid_to_screen,
     screen_to_grid,
 )
+
+
+class FloorWindowSizingTests(unittest.TestCase):
+    def test_window_and_canvas_fit_common_laptop_displays(self):
+        for screen_width, screen_height in ((1024, 768), (1280, 800), (1440, 900), (1920, 1080)):
+            width, height, canvas_width, canvas_height = floor_window_geometry(screen_width, screen_height)
+            self.assertLessEqual(width + 40, screen_width)
+            self.assertLessEqual(height + 100, screen_height)
+            self.assertLess(canvas_width, width)
+            self.assertEqual(canvas_height + 150, height)
+            self.assertGreater(canvas_width, width * .95)
+
+    def test_scrolled_canvas_clicks_use_content_coordinates(self):
+        renderer = FloorViewRenderer.__new__(FloorViewRenderer)
+        renderer.floor_plan = FloorPlan()
+        renderer.origin_x, renderer.origin_y = 670, 28
+        x, y = grid_to_screen(4, 5)
+        content_x, content_y = x + 670, y + 28 + TILE_HEIGHT / 2
+        renderer.canvas = SimpleNamespace(canvasx=lambda x: x + 200, canvasy=lambda y: y + 100)
+        self.assertEqual(renderer.cell_at_canvas_point(content_x - 200, content_y - 100), (4, 5))
+
+
+class TransportOverlayTests(unittest.TestCase):
+    def test_belts_and_cords_are_distinct_transparent_and_cached(self):
+        from unittest.mock import Mock
+        renderer = FloorViewRenderer.__new__(FloorViewRenderer)
+        renderer.canvas = Mock(master=object())
+        renderer._transport_images = {}
+        captured = []
+        def photo(image, **kwargs):
+            captured.append(image.copy())
+            return "transport"
+        with patch("app.system.floor_view.ImageTk.PhotoImage", side_effect=photo):
+            for kind in ("specimens", "data", "specimens", "data"):
+                renderer._draw_transport([10, 10, 74, 42, 138, 10], kind)
+        self.assertEqual(len(captured), 2)
+        for overlay in captured:
+            self.assertEqual(overlay.getchannel("A").getextrema(), (0, 204))
+        self.assertNotEqual(captured[0].tobytes(), captured[1].tobytes())
+        self.assertGreater(sum(bool(a) for a in captured[0].getchannel("A").tobytes()),
+                           sum(bool(a) for a in captured[1].getchannel("A").tobytes()))
+        self.assertEqual(renderer.canvas.tag_raise.call_count, 4)
 
 
 class EquipmentPreviewTests(unittest.TestCase):

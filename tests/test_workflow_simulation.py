@@ -21,6 +21,118 @@ from app.system.storage import WorkflowDocument, WorkflowRepository
 
 
 class WorkflowSimulationEngineTests(unittest.TestCase):
+    def test_shared_pools_use_both_centrifuges_and_analyzers_once_per_specimen(self):
+        workflow = Workflow()
+        intake = workflow.create_node("Processing", 0)
+        centrifuges = [workflow.create_node(f"Centrifuge {i}", 1, kind="equipment",
+            metadata={"equipment_id": f"CENT-{i}"}) for i in range(2)]
+        analyzers = [workflow.create_node(f"Analyzer {i}", 1, kind="equipment",
+            metadata={"equipment_id": f"CHEM-{i}", "node_type": "automated analyzer"}) for i in range(2)]
+        reporting = workflow.create_node("Reporting", 0)
+        for centrifuge in centrifuges:
+            workflow.graph.connect_nodes(intake.node_id, centrifuge.node_id)
+            for analyzer in analyzers:
+                workflow.graph.connect_nodes(centrifuge.node_id, analyzer.node_id)
+        for analyzer in analyzers:
+            workflow.graph.connect_nodes(analyzer.node_id, reporting.node_id)
+        engine = WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(
+            specimens_number=4, system_variation=0, human_variation=0))
+        result = engine.run()
+        self.assertEqual(len(result.completed_specimens), 4)
+        self.assertEqual(result.makespan, 3)
+        for node in centrifuges + analyzers:
+            self.assertEqual(result.node_stats[node.node_id].specimens_processed, 2)
+        self.assertEqual(result.node_stats[reporting.node_id].specimens_processed, 4)
+
+    def test_equipment_pool_prefers_faster_machine_but_uses_idle_alternative(self):
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 0)
+        fast = workflow.create_connected_node(intake.node_id, "Fast", 2, kind="equipment")
+        slow = workflow.create_connected_node(intake.node_id, "Slow", 1, kind="equipment")
+        engine = WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(
+            specimens_number=4, system_variation=0))
+        result = engine.run()
+        self.assertGreater(result.node_stats[fast.node_id].specimens_processed, 0)
+        self.assertGreater(result.node_stats[slow.node_id].specimens_processed, 0)
+        self.assertEqual(len(result.completed_specimens), 4)
+
+    def test_task_branches_keep_first_connection_routing(self):
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 0)
+        first = workflow.create_connected_node(intake.node_id, "First", 1)
+        second = workflow.create_connected_node(intake.node_id, "Second", 1)
+        result = WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(
+            specimens_number=2, system_variation=0)).run()
+        self.assertEqual(result.node_stats[first.node_id].specimens_processed, 2)
+        self.assertEqual(result.node_stats[second.node_id].specimens_processed, 0)
+
+    def test_pool_excludes_disabled_equipment(self):
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 0)
+        disabled = workflow.create_connected_node(intake.node_id, "Disabled", 10,
+            kind="equipment", metadata={"enabled": False})
+        active = workflow.create_connected_node(intake.node_id, "Active", 1, kind="equipment")
+        result = WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(
+            specimens_number=2, system_variation=0)).run()
+        self.assertNotIn(disabled.node_id, result.node_stats)
+        self.assertEqual(result.node_stats[active.node_id].specimens_processed, 2)
+
+    def test_analyzers_with_different_test_menus_are_not_equivalent_pool(self):
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 0)
+        first = workflow.create_connected_node(intake.node_id, "CBC", 1, kind="equipment",
+            metadata={"node_type": "automated analyzer", "analyzer_tests": ["CBC"]})
+        workflow.create_connected_node(intake.node_id, "Chemistry", 100, kind="equipment",
+            metadata={"node_type": "automated analyzer", "analyzer_tests": ["GLU"]})
+        engine = WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(specimens_number=1))
+        self.assertEqual(engine._next_node_id(intake.node_id, engine.specimens[0]), first.node_id)
+
+    def test_explicit_router_retains_control_over_equipment_selection(self):
+        from app.system.simulation.lab import WorkflowRouter
+
+        workflow = Workflow()
+        intake = workflow.create_node("Intake", 0)
+        first = workflow.create_connected_node(intake.node_id, "First", 1, kind="equipment")
+        workflow.create_connected_node(intake.node_id, "Faster", 100, kind="equipment")
+        engine = WorkflowSimulationEngine(workflow, router=WorkflowRouter(),
+            settings=WorkflowSimulationSettings(specimens_number=2, system_variation=0))
+        result = engine.run()
+        self.assertEqual(result.node_stats[first.node_id].specimens_processed, 2)
+
+    def test_nodes_for_same_equipment_share_resource_and_queue(self):
+        workflow = Workflow()
+        first = workflow.create_node("First operation", 1, kind="equipment",
+            metadata={"equipment_id": "CHEM-001", "capacity": 1})
+        second = workflow.create_connected_node(first.node_id, "Second operation", 1, kind="equipment",
+            metadata={"equipment_id": "CHEM-001", "capacity": 1})
+        settings = WorkflowSimulationSettings(specimens_number=2, system_variation=0, human_variation=0)
+        engine = WorkflowSimulationEngine(workflow, settings=settings)
+        self.assertIs(engine.node_resources[first.node_id], engine.node_resources[second.node_id])
+        self.assertIs(engine.equipment_resources['CHEM-001'], engine.node_resources[first.node_id])
+        result = engine.run()
+        self.assertEqual(result.makespan, 4)
+        self.assertEqual(len(result.completed_specimens), 2)
+        self.assertGreater(result.node_stats[second.node_id].total_wait_time, 0)
+        other_engine = WorkflowSimulationEngine(workflow, settings=settings)
+        self.assertIsNot(other_engine.equipment_resources['CHEM-001'], engine.equipment_resources['CHEM-001'])
+
+    def test_distinct_equipment_and_process_nodes_remain_independent(self):
+        workflow = Workflow()
+        first = workflow.create_node("First", 1, kind="equipment", metadata={"equipment_id": "CHEM-001"})
+        second = workflow.create_connected_node(first.node_id, "Second", 1, kind="equipment", metadata={"equipment_id": "CHEM-002"})
+        process = workflow.create_connected_node(second.node_id, "Reporting", 1, metadata={"attend_equipment_id": "CHEM-001"})
+        engine = WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(specimens_number=2, system_variation=0))
+        self.assertIsNot(engine.node_resources[first.node_id], engine.node_resources[second.node_id])
+        self.assertIsNot(engine.node_resources[first.node_id], engine.node_resources[process.node_id])
+        self.assertEqual(engine.run().makespan, 4)
+
+    def test_shared_equipment_rejects_conflicting_capacities(self):
+        workflow = Workflow()
+        first = workflow.create_node("First", 1, kind="equipment", metadata={"equipment_id": "CHEM-001", "capacity": 1})
+        workflow.create_connected_node(first.node_id, "Second", 1, kind="equipment", metadata={"equipment_id": "CHEM-001", "capacity": 2})
+        with self.assertRaisesRegex(ValueError, "CHEM-001.*conflicting capacities"):
+            WorkflowSimulationEngine(workflow, settings=WorkflowSimulationSettings(specimens_number=1))
+
     def test_reporting_station_adds_no_processing_time(self):
         workflow = Workflow()
         analyzer = workflow.create_node("Analyzer", 10)
@@ -158,7 +270,7 @@ class WorkflowSimulationEngineTests(unittest.TestCase):
                 "node_type": "manual analyzer",
                 "human_throughput": 2.0,
                 "required_staff": 1,
-                "analyzer_tests": ["CBC"],
+                "analyzer_tests": ["CBC", "GLU"],
             },
         )
         workflow.graph.connect_nodes(intake.node_id, analyzer.node_id)
@@ -186,7 +298,7 @@ class WorkflowSimulationEngineTests(unittest.TestCase):
         self.assertEqual(result.specimens_number, 1)
         self.assertEqual(len(result.completed_specimens), 1)
         self.assertEqual(result.completed_specimens[0].specimen_id, "ORD-1")
-        self.assertEqual(result.completed_specimens[0].metadata["pending_tests"], ["GLU"])
+        self.assertEqual(result.completed_specimens[0].metadata["pending_tests"], [])
         analyzer_stats = result.node_stats[analyzer.node_id]
         self.assertEqual(analyzer_stats.specimens_processed, 1)
         self.assertGreater(analyzer_stats.total_processing_time, 0.0)

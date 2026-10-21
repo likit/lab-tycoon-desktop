@@ -42,6 +42,18 @@ class WorkflowGraphModelTests(unittest.TestCase):
         restored = Workflow.from_dict(workflow.to_dict()).get_node(station_id)
         self.assertTrue(restored.metadata["terminal_output"])
 
+    def test_process_attendance_assignment_round_trips(self):
+        workflow = Workflow()
+        node = workflow.create_node("Validating")
+        controller = WorkflowEditorController(on_change=lambda: None,
+            equipment_instances=[ProjectEquipmentInstance("REPORT-001", "reporting_station", 3, 3)])
+        controller.current_document = WorkflowDocument.create("Workflow", workflow=workflow)
+        controller.update_node_from_form(node.node_id, node_type="result validation", name="Validating",
+            description="", throughput=10, human_throughput=5, capacity=1, required_staff=1,
+            attend_equipment_id="REPORT-001")
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(node.node_id)
+        self.assertEqual(restored.metadata["attend_equipment_id"], "REPORT-001")
+
     def test_equipment_outputs_are_independent_and_persisted(self) -> None:
         workflow = Workflow()
         controller = WorkflowEditorController(
@@ -378,6 +390,61 @@ class WorkflowGraphModelTests(unittest.TestCase):
 
 
 class WorkflowLayoutTests(unittest.TestCase):
+    def test_long_workflow_expands_and_keeps_full_spacing_after_addition(self):
+        workflow = Workflow()
+        node = workflow.create_node("Start", 1)
+        nodes = [node]
+        for index in range(18):
+            node = workflow.create_connected_node(node.node_id, f"Step {index}", 1)
+            nodes.append(node)
+        layout = WorkflowLayoutEngine()
+        positions = layout.layout(workflow)
+        self.assertGreater(layout.canvas_height, 1800)
+        for parent, child in zip(nodes, nodes[1:]):
+            self.assertEqual(positions[parent.node_id][1] - positions[child.node_id][1], layout.row_gap)
+        self.assertGreaterEqual(positions[nodes[-1].node_id][1], layout.top_margin)
+        self.assertEqual(positions, layout.layout(workflow))
+        added = workflow.create_connected_node(node.node_id, "Reporting", 1)
+        new_positions = layout.layout(workflow)
+        self.assertEqual(new_positions[node.node_id][1] - new_positions[added.node_id][1], layout.row_gap)
+
+    def test_wide_workflow_expands_to_fit_all_siblings(self):
+        workflow = Workflow()
+        root = workflow.create_node("Start", 1)
+        children = [workflow.create_connected_node(root.node_id, f"Child {i}", 1) for i in range(15)]
+        layout = WorkflowLayoutEngine()
+        positions = layout.layout(workflow)
+        self.assertGreater(layout.canvas_width, 2400)
+        for child in children:
+            bounds = layout.node_bounds(child, *positions[child.node_id])
+            self.assertGreaterEqual(bounds.left, 0)
+            self.assertLessEqual(bounds.right, layout.canvas_width)
+
+    def test_overlapping_saved_positions_are_automatically_rearranged(self):
+        workflow = Workflow()
+        root = workflow.create_node("Start", 1, metadata={"editor_position": [200, 100]})
+        leaf = workflow.create_connected_node(root.node_id, "Report", 1,
+            metadata={"editor_position": [200, 110]})
+        layout = WorkflowLayoutEngine()
+        positions = layout.layout(workflow)
+        self.assertGreaterEqual(positions[root.node_id][1] - positions[leaf.node_id][1], layout.row_gap)
+
+    def test_renderer_grows_canvas_coordinates_with_deep_workflow(self):
+        from unittest.mock import Mock
+
+        workflow = Workflow()
+        node = workflow.create_node("Start", 1)
+        for index in range(20):
+            node = workflow.create_connected_node(node.node_id, f"Step {index}", 1)
+        canvas = Mock()
+        renderer = WorkflowGraphRenderer()
+        bounds = renderer.render(canvas, workflow)
+        width, height = canvas.set_size.call_args.args[0]
+        self.assertGreater(height, 1800)
+        canvas.change_coordinates.assert_called_once_with((0, 0), (width, height))
+        self.assertEqual(len(bounds), 21)
+        self.assertTrue(all(b.bottom >= 0 and b.top <= height for b in bounds.values()))
+
     def test_order_adapter_renders_as_source_node(self) -> None:
         class RecordingCanvas:
             def __init__(self) -> None:

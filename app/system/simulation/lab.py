@@ -22,8 +22,10 @@ from app.system.governance import (
 )
 from app.system.model import Scenario, Specimen, Workflow, WorkflowNode
 from app.system.order_adapter import create_order_adapter
+from app.system.order_sources import InMemoryOrderItem, InMemoryTest
 from app.system.resource_adapter import patient_adapter_for_workflow
 from app.system.storage import WorkflowDocument, WorkflowRepository
+from app.system.staff_batching import staff_batch_settings
 from app.system.signals.duplicate import detect_duplicate_candidate
 
 
@@ -435,6 +437,7 @@ class WorkflowSimulationEngine:
         specimens: list[Specimen] | None = None,
         on_specimen_completed: Callable[[int, int], None] | None = None,
         on_order_created: Callable[[object], None] | None = None,
+        on_activity: Callable[[dict], None] | None = None,
         governance_provider: GovernanceProvider | None = None,
         debug_governance: bool = False,
     ) -> None:
@@ -443,8 +446,10 @@ class WorkflowSimulationEngine:
         self.workflow_name = workflow_name or "Untitled Workflow"
         self.scenario = scenario or (workflow.scenarios[0] if workflow.scenarios else None)
         self.router = router or WorkflowRouter()
+        self._use_equipment_pool = router is None
         self.on_specimen_completed = on_specimen_completed
         self.on_order_created = on_order_created
+        self.on_activity = on_activity
         if settings.realtime_factor is not None:
             self.env = simpy.rt.RealtimeEnvironment(factor=float(settings.realtime_factor), strict=False)
         else:
@@ -474,11 +479,32 @@ class WorkflowSimulationEngine:
             self.active_node_ids: list[str] = []
         else:
             self.active_node_ids = self.router.reachable_node_ids(self.workflow, self.start_node_id)
-        self.node_resources = {
-            node.node_id: simpy.Resource(self.env, capacity=max(1, int(node.widget.capacity)))
-            for node in self.workflow.graph.iter_nodes()
-            if node.node_id in self.active_node_ids
-        }
+        self.equipment_resources: dict[str, simpy.Resource] = {}
+        self.node_resources: dict[str, simpy.Resource] = {}
+        for node in self.workflow.graph.iter_nodes():
+            if node.node_id not in self.active_node_ids or node.metadata.get("terminal_output"):
+                continue
+            capacity = max(1, int(node.widget.capacity))
+            equipment_id = str(node.metadata.get("equipment_id", "")).strip() if node.kind == "equipment" else ""
+            if equipment_id:
+                resource = self.equipment_resources.get(equipment_id)
+                if resource is None:
+                    resource = simpy.Resource(self.env, capacity=capacity)
+                    self.equipment_resources[equipment_id] = resource
+                elif resource.capacity != capacity:
+                    raise ValueError(
+                        f"Equipment {equipment_id!r} has conflicting capacities "
+                        f"({resource.capacity} and {capacity}). Set the same Capacity "
+                        "on all workflow nodes referencing this equipment."
+                    )
+            else:
+                # Process nodes remain independent. Attend at is a staff
+                # location assignment, not a reservation of that equipment.
+                resource = simpy.Resource(self.env, capacity=capacity)
+            self.node_resources[node.node_id] = resource
+        # Count assignments per physical resource across all incoming routes.
+        # Counts also break ties before newly scheduled requests acquire a slot.
+        self._equipment_assignments: dict[simpy.Resource, int] = {}
         self.node_stats = {
             node.node_id: NodeSimulationStats(node_id=node.node_id, node_name=node.widget.name)
             for node in self.workflow.graph.iter_nodes()
@@ -491,6 +517,11 @@ class WorkflowSimulationEngine:
             init=self.staff_capacity,
         )
         self._validate_staff_capacity()
+        self._batch_queues = {}
+        self._batch_wake = {}
+        self._batch_sequence = 0
+        for node_id in self.active_node_ids:
+            staff_batch_settings(self.workflow.get_node(node_id))
 
     def _resolve_staff_capacity(self) -> int:
         if self.settings.staff_capacity is not None:
@@ -746,6 +777,7 @@ class WorkflowSimulationEngine:
         *,
         node: WorkflowNode,
         specimen: Specimen,
+        record_completion: bool = True,
     ) -> tuple[bool, str | None]:
         """Consult governance events attached to the current node."""
 
@@ -785,9 +817,10 @@ class WorkflowSimulationEngine:
                     reason=decision.reason,
                     time=self.env.now,
                 )
-                self.completed_specimens.append(specimen)
-                if self.on_specimen_completed is not None:
-                    self.on_specimen_completed(len(self.completed_specimens), len(self.specimens))
+                if record_completion:
+                    self.completed_specimens.append(specimen)
+                    if self.on_specimen_completed is not None:
+                        self.on_specimen_completed(len(self.completed_specimens), len(self.specimens))
                 return True, next_node_override
 
         return False, next_node_override
@@ -822,6 +855,7 @@ class WorkflowSimulationEngine:
                 required_staff = max(1, int(node.widget.required_staff))
                 human_wait_start = self.env.now
                 yield self.staff_pool.get(required_staff)
+                self._emit_activity("staff_acquired", node, specimen, staff_count=required_staff)
                 human_wait_time = self.env.now - human_wait_start
                 specimen.record_event(
                     node.widget.name,
@@ -838,6 +872,7 @@ class WorkflowSimulationEngine:
                 staff_busy_time = human_processing_time * required_staff
                 yield self.env.timeout(human_processing_time)
                 yield self.staff_pool.put(required_staff)
+                self._emit_activity("staff_released", node, specimen, staff_count=required_staff)
                 specimen.record_event(
                     node.widget.name,
                     "human_finished",
@@ -902,6 +937,7 @@ class WorkflowSimulationEngine:
             acquired_staff = max(1, int(node.widget.required_staff))
             staff_wait_start = self.env.now
             yield self.staff_pool.get(acquired_staff)
+            self._emit_activity("staff_acquired", node, specimen, staff_count=acquired_staff)
             staff_wait_time = self.env.now - staff_wait_start
             specimen.record_event(
                 node.widget.name,
@@ -934,6 +970,7 @@ class WorkflowSimulationEngine:
             if node.widget.node_type == "manual analyzer" and acquired_staff > 0:
                 staff_busy_time = total_processing_time * acquired_staff
                 yield self.staff_pool.put(acquired_staff)
+                self._emit_activity("staff_released", node, specimen, staff_count=acquired_staff)
                 specimen.record_event(
                     node.widget.name,
                     "human_finished",
@@ -942,6 +979,8 @@ class WorkflowSimulationEngine:
                     time=self.env.now,
                 )
 
+        completed = specimen.metadata.setdefault("completed_tests", [])
+        completed.extend(code for code in processable_tests if code not in completed)
         remaining_tests = [test_code for test_code in pending_tests if test_code not in processable_tests]
         self._set_specimen_pending_tests(specimen, remaining_tests)
         self.node_stats[node.node_id].record(
@@ -951,40 +990,309 @@ class WorkflowSimulationEngine:
         )
         return total_processing_time
 
-    def _specimen_process(self, specimen_index: int):
-        specimen = self.specimens[specimen_index]
-        current_node_id = (
-            self.router.next_node_id(self.workflow, self.arrival_adapter_node.node_id, specimen)
-            if self.arrival_adapter_node is not None else self.start_node_id
-        )
+    @staticmethod
+    def _is_reporting_node(node: WorkflowNode) -> bool:
+        return bool(node.metadata.get("terminal_output")) or node.widget.node_type.lower() in {
+            "result reporting", "reporting", "result validating", "validating",
+        } or node.widget.name.strip().lower() in {"reporting", "reporting station", "validating"}
+
+    def _require_complete_order(self, specimen: Specimen, node_name: str) -> None:
+        pending = self._specimen_pending_tests(specimen)
+        required = set(str(code) for code in specimen.metadata.get("all_tests", []))
+        completed = set(specimen.metadata.get("completed_tests", []))
+        missing = sorted(set(pending) | (required - completed))
+        if missing:
+            order_id = specimen.metadata.get("order_id", specimen.specimen_id)
+            specimen.record_event(node_name, "report_blocked", order_id=order_id,
+                                  pending_tests=missing, time=self.env.now)
+            raise ValueError(f"Order {order_id}: cannot report or complete with unfinished tests: {', '.join(missing)}")
+
+    def _analyzer_pool_after(self, source_id: str):
+        """Recognize direct analyzer alternatives that converge on one next step."""
+        if not self._use_equipment_pool:
+            return None
+        edges = self.workflow.graph.outgoing_edges(source_id)
+        if len(edges) < 2:
+            return None
+        nodes = []
+        joins = set()
+        for edge in edges:
+            node = self.workflow.get_node(edge.target)
+            if node is None or node.widget.node_type not in {"automated analyzer", "manual analyzer"}:
+                return None
+            outgoing = self.workflow.graph.outgoing_edges(node.node_id)
+            if len(outgoing) != 1:
+                return None
+            joins.add(outgoing[0].target)
+            if node.widget.enabled:
+                nodes.append(node)
+        if not nodes or len(joins) != 1:
+            return None
+        return nodes, next(iter(joins))
+
+    def _advance_specimen(self, source_id: str, specimen: Specimen):
+        pool = self._analyzer_pool_after(source_id)
+        if pool is None or "pending_tests" not in specimen.metadata:
+            return self._next_node_id(source_id, specimen)
+        nodes, join_id = pool
+        assignments = {node.node_id: [] for node in nodes}
+        projected = {}
+        for node in nodes:
+            resource = self.node_resources[node.node_id]
+            capacity = (self._effective_human_processing_capacity(node)
+                        if node.widget.node_type == "manual analyzer"
+                        else self._effective_processing_capacity(node))
+            projected[node.node_id] = ((resource.count + len(resource.queue)) / resource.capacity,
+                                       1 / capacity if capacity > 0 else None)
+        for code in dict.fromkeys(self._specimen_pending_tests(specimen)):
+            compatible = [node for node in nodes
+                          if projected[node.node_id][1] is not None
+                          and (not node.widget.metadata.get("analyzer_tests")
+                               or code in {str(test) for test in node.widget.metadata["analyzer_tests"]})]
+            if not compatible:
+                order_id = specimen.metadata.get("order_id", specimen.specimen_id)
+                raise ValueError(f"Order {order_id}: no enabled analyzer with processing capacity supports test {code}")
+            def assignment_priority(node):
+                resource = self.node_resources[node.node_id]
+                backlog, duration = projected[node.node_id]
+                planned = sum(len(assignments[other.node_id]) for other in nodes
+                              if self.node_resources[other.node_id] is resource)
+                load = backlog + planned / resource.capacity
+                return (load, self._equipment_assignments.get(resource, 0),
+                        (load + 1) * duration)
+            selected = min(compatible, key=assignment_priority)
+            resource = self.node_resources[selected.node_id]
+            self._equipment_assignments[resource] = self._equipment_assignments.get(resource, 0) + 1
+            assignments[selected.node_id].append(code)
+
+        branches = []
+        processes = []
+        for node in nodes:
+            tests = assignments[node.node_id]
+            if not tests:
+                continue
+            branch = Specimen(specimen.specimen_id, payload=specimen.payload,
+                metadata={**specimen.metadata, "pending_tests": list(tests),
+                          "all_tests": list(tests), "completed_tests": []},
+                history=specimen.history)
+            branches.append(branch)
+            specimen.record_event("workflow", "tests_assigned", node_id=node.node_id,
+                                  tests=list(tests), time=self.env.now)
+            processes.append(self.env.process(self._specimen_process(
+                -1, branch_specimen=branch, start_node_id=node.node_id, stop_node_id=join_id)))
+        if processes:
+            yield self.env.all_of(processes)
+        specimen.metadata["last_equipment_ids"] = list(dict.fromkeys(
+            equipment_id for branch in branches
+            for equipment_id in branch.metadata.get("last_equipment_ids", [])))
+        completed = specimen.metadata.setdefault("completed_tests", [])
+        for branch in branches:
+            completed.extend(code for code in branch.metadata["completed_tests"] if code not in completed)
+        self._set_specimen_pending_tests(specimen, [code for code in self._specimen_pending_tests(specimen)
+                                                  if code not in completed])
+        specimen.record_event("workflow", "tests_joined", pending_tests=self._specimen_pending_tests(specimen),
+                              time=self.env.now)
+        return join_id
+
+    def _next_node_id(self, current_node_id: str, specimen: Specimen) -> str | None:
+        """Balance equivalent equipment alternatives; preserve explicit custom routing."""
+
+        fallback = self.router.next_node_id(self.workflow, current_node_id, specimen)
+        if not self._use_equipment_pool:
+            return fallback
+        candidates = []
+        for edge in self.workflow.graph.outgoing_edges(current_node_id):
+            node = self.workflow.get_node(edge.target)
+            # Only direct equipment alternatives form a pool. Disabled-node
+            # bypass and task/decision branches retain the router's semantics.
+            if node is None or node.kind != "equipment" or node.metadata.get("terminal_output"):
+                return fallback
+            if node.widget.enabled:
+                candidates.append(node)
+        if len(candidates) < 2:
+            return fallback
+        signatures = {
+            (node.widget.node_type, tuple(sorted(str(code) for code in
+                node.widget.metadata.get("analyzer_tests", []))))
+            for node in candidates
+        }
+        if len(signatures) != 1:
+            return fallback
+
+        def workload(node: WorkflowNode) -> float:
+            resource = self.node_resources[node.node_id]
+            processing = self._effective_processing_capacity(node)
+            human = self._effective_human_processing_capacity(node)
+            duration = (1 / processing if processing > 0 else 0) + (1 / human if human > 0 else 0)
+            if node.widget.node_type in {"automated analyzer", "manual analyzer"}:
+                if "pending_tests" in specimen.metadata:
+                    supported = set(node.widget.metadata.get("analyzer_tests", []))
+                    tests = self._specimen_pending_tests(specimen)
+                    duration *= sum(not supported or code in supported for code in tests)
+            # Requests already include active jobs and queued work, including
+            # other workflow nodes using the same physical equipment ID.
+            waves = (resource.count + len(resource.queue)) // resource.capacity + 1
+            return waves * duration
+
+        def selection_priority(node):
+            resource = self.node_resources[node.node_id]
+            load = (resource.count + len(resource.queue)) / resource.capacity
+            return load, self._equipment_assignments.get(resource, 0), workload(node)
+
+        selected = min(candidates, key=selection_priority)
+        resource = self.node_resources[selected.node_id]
+        self._equipment_assignments[resource] = self._equipment_assignments.get(resource, 0) + 1
+        specimen.record_event("workflow", "equipment_routed", node_id=selected.node_id,
+                              from_node_id=current_node_id, time=self.env.now)
+        return selected.node_id
+
+    def _emit_activity(self, event: str, node: WorkflowNode, specimen: Specimen, **details) -> None:
+        if event == "arrived":
+            details["source_equipment_ids"] = list(specimen.metadata.get("last_equipment_ids", []))
+            if node.kind == "equipment" and node.metadata.get("equipment_id"):
+                specimen.metadata["last_equipment_ids"] = [str(node.metadata["equipment_id"])]
+        if self.on_activity is not None:
+            self.on_activity({"event": event, "node_id": node.node_id,
+                              "specimen_id": specimen.specimen_id, "time": float(self.env.now), **details})
+
+    def _queue_staff_batch(self, node, specimen):
+        """Join a preparation queue without reserving equipment or staff."""
+        if node.node_id not in self._batch_queues:
+            self._batch_queues[node.node_id] = []
+            self._batch_wake[node.node_id] = self.env.event()
+            self.env.process(self._collect_staff_batches(node))
+        done = self.env.event()
+        self._batch_queues[node.node_id].append((specimen, done, self.env.now))
+        wake = self._batch_wake[node.node_id]
+        if not wake.triggered:
+            wake.succeed()
+        return done
+
+    def _collect_staff_batches(self, node):
+        size, wait_minutes = staff_batch_settings(node)
+        queue = self._batch_queues[node.node_id]
+        while True:
+            if not queue:
+                if self._batch_wake[node.node_id].triggered:
+                    self._batch_wake[node.node_id] = self.env.event()
+                yield self._batch_wake[node.node_id]
+            deadline = queue[0][2] + wait_minutes / 60
+            while len(queue) < size and self.env.now < deadline:
+                if self._batch_wake[node.node_id].triggered:
+                    self._batch_wake[node.node_id] = self.env.event()
+                yield self._batch_wake[node.node_id] | self.env.timeout(deadline - self.env.now)
+            members = queue[:size]
+            del queue[:size]
+            self._batch_sequence += 1
+            batch_id = f"{node.node_id}-batch-{self._batch_sequence}"
+            # Node Capacity limits concurrent batches; each batch processes its
+            # specimens sequentially, so it never requires extra machine slots.
+            self.env.process(self._process_staff_batch(node, members, batch_id))
+
+    def _process_staff_batch(self, node, members, batch_id):
+        representative = members[0][0]
+        processed = []
+        batch_details = {"batch_id": batch_id, "batch_size": len(members),
+                         "specimen_ids": [member[0].specimen_id for member in members]}
+        for specimen, _, _ in members:
+            specimen.record_event(node.widget.name, "batch_formed", time=self.env.now, **batch_details)
+        with self.node_resources[node.node_id].request() as request:
+            yield request
+            required = max(1, int(node.widget.required_staff))
+            yield self.staff_pool.get(required)
+            self._emit_activity("staff_acquired", node, representative, staff_count=required, **batch_details)
+            try:
+                # Capacity remains per item. Batching shares one staff
+                # allocation and releases the prepared group together.
+                for specimen, _, arrived in members:
+                    started = self.env.now
+                    wait = started - arrived
+                    specimen.record_event(node.widget.name, "system_started", wait_time=wait,
+                                          time=started, **batch_details)
+                    self._emit_activity("started", node, specimen, **batch_details)
+                    system_time = self._sample_service_time(self._effective_processing_capacity(node),
+                                                           self.settings.system_variation)
+                    yield self.env.timeout(system_time)
+                    specimen.record_event(node.widget.name, "system_finished", processing_time=system_time,
+                                          time=self.env.now, **batch_details)
+                    specimen.record_event(node.widget.name, "human_started", staff_required=required,
+                                          time=self.env.now, **batch_details)
+                    human_time = self._sample_service_time(self._effective_human_processing_capacity(node),
+                                                          self.settings.human_variation)
+                    yield self.env.timeout(human_time)
+                    specimen.record_event(node.widget.name, "human_finished", processing_time=human_time,
+                                          staff_required=required, time=self.env.now, **batch_details)
+                    duration = system_time + human_time
+                    processed.append((specimen, arrived, duration))
+                    specimen.record_event(node.widget.name, "preparation_finished", time=self.env.now, **batch_details)
+                    self._emit_activity("finished", node, specimen, **batch_details)
+            finally:
+                yield self.staff_pool.put(required)
+                self._emit_activity("staff_released", node, representative, staff_count=required, **batch_details)
+        for specimen, arrived, duration in processed:
+            wait = self.env.now - arrived - duration
+            self.node_stats[node.node_id].record(wait_time=wait, processing_time=duration,
+                                                staff_busy_time=duration * required)
+            specimen.record_event(node.widget.name, "departed", wait_time=wait,
+                                  processing_time=duration, time=self.env.now, **batch_details)
+        for specimen, done, _ in members:
+            specimen.record_event(node.widget.name, "batch_released", time=self.env.now, **batch_details)
+            done.succeed()
+
+    def _specimen_process(self, specimen_index: int, *, branch_specimen: Specimen | None = None,
+                          start_node_id: str | None = None, stop_node_id: str | None = None):
+        specimen = branch_specimen if branch_specimen is not None else self.specimens[specimen_index]
+        if branch_specimen is not None:
+            current_node_id = start_node_id
+        elif self.arrival_adapter_node is not None:
+            current_node_id = yield from self._advance_specimen(self.arrival_adapter_node.node_id, specimen)
+        else:
+            current_node_id = self.start_node_id
         if current_node_id is None:
             return
 
         while current_node_id is not None:
+            if current_node_id == stop_node_id:
+                return
             node = self.workflow.graph.get_node(current_node_id)
             if node is None:
                 break
             if not node.widget.enabled:
-                current_node_id = self.router.next_node_id(self.workflow, node.node_id, specimen)
+                current_node_id = self._next_node_id(node.node_id, specimen)
                 continue
 
+            if self._is_reporting_node(node):
+                self._require_complete_order(specimen, node.widget.name)
             specimen.record_event(node.widget.name, "arrived", time=self.env.now)
+            self._emit_activity("arrived", node, specimen)
             if node.metadata.get("terminal_output"):
                 # The floor reporting station visualizes completion only.
                 specimen.record_event(node.widget.name, "report_received", time=self.env.now)
+                self._emit_activity("completed", node, specimen)
                 break
             if self._node_uses_duplicate_detection(node):
                 self._run_duplicate_detection_adapter(node=node, specimen=specimen)
-                current_node_id = self.router.next_node_id(self.workflow, node.node_id, specimen)
+                self._emit_activity("finished", node, specimen)
+                current_node_id = self._next_node_id(node.node_id, specimen)
                 continue
-            governance_stopped, next_node_override = self._consult_governance(node=node, specimen=specimen)
+            governance_stopped, next_node_override = self._consult_governance(
+                node=node, specimen=specimen, record_completion=branch_specimen is None)
             if governance_stopped:
+                self._emit_activity("finished", node, specimen)
                 return
+            if staff_batch_settings(node)[0] > 1:
+                yield self._queue_staff_batch(node, specimen)
+                if next_node_override:
+                    current_node_id = next_node_override
+                else:
+                    current_node_id = yield from self._advance_specimen(node.node_id, specimen)
+                continue
             node_wait_start = self.env.now
             with self.node_resources[node.node_id].request() as node_request:
                 yield node_request
                 node_wait_time = self.env.now - node_wait_start
                 specimen.record_event(node.widget.name, "system_started", wait_time=node_wait_time, time=self.env.now)
+                self._emit_activity("started", node, specimen)
 
                 if node.widget.node_type in {"automated analyzer", "manual analyzer"}:
                     total_processing_time = yield from self._process_analyzer_node(
@@ -1020,6 +1328,7 @@ class WorkflowSimulationEngine:
                         required_staff = max(1, int(node.widget.required_staff))
                         human_wait_start = self.env.now
                         yield self.staff_pool.get(required_staff)
+                        self._emit_activity("staff_acquired", node, specimen, staff_count=required_staff)
                         human_wait_time = self.env.now - human_wait_start
                         specimen.record_event(
                             node.widget.name,
@@ -1036,6 +1345,7 @@ class WorkflowSimulationEngine:
                         staff_busy_time = human_processing_time * required_staff
                         yield self.env.timeout(human_processing_time)
                         yield self.staff_pool.put(required_staff)
+                        self._emit_activity("staff_released", node, specimen, staff_count=required_staff)
                         specimen.record_event(
                             node.widget.name,
                             "human_finished",
@@ -1059,14 +1369,22 @@ class WorkflowSimulationEngine:
                         time=self.env.now,
                     )
 
-            current_node_id = next_node_override or self.router.next_node_id(self.workflow, node.node_id, specimen)
+            self._emit_activity("finished", node, specimen)
+            if next_node_override:
+                current_node_id = next_node_override
+            else:
+                current_node_id = yield from self._advance_specimen(node.node_id, specimen)
 
+        if branch_specimen is not None:
+            return
+        self._require_complete_order(specimen, "workflow")
         specimen.record_event("workflow", "completed", time=self.env.now)
         self.completed_specimens.append(specimen)
         if self.on_specimen_completed is not None:
             self.on_specimen_completed(len(self.completed_specimens), len(self.specimens))
 
     def _arrival_process(self):
+        processes = []
         for specimen_index in range(len(self.specimens)):
             specimen = self.specimens[specimen_index]
             if self.arrival_adapter is not None and specimen.payload is None:
@@ -1076,6 +1394,16 @@ class WorkflowSimulationEngine:
                     simulation_time=float(self.env.now),
                     patient=self.patient_adapter.patient_for_order(specimen_index + 1),
                 )
+                # Generated orders need actual test work to exercise analyzers.
+                # Imported orders retain their original requested tests.
+                analyzers = [self.workflow.get_node(node_id) for node_id in self.active_node_ids
+                             if self.workflow.get_node(node_id).widget.node_type
+                             in {"automated analyzer", "manual analyzer"}]
+                if analyzers and not order.order_items:
+                    codes = sorted({str(code) for node in analyzers
+                                    for code in node.widget.metadata.get("analyzer_tests", [])
+                                    if str(code).strip()}) or ["SIM-TEST"]
+                    order.order_items = [InMemoryOrderItem(InMemoryTest(code)) for code in codes]
                 if self.on_order_created is not None:
                     self.on_order_created(order)
                 specimen = _build_specimens_from_orders([order])[0]
@@ -1088,9 +1416,10 @@ class WorkflowSimulationEngine:
                 self.specimens[specimen_index] = specimen
             specimen.metadata["arrival_index"] = specimen_index
             self._observed_orders.append(specimen.payload)
-            self.env.process(self._specimen_process(specimen_index))
+            processes.append(self.env.process(self._specimen_process(specimen_index)))
             if specimen_index + 1 < len(self.specimens) and self.settings.interarrival_time > 0:
                 yield self.env.timeout(self.settings.interarrival_time)
+        yield self.env.all_of(processes)
 
     def run(self) -> WorkflowSimulationResult:
         """Execute the simulation and return a summary."""
@@ -1105,8 +1434,8 @@ class WorkflowSimulationEngine:
                 governance_consultations=self.governance_consultations,
             )
 
-        self.env.process(self._arrival_process())
-        self.env.run()
+        arrivals = self.env.process(self._arrival_process())
+        self.env.run(until=arrivals)
 
         return WorkflowSimulationResult(
             workflow_name=self.workflow_name,

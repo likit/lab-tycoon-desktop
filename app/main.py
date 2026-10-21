@@ -160,7 +160,7 @@ def run_app():
     def save_active_project(*, force_path: bool = False) -> bool:
         project = project_session.active_project
         if project is None:
-            sg.popup_error('No project is currently open.', title='Save Project')
+            sg.popup_error('No project is currently open.', title='Save Project', keep_on_top=True)
             return False
         destination = None if force_path else project.file_path
         if destination is None:
@@ -171,11 +171,12 @@ def run_app():
         try:
             saved_path = _project_serializer.save(project, destination)
         except (OSError, ProjectFormatError, ValueError) as exc:
-            sg.popup_error(f'Project could not be saved:\n{exc}', title='Save Project')
+            sg.popup_error(f'Project could not be saved:\n{exc}', title='Save Project', keep_on_top=True)
             return False
         update_config_yaml(last_project_path=str(saved_path.resolve()))
         refresh_project_display()
-        sg.popup_quick_message(f'Project saved to {saved_path}.', background_color='lightgreen')
+        sg.popup_quick_message(f'Project saved to {saved_path}.', background_color='lightgreen',
+                               keep_on_top=True)
         return True
 
     def may_replace_active_project() -> bool:
