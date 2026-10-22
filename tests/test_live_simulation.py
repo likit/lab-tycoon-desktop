@@ -35,6 +35,82 @@ def wait_for(predicate, timeout=3):
 
 
 class LiveSimulationTests(unittest.TestCase):
+    def test_equipment_bound_to_analyzer_processes_selected_tests_and_sends_them(self):
+        model, analyzer, station = workflow()
+        analyzer.widget.node_type = 'equipment'
+        analyzer.metadata['node_type'] = 'equipment'
+        analyzer.widget.metadata['analyzer_tests'] = ['GLU', 'ALT']
+        analyzer.metadata['analyzer_tests'] = ['GLU', 'ALT']
+        live = LiveSimulationSession(model, count=3, seed=7,
+            equipment_types={'CHEM-001': 'chemistry_analyzer', 'REPORT-001': 'reporting_station'})
+        live.engine.run()
+        feed = live.snapshot()['results_feed']
+        self.assertEqual(len(feed), 3)
+        self.assertTrue(all(set(entry['tests']) == {'GLU', 'ALT'} for entry in feed))
+        self.assertTrue(all(not specimen.metadata['pending_tests']
+                            for specimen in live.engine.completed_specimens))
+        self.assertEqual(model.get_node(analyzer.node_id).widget.node_type, 'equipment')
+        self.assertEqual(live.workflow.get_node(analyzer.node_id).widget.node_type, 'automated analyzer')
+
+    def test_legacy_generic_analyzers_show_data_without_inventing_test_details(self):
+        model, analyzer, station = workflow()
+        self.assertNotIn(analyzer.widget.node_type, ('automated analyzer', 'manual analyzer'))
+        live = LiveSimulationSession(model, count=3, seed=7,
+            equipment_types={'CHEM-001': 'chemistry_analyzer', 'REPORT-001': 'reporting_station'})
+        live.engine.run()
+        feed = live.snapshot()['results_feed']
+        self.assertEqual(len(feed), 3)
+        self.assertTrue(all(entry['tests'] == [] for entry in feed))
+        self.assertTrue(all(entry['sources'] == ['CHEM-001'] for entry in feed))
+
+    def test_reporting_task_at_station_records_arrival_before_processing_and_deduplicates_terminal(self):
+        model, analyzer, station = workflow()
+        report = next(node for node in model.graph.iter_nodes() if node.widget.name == 'Reporting')
+        report.widget.node_type = 'result reporting'
+        report.metadata['attend_equipment_id'] = 'REPORT-001'
+        live = LiveSimulationSession(model, count=1, seed=7,
+            equipment_types={'CHEM-001': 'chemistry_analyzer', 'REPORT-001': 'reporting_station'})
+        live.engine.run()
+        feed = live.snapshot()['results_feed']
+        self.assertEqual(len(feed), 1)
+        specimen = live.engine.completed_specimens[0]
+        terminal_arrival = next(event['details']['time'] for event in specimen.history
+                                if event.get('event') == 'arrived' and event.get('widget') == 'Report Station')
+        self.assertLess(feed[0]['time'], terminal_arrival)
+
+    def test_reporting_feed_contains_real_completed_tests_once_and_is_isolated(self):
+        model, analyzer, station = workflow()
+        analyzer.widget.node_type = 'automated analyzer'
+        analyzer.widget.metadata['analyzer_tests'] = ['GLU', 'ALT']
+        live = LiveSimulationSession(model, count=2, seed=7, speed=10,
+            equipment_types={'CHEM-001': 'chemistry_analyzer', 'REPORT-001': 'reporting_station'})
+        live.engine.run()
+        feed = live.snapshot()['results_feed']
+        self.assertEqual(len(feed), 2)
+        self.assertEqual([entry['sequence'] for entry in feed], [1, 2])
+        self.assertEqual(len({entry['order_id'] for entry in feed}), 2)
+        for entry in feed:
+            self.assertEqual(set(entry['tests']), {'GLU', 'ALT'})
+            self.assertEqual(entry['sources'], ['CHEM-001'])
+            self.assertEqual(entry['target'], 'REPORT-001')
+        feed[0]['tests'].append('MUTATED')
+        self.assertNotIn('MUTATED', live.snapshot()['results_feed'][0]['tests'])
+        self.assertEqual(LiveSimulationSession(model, count=1).snapshot()['results_feed'], [])
+
+    def test_reporting_feed_ignores_non_analyzer_and_duplicate_transfers(self):
+        model, analyzer, station = workflow()
+        live = LiveSimulationSession(model, count=1,
+            equipment_types={'CHEM-001': 'chemistry_analyzer', 'REPORT-001': 'reporting_station'})
+        event = dict(event='arrived', node_id=station.node_id, specimen_id='S1',
+                     order_id='ORDER-1', time=1, completed_tests=['GLU'],
+                     source_equipment_ids=['CENT-001'])
+        live._activity(event)
+        self.assertEqual(live.snapshot()['results_feed'], [])
+        event['source_equipment_ids'] = ['CHEM-001']
+        live._activity(event)
+        live._activity(event)
+        self.assertEqual(len(live.snapshot()['results_feed']), 1)
+
     def test_real_queue_pause_resume_stop_and_no_worker_ui_calls(self):
         model, analyzer, station = workflow()
         live = LiveSimulationSession(model, count=3, seed=7, speed=1)

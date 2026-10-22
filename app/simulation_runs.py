@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.project import LabTycoonProject
 from app.system.model import Scenario
+from app.system.equipment_workflow import resolve_equipment_workflow
 from app.system.models import SimulationOrder, SimulationPatient, SimulationRun, engine
 from app.system.order_sources import InMemoryOrder
 from app.system.simulation import run_workflow_simulation
@@ -51,7 +52,9 @@ def run_project_scenario(
         raise ValueError("Connect an enabled Order Adapter as the workflow source before running this project.")
 
     generated_orders: list[InMemoryOrder] = []
-    document = WorkflowDocument(project.project_id, f"{project.name} Workflow", project.workflow)
+    execution_workflow = resolve_equipment_workflow(project.workflow,
+        {item.instance_id: item.equipment_type for item in project.floor.equipment_instances})
+    document = WorkflowDocument(project.project_id, f"{project.name} Workflow", execution_workflow)
     result = run_workflow_simulation(
         specimens_number=orders_number,
         workflow_document=document,

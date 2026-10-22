@@ -61,8 +61,13 @@ class ProjectFloor:
     columns: int = 10
     equipment_instances: list[ProjectEquipmentInstance] = field(default_factory=list)
 
-    def floor_dict(self) -> dict[str, int]:
-        return {"rows": self.rows, "columns": self.columns}
+    monitor_position: tuple[int, int] | None = None
+
+    def floor_dict(self) -> dict[str, object]:
+        data = {"rows": self.rows, "columns": self.columns}
+        if self.monitor_position is not None:
+            data["monitor_position"] = list(self.monitor_position)
+        return data
 
     def equipment_dict(self) -> dict[str, object]:
         return {"instances": [instance.to_dict() for instance in self.equipment_instances]}
@@ -89,6 +94,9 @@ class ProjectFloor:
             rows=int(floor_data.get("rows", 10)),
             columns=int(floor_data.get("columns", 10)),
             equipment_instances=instances,
+            monitor_position=(tuple(max(0, int(v)) for v in floor_data["monitor_position"])
+                              if isinstance(floor_data.get("monitor_position"), (list, tuple))
+                              and len(floor_data["monitor_position"]) == 2 else None),
         )
         if floor.rows <= 0 or floor.columns <= 0:
             raise ValueError("Floor dimensions must be positive.")

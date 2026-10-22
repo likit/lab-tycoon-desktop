@@ -1,6 +1,14 @@
 # lab-tycoon-desktop
 Demo LIS for education
 
+### Main laboratory workspace
+
+**Go to Lab** opens the floor plan as the main laboratory workspace. Use its
+**Edit Workflow**, **Orders**, **Customers**, and **Results** buttons to open
+secondary views; records open on the requested tab. **Save Project** saves the
+active project, and **Back to Home** restores the home screen. The project-owned
+simulation remains available when moving between these views.
+
 ### Live floor simulation
 
 The floor plan's Play button runs the selected workflow and scenario through the
@@ -66,9 +74,10 @@ routers retain control of routing.
 
 For parallel testing, connect each centrifuge to the analyzer alternatives and
 connect every analyzer directly to the same reporting process or Reporting
-Station. Use automated/manual analyzer node types and configure their selected
-tests and positive processing capacities (Human Processing Capacity for manual
-analyzers). An empty test menu retains the existing meaning of accepting any
+Station. Equipment nodes linked to a placed chemistry analyzer automatically use
+analyzer processing. Use **Select tests** on that Equipment node to configure
+its test menu and a positive Processing Capacity. Explicit manual analyzer
+nodes retain their Human Processing Capacity settings. An empty test menu retains the existing meaning of accepting any
 test. The engine assigns each pending test code once to a compatible enabled
 analyzer, runs the assigned groups concurrently, then joins their results before
 continuing the order. Analyzer alternatives may have different test menus.
@@ -114,3 +123,11 @@ batches; available staff can impose a smaller limit. Analyzer tests and reportin
 retain their independent per-order completion rules. Histories record batch
 membership, preparation finish and group release; wait statistics include the
 collection delay, staff/resource queues and waiting for the rest of the batch.
+
+Equipment nodes remain Equipment nodes in the editor. At execution, physical
+chemistry analyzer bindings resolve to analyzer processing in a run-local copy,
+including legacy projects, without rewriting their graphs. Test menus are
+available for these bound nodes. Completed test codes travel with the order to
+the reporting station and appear in the results feed. With no selected menu,
+generated orders request `SIM-TEST`, an explicit simulation placeholder; select
+test codes to simulate those tests. Numeric assay measurements are not generated.

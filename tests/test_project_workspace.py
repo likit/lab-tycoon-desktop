@@ -3,13 +3,43 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from app.project import LabTycoonProject
-from app.project_workspace import open_project_workflow
+from app.project_workspace import open_project_workflow, open_project_lab, open_lab_section
 
 
 class ProjectWorkspaceTests(unittest.TestCase):
+    def test_go_to_lab_hides_home_and_opens_floor_as_workspace(self):
+        project = LabTycoonProject.create('Demo Lab')
+        home, save = Mock(), Mock()
+        with patch('app.project_workspace.create_floor_view_window') as open_floor:
+            open_project_lab(project, home_window=home, on_save=save)
+        home.hide.assert_called_once()
+        open_floor.assert_called_once_with(project, main_workspace=True, on_save=save)
+        home.un_hide.assert_called_once()
+
+    def test_home_is_restored_if_floor_fails_to_open(self):
+        home = Mock()
+        with patch('app.project_workspace.create_floor_view_window', side_effect=RuntimeError('Window error')):
+            with self.assertRaises(RuntimeError):
+                open_project_lab(LabTycoonProject.create('Demo'), home_window=home)
+        home.un_hide.assert_called_once()
+
+    def test_floor_record_buttons_open_requested_tab_without_another_floor(self):
+        project = LabTycoonProject.create('Demo')
+        with patch('app.project_workspace.create_project_workspace_window') as open_records:
+            for section in ('Orders', 'Customers', 'Results'):
+                open_lab_section(project, section)
+                open_records.assert_called_with(project, initial_tab=section, show_navigation=False)
+
+    def test_floor_workflow_button_edits_the_selected_workflow(self):
+        project = LabTycoonProject.create('Demo')
+        extra = project.add_workflow('Other workflow')
+        with patch('app.project_workspace.open_project_workflow') as edit:
+            open_lab_section(project, 'Workflow', workflow_id=extra.workflow_id)
+        edit.assert_called_once_with(project, extra.workflow_id)
+
     def test_workflow_action_opens_the_active_project_workflow(self) -> None:
         project = LabTycoonProject.create("Demo Lab")
 

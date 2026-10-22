@@ -26,6 +26,7 @@ from app.system.order_sources import InMemoryOrderItem, InMemoryTest
 from app.system.resource_adapter import patient_adapter_for_workflow
 from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.system.staff_batching import staff_batch_settings
+from app.system.equipment_workflow import resolve_equipment_workflow
 from app.system.signals.duplicate import detect_duplicate_candidate
 
 
@@ -441,6 +442,7 @@ class WorkflowSimulationEngine:
         governance_provider: GovernanceProvider | None = None,
         debug_governance: bool = False,
     ) -> None:
+        workflow = resolve_equipment_workflow(workflow)
         self.workflow = workflow
         self.settings = settings
         self.workflow_name = workflow_name or "Untitled Workflow"
@@ -1148,6 +1150,8 @@ class WorkflowSimulationEngine:
 
     def _emit_activity(self, event: str, node: WorkflowNode, specimen: Specimen, **details) -> None:
         if event == "arrived":
+            details["completed_tests"] = list(specimen.metadata.get("completed_tests", []))
+            details["order_id"] = str(specimen.metadata.get("order_id", specimen.specimen_id))
             details["source_equipment_ids"] = list(specimen.metadata.get("last_equipment_ids", []))
             if node.kind == "equipment" and node.metadata.get("equipment_id"):
                 specimen.metadata["last_equipment_ids"] = [str(node.metadata["equipment_id"])]

@@ -252,7 +252,29 @@ def load_customer_rows(
     return rows[:limit]
 
 
-def create_project_workspace_window(project: LabTycoonProject) -> None:
+def open_project_lab(project: LabTycoonProject, *, home_window=None, on_save=None) -> None:
+    """Use the floor as the main lab workspace and restore home on return."""
+    if home_window is not None:
+        home_window.hide()
+    try:
+        create_floor_view_window(project, main_workspace=True, on_save=on_save)
+    finally:
+        if home_window is not None:
+            home_window.un_hide()
+
+
+def open_lab_section(project: LabTycoonProject, section: str, *, workflow_id=None) -> None:
+    """Open a secondary view without constructing another floor window."""
+    if section == 'Workflow':
+        open_project_workflow(project, workflow_id)
+    elif section in ('Orders', 'Customers', 'Results'):
+        create_project_workspace_window(project, initial_tab=section, show_navigation=False)
+    else:
+        raise ValueError(f'Unknown lab section: {section}')
+
+
+def create_project_workspace_window(project: LabTycoonProject, *, initial_tab: str = "Orders",
+                                    show_navigation: bool = True) -> None:
     """Display tabbed LIS orders, results, and customers."""
     runs = load_simulation_runs(project.project_id)
     scenario_labels = {"All scenarios": None}
@@ -290,12 +312,14 @@ def create_project_workspace_window(project: LabTycoonProject) -> None:
             sg.Button(
                 "◇  Floor Plan",
                 key="-OPEN-FLOOR-VIEW-",
+                visible=show_navigation,
                 size=(14, 1),
                 button_color=("white", "#2563eb"),
             ),
             sg.Button(
                 "◇  Workflow",
                 key="-OPEN-WORKFLOW-",
+                visible=show_navigation,
                 size=(14, 1),
                 button_color=("white", "#2563eb"),
             ),
@@ -392,6 +416,8 @@ def create_project_workspace_window(project: LabTycoonProject) -> None:
             f"Showing {len(customer_rows)} patients (maximum {OVERVIEW_ROW_LIMIT})."
         )
 
+    tab_keys = {"Orders": "-TAB-ORDERS-", "Results": "-TAB-RESULTS-", "Customers": "-TAB-CUSTOMERS-"}
+    window[tab_keys.get(initial_tab, "-TAB-ORDERS-")].select()
     window.refresh()
     refresh_data()
 

@@ -795,6 +795,8 @@ class WorkflowEditorController:
         return bool(instance and instance.equipment_type == "reporting_station")
 
     def _apply_equipment_role(self, equipment_id: str, settings: dict[str, Any]) -> None:
+        instance = self.equipment_instance(equipment_id)
+        settings["equipment_type"] = instance.equipment_type if instance else ""
         terminal = self.is_reporting_station(equipment_id)
         settings["terminal_output"] = terminal
         if terminal:
@@ -998,12 +1000,21 @@ class WorkflowEditorController:
         window["-WF-DETAILS-"].update("\n".join(details))
         self.update_analyzer_tests_button(window)
 
+    def is_analyzer_node(self, node: WorkflowNode | None) -> bool:
+        if node is None:
+            return False
+        if node.widget.node_type in {"automated analyzer", "manual analyzer"}:
+            return True
+        instance = self.equipment_instance(str(node.metadata.get("equipment_id", "")))
+        return bool(node.kind == "equipment" and instance
+                    and instance.equipment_type == "chemistry_analyzer")
+
     def update_analyzer_tests_button(self, window: sg.Window) -> None:
         """Enable the test selection button only for analyzer nodes."""
 
         button = window["-WF-SELECT-TESTS-"]
         node = self.selected_node()
-        is_analyzer = bool(node and node.widget.node_type in {"automated analyzer", "manual analyzer"})
+        is_analyzer = self.is_analyzer_node(node)
         button.update(disabled=not is_analyzer)
 
     def rerender(self, window: sg.Window) -> None:
@@ -1080,10 +1091,7 @@ class WorkflowEditorController:
         if not disconnect_items:
             disconnect_items = ["No connections::noop"]
         menu = ["Workflow Node", ["Add connection", target_items, "Disconnect from", disconnect_items]]
-        if selected_node is not None and selected_node.widget.node_type in {
-            "automated analyzer",
-            "manual analyzer",
-        }:
+        if self.is_analyzer_node(selected_node):
             menu.append("Select tests::select_analyzer_tests")
         return menu
 
@@ -1686,10 +1694,11 @@ class WorkflowEditorController:
         if node is None:
             raise ValueError("Selected node is no longer available.")
 
-        self.current_document.workflow.update_node_properties(
-            node_id,
-            metadata={"analyzer_tests": list(test_codes)},
-        )
+        metadata = {"analyzer_tests": list(test_codes)}
+        instance = self.equipment_instance(str(node.metadata.get("equipment_id", "")))
+        if instance is not None:
+            metadata["equipment_type"] = instance.equipment_type
+        self.current_document.workflow.update_node_properties(node_id, metadata=metadata)
         node.widget.metadata["analyzer_tests"] = list(test_codes)
         self.persist_current_workflow(window)
         if window is not None:
@@ -2168,8 +2177,8 @@ def open_workflow_editor_window(
                         if node is None:
                             _notify("Select a node first.")
                             continue
-                        if node.widget.node_type not in {"automated analyzer", "manual analyzer"}:
-                            _notify("Select an automated analyzer or manual analyzer node first.")
+                        if not controller.is_analyzer_node(node):
+                            _notify("Select an Equipment node linked to an analyzer first.")
                             continue
                         available_tests = _load_available_tests()
                         selected_codes = _show_test_selection_dialog(
@@ -2196,7 +2205,7 @@ def open_workflow_editor_window(
                     if node is None:
                         _notify("Select an analyzer node first.")
                         continue
-                    if node.widget.node_type not in {"automated analyzer", "manual analyzer"}:
+                    if not controller.is_analyzer_node(node):
                         _notify("Select an analyzer node first.")
                         continue
                     available_tests = _load_available_tests()

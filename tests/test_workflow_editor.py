@@ -54,6 +54,28 @@ class WorkflowGraphModelTests(unittest.TestCase):
         restored = Workflow.from_dict(workflow.to_dict()).get_node(node.node_id)
         self.assertEqual(restored.metadata["attend_equipment_id"], "REPORT-001")
 
+    def test_bound_analyzer_equipment_exposes_test_selection_and_persists_capability(self):
+        from unittest.mock import Mock
+        workflow = Workflow()
+        controller = WorkflowEditorController(on_change=lambda: None,
+            equipment_instances=[ProjectEquipmentInstance('CHEM-001', 'chemistry_analyzer', 3, 3)])
+        controller.current_document = WorkflowDocument.create('Workflow', workflow=workflow)
+        node_id = controller.add_equipment_node('CHEM-001', throughput=100)
+        node = workflow.get_node(node_id)
+        self.assertEqual(node.widget.node_type, 'equipment')
+        self.assertTrue(controller.is_analyzer_node(node))
+        button = Mock()
+        controller.update_analyzer_tests_button({'-WF-SELECT-TESTS-': button})
+        button.update.assert_called_once_with(disabled=False)
+        controller.set_analyzer_tests(node_id, ['GLU', 'ALT'])
+        restored = Workflow.from_dict(workflow.to_dict()).get_node(node_id)
+        self.assertEqual(restored.metadata['equipment_type'], 'chemistry_analyzer')
+        self.assertEqual(restored.widget.metadata['analyzer_tests'], ['GLU', 'ALT'])
+        from app.system.equipment_workflow import resolve_equipment_workflow
+        resolved = resolve_equipment_workflow(workflow)
+        self.assertEqual(resolved.get_node(node_id).widget.node_type, 'automated analyzer')
+        self.assertEqual(node.widget.node_type, 'equipment')
+
     def test_equipment_outputs_are_independent_and_persisted(self) -> None:
         workflow = Workflow()
         controller = WorkflowEditorController(

@@ -67,6 +67,53 @@ class TransportOverlayTests(unittest.TestCase):
         self.assertEqual(renderer.canvas.tag_raise.call_count, 4)
 
 
+class AnalyzerCapacityTests(unittest.TestCase):
+    def renderer(self):
+        from unittest.mock import Mock
+        from app.system.model import Workflow
+        renderer = FloorViewRenderer.__new__(FloorViewRenderer)
+        renderer.floor_plan = FloorPlan()
+        renderer.floor_plan.equipment_instances.append(
+            EquipmentInstance('CHEM-001', 'chemistry_analyzer', 3, 3))
+        renderer.workflow = Workflow()
+        for name in ('First reference', 'Second reference'):
+            node = renderer.workflow.create_node(name, kind='equipment',
+                                                metadata={'equipment_id': 'CHEM-001'})
+            node.widget.capacity = 2
+        renderer.canvas = Mock()
+        renderer.canvas.bbox.return_value = (100, 120, 356, 376)
+        renderer._equipment_canvas_items = {'CHEM-001': 1}
+        renderer.live_session = None
+        return renderer
+
+    def test_idle_shared_references_display_physical_capacity_once(self):
+        renderer = self.renderer()
+        renderer.render_analyzer_capacity()
+        renderer.canvas.create_text.assert_called_once()
+        self.assertEqual(renderer.canvas.create_text.call_args.kwargs['text'], 'Capacity 0/2')
+        self.assertLess(renderer.canvas.create_text.call_args.args[1], 120)
+
+    def test_full_live_capacity_and_pause_use_resource_snapshot(self):
+        from unittest.mock import Mock
+        for state in ('playing', 'paused'):
+            renderer = self.renderer()
+            renderer.live_session = Mock()
+            renderer.live_session.snapshot.return_value = {
+                'state': state, 'equipment_capacity': {'CHEM-001': {'used': 2, 'total': 2}}}
+            renderer.render_analyzer_capacity()
+            self.assertEqual(renderer.canvas.create_text.call_args.kwargs['text'], 'Capacity 2/2')
+            self.assertEqual(renderer.canvas.create_text.call_args.kwargs['fill'], '#fbbf24')
+
+    def test_cancelled_capacity_releases_displayed_usage(self):
+        from unittest.mock import Mock
+        renderer = self.renderer()
+        renderer.live_session = Mock()
+        renderer.live_session.snapshot.return_value = {
+            'state': 'cancelled', 'equipment_capacity': {'CHEM-001': {'used': 2, 'total': 2}}}
+        renderer.render_analyzer_capacity()
+        self.assertEqual(renderer.canvas.create_text.call_args.kwargs['text'], 'Capacity 0/2')
+
+
 class EquipmentPreviewTests(unittest.TestCase):
     def test_preview_preserves_transparency_and_caches_scaled_sprite(self) -> None:
         renderer = FloorViewRenderer.__new__(FloorViewRenderer)
@@ -83,7 +130,7 @@ class EquipmentPreviewTests(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         from PIL import Image
         with Image.open(renderer.assets_dir / CHEMISTRY_ANALYZER_METADATA.sprite) as source:
-            self.assertEqual(captured[0].size, ((source.width + 3) // 4, (source.height + 3) // 4))
+            self.assertEqual(captured[0].size, ((source.width + 4) // 5, (source.height + 4) // 5))
         low, high = captured[0].getchannel("A").getextrema()
         self.assertEqual(low, 0)
         self.assertEqual(high, round(255 * 0.45))
@@ -144,15 +191,15 @@ class FloorPlanTests(unittest.TestCase):
         equipment = EQUIPMENT_CATALOG["specimens_reception_station"]
         self.assertEqual(equipment.name, "Specimens Reception Station")
         self.assertTrue(equipment.workflow_capable)
-        self.assertEqual(equipment.footprint, (1, 2))
+        self.assertEqual(equipment.footprint, (1, 1))
         floor = FloorPlan()
         floor.begin_placement(equipment.equipment_type)
         floor.select(3, 4)
         station = floor.place_selected()
         self.assertEqual(station.instance_id, "RECP-001")
-        self.assertEqual(floor.occupied_cells(), {(3, 4), (3, 5)})
+        self.assertEqual(floor.occupied_cells(), {(3, 4)})
         self.assertFalse(floor.can_place(EquipmentPlacement(9, 4, equipment)))
-        self.assertFalse(floor.can_place(EquipmentPlacement(3, 9, equipment)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(3, 10, equipment)))
 
     def test_catalog_defines_multi_tile_chemistry_analyzer(self) -> None:
         analyzer = EQUIPMENT_CATALOG["chemistry_analyzer"]
@@ -161,11 +208,11 @@ class FloorPlanTests(unittest.TestCase):
         self.assertEqual(analyzer.name, "Chemistry Analyzer")
         self.assertEqual(analyzer.category, "Analytical")
         self.assertEqual(analyzer.sprite, "analyzer/chemistry_analyzer.png")
-        self.assertEqual(analyzer.footprint, (2, 3))
+        self.assertEqual(analyzer.footprint, (2, 2))
         self.assertEqual(analyzer.clearance, EquipmentClearance(front=1))
         self.assertEqual(analyzer.anchor, "s")
-        self.assertEqual(analyzer.sprite_anchor_cell, (1, 2))
-        self.assertEqual(analyzer.sprite_subsample, 4)
+        self.assertEqual(analyzer.sprite_anchor_cell, (1, 1))
+        self.assertEqual(analyzer.sprite_subsample, 5)
         self.assertEqual(analyzer.id_prefix, "CHEM")
         self.assertTrue(analyzer.workflow_capable)
 
@@ -174,18 +221,18 @@ class FloorPlanTests(unittest.TestCase):
 
         self.assertEqual(
             set(placement.occupied_cells()),
-            {(4, 5), (4, 6), (4, 7), (5, 5), (5, 6), (5, 7)},
+            {(4, 5), (4, 6), (5, 5), (5, 6)},
         )
         self.assertEqual(
             set(placement.required_cells()) - set(placement.occupied_cells()),
-            {(6, 5), (6, 6), (6, 7)},
+            {(6, 5), (6, 6)},
         )
 
     def test_analyzer_uses_generic_boundary_and_front_clearance_validation(self) -> None:
         floor = FloorPlan(rows=10, columns=10)
 
         self.assertTrue(floor.can_place(EquipmentPlacement(4, 5, CHEMISTRY_ANALYZER_METADATA)))
-        self.assertFalse(floor.can_place(EquipmentPlacement(4, 8, CHEMISTRY_ANALYZER_METADATA)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(4, 9, CHEMISTRY_ANALYZER_METADATA)))
         self.assertFalse(floor.can_place(EquipmentPlacement(8, 5, CHEMISTRY_ANALYZER_METADATA)))
         self.assertTrue(floor.can_place(EquipmentPlacement(7, 7, CHEMISTRY_ANALYZER_METADATA)))
 
@@ -196,8 +243,17 @@ class FloorPlanTests(unittest.TestCase):
         analyzer = floor.place_selected()
 
         self.assertEqual(analyzer.instance_id if analyzer else None, "CHEM-001")
-        self.assertFalse(floor.can_place(EquipmentPlacement(5, 6, CENTRIFUGE_METADATA)))
+        self.assertFalse(floor.can_place(EquipmentPlacement(5, 5, CENTRIFUGE_METADATA)))
         self.assertFalse(floor.can_place(EquipmentPlacement(3, 3, CHEMISTRY_ANALYZER_METADATA)))
+
+    def test_compact_analyzer_frees_former_third_column(self):
+        floor = FloorPlan()
+        floor.begin_placement("chemistry_analyzer")
+        floor.select(4, 4)
+        floor.place_selected()
+        self.assertEqual(floor.occupied_cells(), {(4, 4), (4, 5), (5, 4), (5, 5)})
+        self.assertIsNone(floor.equipment_at(4, 6))
+        self.assertTrue(floor.can_place(EquipmentPlacement(4, 6, CENTRIFUGE_METADATA)))
 
     def test_analyzer_ids_continue_from_persisted_instances(self) -> None:
         floor = FloorPlan()
@@ -376,3 +432,39 @@ class FloorPlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResultsMonitorTests(unittest.TestCase):
+    def test_drag_clamps_to_viewport_and_saves_on_release(self):
+        from unittest.mock import Mock
+        from app.project import ProjectFloor
+        from app.system.floor_view import ResultsMonitor
+        monitor = ResultsMonitor.__new__(ResultsMonitor)
+        monitor.floor_state = ProjectFloor()
+        monitor.on_change = Mock()
+        monitor.canvas = Mock()
+        monitor.canvas.winfo_width.return_value = 1000
+        monitor.canvas.winfo_height.return_value = 700
+        monitor.frame = Mock()
+        monitor.frame.winfo_width.return_value = 480
+        monitor.frame.winfo_height.return_value = 220
+        monitor.frame.winfo_x.return_value = 100
+        monitor.frame.winfo_y.return_value = 100
+        monitor.start_drag(SimpleNamespace(x_root=150, y_root=150))
+        monitor.drag(SimpleNamespace(x_root=2000, y_root=-100))
+        monitor.frame.place_configure.assert_called_once_with(x=520, y=0)
+        monitor.on_change.assert_not_called()
+        monitor.frame.winfo_x.return_value = 520
+        monitor.frame.winfo_y.return_value = 0
+        monitor.end_drag(None)
+        self.assertEqual(monitor.floor_state.monitor_position, (520, 0))
+        monitor.on_change.assert_called_once()
+        monitor.end_drag(None)
+        monitor.on_change.assert_called_once()
+
+    def test_monitor_position_round_trip_and_old_project_default(self):
+        from app.project import ProjectFloor
+        original = ProjectFloor(monitor_position=(120, 80))
+        loaded = ProjectFloor.from_dicts(original.floor_dict(), original.equipment_dict())
+        self.assertEqual(loaded.monitor_position, (120, 80))
+        self.assertIsNone(ProjectFloor.from_dicts({'rows': 10, 'columns': 10}, {}).monitor_position)

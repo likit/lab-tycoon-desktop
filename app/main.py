@@ -17,7 +17,7 @@ from app.main_ui import MainWindowContext, build_main_layout, update_context_ele
 from app.lis_settings import create_lis_settings_window
 from app.database_explorer import create_database_explorer_window
 from app.project import LabTycoonProject, project_session
-from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow
+from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab
 from app.project_serializer import ProjectFormatError, ProjectSerializer
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
 from app.auth.windows import SessionManager
@@ -271,7 +271,8 @@ def run_app():
                         last_project_path=str(project_session.active_project.file_path.resolve())
                     )
                     refresh_project_display()
-                    create_project_workspace_window(project_session.active_project)
+                    open_project_lab(project_session.active_project, home_window=window, on_save=save_active_project)
+                    refresh_project_display()
         elif event == 'Save':
             save_active_project()
         elif event == 'Save As...':
@@ -284,7 +285,8 @@ def run_app():
         elif event == '-GO-TO-LAB-':
             project = project_session.active_project
             if project is not None:
-                create_project_workspace_window(project)
+                open_project_lab(project, home_window=window, on_save=save_active_project)
+                refresh_project_display()
         elif event == 'SQL Editor':
             create_sql_window()
         elif event == 'Database Explorer':
@@ -311,7 +313,7 @@ def run_app():
             if project is None:
                 sg.popup_error('No project is currently open. Create or open a Lab Tycoon project first.')
             else:
-                create_floor_view_window(project)
+                open_project_lab(project, home_window=window, on_save=save_active_project)
                 refresh_project_display()
         elif event == 'Analyze' or event == '-ANALYZE-':
             create_analysis_window()

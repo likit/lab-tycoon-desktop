@@ -1,5 +1,6 @@
 """Paced SimPy session. Worker owns the engine; the GUI consumes snapshots."""
 from copy import deepcopy
+from collections import deque
 from queue import SimpleQueue
 from threading import Condition, Thread
 from time import monotonic
@@ -7,6 +8,7 @@ from math import isfinite
 import random
 
 from app.system.staff_activity import staff_activity
+from app.system.equipment_workflow import resolve_equipment_workflow
 from app.system.model import Workflow, Scenario
 from app.system.simulation import WorkflowSimulationEngine, WorkflowSimulationSettings
 
@@ -33,10 +35,14 @@ class LiveSimulationSession:
         self.staff_assignments = {}
         self._staff_random = random.Random(seed)
         self.equipment_types = dict(equipment_types or {})
+        self.workflow = resolve_equipment_workflow(self.workflow, self.equipment_types)
         self._last_equipment = {}
         self.transfers = []
         self._in_flight = {}
         self._recent_transfers = []
+        self.results_feed = deque(maxlen=200)
+        self._result_keys = set()
+        self._result_sequence = 0
         settings = WorkflowSimulationSettings.from_scenario(
             specimens_number=count, workflow=self.workflow, scenario=self.scenario, random_seed=seed)
         if staff_capacity is not None:
@@ -69,6 +75,7 @@ class LiveSimulationSession:
         counts = self._counts.setdefault(event['node_id'], {'queued': 0, 'active': 0, 'finished': 0})
         if event['event'] == 'arrived':
             counts['queued'] += 1
+            counts['last_arrived'] = event['time']
         elif event['event'] == 'started':
             counts['queued'] = max(0, counts['queued'] - 1)
             counts['active'] += 1
@@ -80,6 +87,7 @@ class LiveSimulationSession:
         node = self.workflow.get_node(event['node_id'])
         specimen_id = event['specimen_id']
         if event['event'] == 'arrived':
+            self._record_reporting_result(event, node)
             if node.kind == 'equipment':
                 self._in_flight.pop(specimen_id, None)
                 equipment_id = str(node.metadata.get('equipment_id', ''))
@@ -116,6 +124,37 @@ class LiveSimulationSession:
         self.transfers = list(self._in_flight.values()) + self._recent_transfers
         self.events.put(dict(event))
 
+    def _record_reporting_result(self, event, node):
+        """Record data arrival even when legacy equipment supplies no test details."""
+        equipment_id = str(node.metadata.get('equipment_id') or
+                           node.metadata.get('attend_equipment_id') or '')
+        reporting_process = node.widget.node_type in ('result reporting', 'result validating')
+        if not equipment_id and reporting_process:
+            stations = [key for key, kind in self.equipment_types.items() if kind == 'reporting_station']
+            equipment_id = stations[0] if len(stations) == 1 else ''
+        reporting = (self.equipment_types.get(equipment_id) == 'reporting_station'
+                     or node.metadata.get('terminal_output'))
+        if not reporting or not equipment_id:
+            return
+        sources = event.get('source_equipment_ids')
+        if sources is None:
+            sources = [self._last_equipment.get(event['specimen_id'])]
+        analyzer_ids = {str(candidate.metadata.get('equipment_id'))
+                        for candidate in self.workflow.graph.iter_nodes()
+                        if candidate.widget.node_type in ('automated analyzer', 'manual analyzer')}
+        sources = list(dict.fromkeys(source for source in sources
+                       if self.equipment_types.get(source) == 'chemistry_analyzer'
+                       or source in analyzer_ids))
+        tests = tuple(event.get('completed_tests', []))
+        key = (str(event['specimen_id']), equipment_id, tests)
+        if not sources or key in self._result_keys:
+            return
+        self._result_keys.add(key)
+        self._result_sequence += 1
+        self.results_feed.append({'sequence': self._result_sequence,
+            'time': event['time'], 'order_id': str(event.get('order_id', event['specimen_id'])),
+            'tests': list(tests), 'sources': sources, 'target': equipment_id})
+
     def play(self):
         with self.condition:
             if self.state in ('completed', 'failed', 'cancelled'):
@@ -143,6 +182,9 @@ class LiveSimulationSession:
             return {'state': self.state, 'time': self.elapsed, 'counts': deepcopy(self._counts),
                     'completed': len(self.engine.completed_specimens), 'total': len(self.engine.specimens),
                     'error': self.error, 'transfers': deepcopy(self.transfers),
+                    'results_feed': deepcopy(list(self.results_feed)),
+                    'equipment_capacity': {equipment_id: {'used': resource.count, 'total': resource.capacity}
+                                           for equipment_id, resource in self.engine.equipment_resources.items()},
                     'staff_capacity': self.engine.staff_capacity,
                     'staff_available': self.engine.staff_pool.level,
                     'staff_assignments': deepcopy(list(self.staff_assignments.values()))}

@@ -2,11 +2,33 @@
 from PIL import Image, ImageDraw
 
 FRAME_COUNT = 8
-FRAMES_PER_SECOND = 8
+FRAMES_PER_SECOND = 4
 
 
 def animation_frame(state: str, elapsed: float) -> int | None:
     return None if state == "stopped" else int(elapsed * FRAMES_PER_SECOND) % FRAME_COUNT
+
+
+RECEPTION_FRAME_COUNT = 32
+
+
+def equipment_frame_count(equipment_type: str) -> int:
+    return RECEPTION_FRAME_COUNT if equipment_type == 'specimens_reception_station' else FRAME_COUNT
+
+
+def equipment_animation_frame(equipment_type: str, state: str, elapsed: float) -> int | None:
+    if equipment_type == 'specimens_reception_station':
+        return None if state == 'stopped' else int(elapsed * 16) % RECEPTION_FRAME_COUNT
+    return animation_frame(state, elapsed)
+
+
+def reception_delivery_pose(frame: int) -> tuple[float, float]:
+    """Smooth upward intake, dock dwell, then collection fade over a two-second cycle."""
+    frame %= RECEPTION_FRAME_COUNT
+    if frame <= 21:
+        t = frame / 21
+        return t * t * (3 - 2 * t), 1.0
+    return 1.0, max(0.0, min(1.0, (31 - frame) / 4))
 
 
 def activity_frame(base: Image.Image, equipment_type: str, frame: int) -> Image.Image:
@@ -18,16 +40,6 @@ def activity_frame(base: Image.Image, equipment_type: str, frame: int) -> Image.
     def point(x, y):
         return round(x * width), round(y * height)
 
-    if equipment_type == "specimens_reception_station":
-        # Scanner beam pulses over the specimen tray.
-        if frame < 4:
-            draw.line((*point(.73, .40 + frame * .006), *point(.88, .46 + frame * .006)),
-                      fill="#f87171", width=2)
-        # Label printer feeds a short strip, then starts a new label.
-        length = .018 + (frame % 4) * .009
-        draw.polygon([point(.637, .39), point(.674, .40),
-                      point(.674, .40 + length), point(.637, .39 + length)],
-                     fill="white", outline="#94a3b8")
     return image
 
 
