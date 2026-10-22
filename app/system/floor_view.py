@@ -15,6 +15,7 @@ import FreeSimpleGUI as sg
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
+from app.auth.windows import login_required
 from app.project import LabTycoonProject, ProjectEquipmentInstance, ProjectFloor
 from app.system.live_simulation import LiveSimulationSession
 from app.simulation_runs import persist_generated_run
@@ -1012,6 +1013,7 @@ class ResultsMonitor:
         return 'break'
 
 
+@login_required
 def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool = False,
                              on_save: Callable[[], bool] | None = None) -> None:
     """Open the experimental isometric floor view in its own window."""

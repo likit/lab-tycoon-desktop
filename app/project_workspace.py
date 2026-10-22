@@ -9,6 +9,7 @@ import FreeSimpleGUI as sg
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.auth.windows import login_required
 from app.project import LabTycoonProject
 from app.simulation_runs import run_project_scenario
 from app.system.floor_view import create_floor_view_window
@@ -33,6 +34,7 @@ CUSTOMER_HEADINGS = ["ID", "HN", "Name", "Gender", "Date of Birth", "Address", "
 OVERVIEW_ROW_LIMIT = 250
 
 
+@login_required
 def add_project_workflow(project: LabTycoonProject) -> str | None:
     """Prompt for a new workflow name and return its project-owned ID."""
 
@@ -46,6 +48,7 @@ def add_project_workflow(project: LabTycoonProject) -> str | None:
         return None
 
 
+@login_required
 def choose_project_workflow(project: LabTycoonProject) -> str | None:
     """Choose an existing project workflow."""
 
@@ -70,6 +73,7 @@ def choose_project_workflow(project: LabTycoonProject) -> str | None:
         dialog.close()
 
 
+@login_required
 def open_project_workflow(project: LabTycoonProject, workflow_id: str = "main") -> None:
     """Open one project-backed workflow in the existing editor."""
 
@@ -252,6 +256,7 @@ def load_customer_rows(
     return rows[:limit]
 
 
+@login_required
 def open_project_lab(project: LabTycoonProject, *, home_window=None, on_save=None) -> None:
     """Use the floor as the main lab workspace and restore home on return."""
     if home_window is not None:

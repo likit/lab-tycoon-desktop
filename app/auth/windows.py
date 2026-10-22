@@ -44,15 +44,15 @@ def login_required(func):
 
     @functools.wraps(func)  # Preserves the metadata of the original function
     def wrapper(*args, **kwargs):
-        # --- YOUR CHECK LOGIC GOES HERE ---
-        # For this example, we'll check a mock global variable.
-        # In a real app, you might check 'session.get("user")' or similar.
+        if not session_manager.is_logged_in():
+            sg.popup_error("⛔ Access Denied: You must be logged in or activate your account.")
+            return None
         with Session(engine) as session:
             query = select(User).where(User.username == session_manager.current_user)
             user = session.scalar(query)
-        if not session_manager.is_logged_in() or not user.active:
+        if user is None or not user.active:
             sg.popup_error("⛔ Access Denied: You must be logged in or activate your account.")
-            return None  # Or redirect, or raise error
+            return None
 
         # If check passes, execute the original function
         return func(*args, **kwargs)

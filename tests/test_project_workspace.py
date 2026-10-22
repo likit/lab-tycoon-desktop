@@ -10,6 +10,14 @@ from app.project_workspace import open_project_workflow, open_project_lab, open_
 
 
 class ProjectWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        logged_in = patch('app.auth.windows.session_manager.is_logged_in', return_value=True)
+        logged_in.start()
+        self.addCleanup(logged_in.stop)
+        database = patch('app.auth.windows.Session')
+        database.start().return_value.__enter__.return_value.scalar.return_value = Mock(active=True)
+        self.addCleanup(database.stop)
+
     def test_go_to_lab_hides_home_and_opens_floor_as_workspace(self):
         project = LabTycoonProject.create('Demo Lab')
         home, save = Mock(), Mock()

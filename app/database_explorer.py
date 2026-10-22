@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.system.models import engine
+from app.auth.windows import login_required
 from app.ui_styles import DANGER_BUTTON_COLOR
 
 
@@ -61,6 +62,7 @@ def format_preview(headings: list[str], rows: list[list[object]]) -> str:
     return "\n".join(lines)
 
 
+@login_required
 def create_database_explorer_window() -> None:
     """Open a read-only schema and data browser for the active LIS database."""
 

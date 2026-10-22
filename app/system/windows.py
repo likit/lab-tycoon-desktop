@@ -56,6 +56,7 @@ DUPLICATE_TRUE_ICON = "🔴"
 DUPLICATE_FALSE_ICON = "🟢"
 
 
+@login_required
 def create_rule_preview_window():
     """Open a developer-facing read-only workflow rule preview window."""
 
@@ -379,6 +380,7 @@ def create_rule_preview_window():
     window.close()
 
 
+@login_required
 def create_workflow_window():
     """Open the workflow manager window.
 
