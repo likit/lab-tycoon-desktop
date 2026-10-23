@@ -16,7 +16,7 @@ from app.system.floor_view import create_floor_view_window
 from app.system.models import Customer, LabOrder, LabOrderItem, SimulationOrder, SimulationPatient, SimulationRun, engine
 from app.system.storage import WorkflowDocument
 from app.system.workflow_editor import create_workflow_window
-from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR, bring_window_to_front
 
 
 ORDER_HEADINGS = ["ID", "HN", "Patient", "Ordered At", "Priority", "Status", "Items", "Source", "Scenario", "Run"]
@@ -58,7 +58,7 @@ def choose_project_workflow(project: LabTycoonProject) -> str | None:
         [sg.Listbox(list(labels), default_values=[next(iter(labels))], key="-WORKFLOW-CHOICE-", size=(42, 7))],
         [sg.Button("Open"), sg.Button("Cancel")],
     ]
-    dialog = sg.Window("Project Workflows", layout, modal=True, finalize=True)
+    dialog = create_window("Project Workflows", layout, modal=True, finalize=True)
     bring_window_to_front(dialog)
     try:
         while True:
@@ -257,6 +257,18 @@ def load_customer_rows(
 
 
 @login_required
+def open_project_scenarios(project, workflow_id='main'):
+    from app.system.scenario_editor import open_scenario_manager
+    selected = project.get_workflow(workflow_id)
+    if selected is None:
+        raise ValueError('The selected workflow is no longer available.')
+    open_scenario_manager(selected.workflow, on_change=project.mark_dirty,
+        run_simulation=(lambda scenario_id, count, seed: run_project_scenario(
+            project, scenario_id=scenario_id, orders_number=count, random_seed=seed))
+            if workflow_id == 'main' else None)
+
+
+@login_required
 def open_project_lab(project: LabTycoonProject, *, home_window=None, on_save=None) -> None:
     """Use the floor as the main lab workspace and restore home on return."""
     if home_window is not None:
@@ -378,7 +390,7 @@ def create_project_workspace_window(project: LabTycoonProject, *, initial_tab: s
         ],
         [sg.Push(), sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
     ]
-    window = sg.Window(
+    window = create_window(
         f"Lab Tycoon — {project.name}",
         layout,
         resizable=True,

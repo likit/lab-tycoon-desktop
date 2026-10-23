@@ -1,3 +1,4 @@
+from app.ui_styles import create_window
 import os.path
 import platform
 import shutil
@@ -62,7 +63,7 @@ def create_project_dialog() -> tuple[str, str] | None:
         [sg.Text('Description', size=(14, 1)), sg.Multiline(key='-PROJECT-DESCRIPTION-', size=(42, 5))],
         [sg.Push(), sg.Button('Create', bind_return_key=True), sg.Button('Cancel')],
     ]
-    dialog = sg.Window('New Lab Tycoon Project', layout, modal=True)
+    dialog = create_window('New Lab Tycoon Project', layout, modal=True)
     try:
         while True:
             event, values = dialog.read()
@@ -87,7 +88,7 @@ def dirty_project_choice(project_name: str) -> str:
             sg.Button('Cancel', key='cancel'),
         ],
     ]
-    dialog = sg.Window('Unsaved Project', layout, modal=True)
+    dialog = create_window('Unsaved Project', layout, modal=True)
     try:
         event, _values = dialog.read()
         return event if event in {'save', 'discard'} else 'cancel'
@@ -121,7 +122,7 @@ def get_token_and_decode_payload():
 def run_app():
     project_session.close()
     main_context = MainWindowContext(project_name='No project open', laboratory_name='')
-    window = sg.Window('Lab Tycoon',
+    window = create_window('Lab Tycoon',
                        layout=build_main_layout(resource_path, main_context),
                        resizable=True,
                        element_justification='center').finalize()
@@ -306,6 +307,16 @@ def run_app():
                 if workflow_id is not None:
                     open_project_workflow(project, workflow_id)
                 refresh_project_display()
+        elif event == 'Scenarios':
+            from app.project_workspace import open_project_scenarios
+            project = project_session.active_project
+            if project is None:
+                sg.popup_error('Open a project before managing scenarios.')
+            else:
+                workflow_id = choose_project_workflow(project)
+                if workflow_id is not None:
+                    open_project_scenarios(project, workflow_id)
+                    refresh_project_display()
         elif event == 'Rule Preview':
             create_rule_preview_window()
         elif event == 'Floor Plan' or event == '-FLOOR-VIEW-':

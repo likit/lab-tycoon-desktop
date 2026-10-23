@@ -36,3 +36,61 @@ class DangerButtonStyleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowActivationTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        self.registry = patch('app.ui_styles._windows', [])
+        self.registry.start()
+        self.addCleanup(self.registry.stop)
+
+    def window(self):
+        from unittest.mock import Mock
+        window = Mock()
+        window.TKroot.winfo_exists.return_value = True
+        window.TKroot.winfo_viewable.return_value = True
+        window.TKroot.focus_get.return_value = None
+        return window
+
+    def test_child_has_owner_without_permanent_topmost_and_restores_focus(self):
+        from unittest.mock import patch, Mock
+        from app.ui_styles import create_window
+        parent, child = self.window(), self.window()
+        with patch('app.ui_styles.sg.Window', side_effect=[parent, child]) as constructor:
+            create_window('Parent')
+            create_window('Child', modal=True, keep_on_top=True)
+        self.assertFalse(constructor.call_args.kwargs['keep_on_top'])
+        self.assertTrue(constructor.call_args.kwargs['finalize'])
+        child.TKroot.transient.assert_called_once_with(parent.TKroot)
+        child.TKroot.lift.assert_called_once()
+        callback = child.TKroot.bind.call_args.args[1]
+        parent.TKroot.after_idle.reset_mock()
+        callback(Mock(widget=object()))
+        parent.TKroot.after_idle.assert_not_called()
+        callback(Mock(widget=child.TKroot))
+        restore = parent.TKroot.after_idle.call_args.args[0]
+        with patch('app.ui_styles.bring_window_to_front') as activate:
+            restore()
+            activate.assert_called_once_with(parent)
+
+    def test_hidden_parent_is_not_used(self):
+        from unittest.mock import patch
+        from app.ui_styles import create_window
+        parent, child = self.window(), self.window()
+        with patch('app.ui_styles.sg.Window', side_effect=[parent, child]):
+            create_window('Home')
+            parent.TKroot.winfo_viewable.return_value = False
+            create_window('Lab')
+        child.TKroot.transient.assert_not_called()
+
+    def test_idle_activation_is_safe_after_close(self):
+        from app.ui_styles import bring_window_to_front
+        window = self.window()
+        root = window.TKroot
+        bring_window_to_front(window)
+        activate = root.after_idle.call_args.args[0]
+        root.focus_force.reset_mock()
+        window.TKroot = None
+        activate()
+        root.focus_force.assert_not_called()

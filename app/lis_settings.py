@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import DATABASE_CONFIG, update_config_yaml
 from app.database import DatabaseConfig, DatabaseConfigurationError, DatabaseManager
 from app.system.models import initialize_db
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 
 
 def _config_from_values(values: dict[str, object]) -> DatabaseConfig:
@@ -36,7 +36,7 @@ def _show_restart_required_dialog() -> bool:
             sg.Button("Close App Now", button_color=DANGER_BUTTON_COLOR),
         ],
     ]
-    dialog = sg.Window("Restart Required", layout, modal=True)
+    dialog = create_window("Restart Required", layout, modal=True)
     try:
         event, _values = dialog.read()
         return event == "Close App Now"
@@ -87,7 +87,7 @@ def create_lis_settings_window() -> bool:
             sg.Button("Save", key="-DB-SAVE-"),
         ],
     ]
-    window = sg.Window("LIS Settings", layout, modal=True, resizable=True, finalize=True)
+    window = create_window("LIS Settings", layout, modal=True, resizable=True, finalize=True)
     try:
         while True:
             event, values = window.read()

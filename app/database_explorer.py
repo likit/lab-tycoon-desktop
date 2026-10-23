@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.system.models import engine
 from app.auth.windows import login_required
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 
 
 PREVIEW_LIMIT = 100
@@ -125,7 +125,7 @@ def create_database_explorer_window() -> None:
         ],
         [sg.Push(), sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
     ]
-    window = sg.Window(
+    window = create_window(
         "Database Explorer",
         layout,
         resizable=True,

@@ -47,7 +47,7 @@ from app.system.signals.duplicate import detect_duplicate_candidate
 from app.system.signals.repository import find_prior_orders_for_duplicate_check
 from app.system.storage import WorkflowDocument, WorkflowRepository
 from app.config import logger, config_dict, update_config_yaml
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 
 _workflow_repository = WorkflowRepository()
 _current_workflow_document: WorkflowDocument | None = None
@@ -204,7 +204,7 @@ def create_rule_preview_window():
         ],
     ]
 
-    window = sg.Window(
+    window = create_window(
         "Workflow Rule Preview",
         layout=layout,
         modal=True,
@@ -525,7 +525,7 @@ def create_workflow_window():
         ],
     ]
 
-    window = sg.Window(
+    window = create_window(
         "Workflow Editor",
         layout=layout,
         modal=True,
@@ -636,7 +636,7 @@ def create_logging_window():
                       font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
         [sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
     ]
-    window = sg.Window('Program Logs', layout=layout, modal=True, resizable=True)
+    window = create_window('Program Logs', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -660,7 +660,7 @@ def create_sql_window():
         [sg.Multiline(key='-console-', size=(80, 5), font='Courier 13 bold', expand_x=True, expand_y=True)]
     ]
 
-    window = sg.Window('SQL Tools', layout=layout, modal=True, resizable=True)
+    window = create_window('SQL Tools', layout=layout, modal=True, resizable=True)
 
     df = pd.DataFrame()
 
@@ -714,7 +714,7 @@ def show_save_query_dialog():
         [sg.Input(key='-filepath-'), sg.FileSaveAs('Browse', file_types=(('Excel', 'xlsx'),))],
         [sg.Ok()]
     ]
-    dialog = sg.Window('Save As', layout, modal=True)
+    dialog = create_window('Save As', layout, modal=True)
     filepath = ''
     while True:
         event, values = dialog.read()
@@ -733,7 +733,7 @@ def show_open_order_data_dialog():
         [sg.Input(key='-filepath-'), sg.FileBrowse('Browse', file_types=(('Order Data', '*.csv *.xlsx'), ('CSV', '*.csv'), ('Excel', '*.xlsx')))],
         [sg.Ok()]
     ]
-    dialog = sg.Window('Load Order Data', layout, modal=True)
+    dialog = create_window('Load Order Data', layout, modal=True)
     filepath = ''
     while True:
         event, values = dialog.read()
@@ -787,7 +787,7 @@ def create_test_list_window():
         ],
     ]
 
-    window = sg.Window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
+    window = create_window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
     window.maximize()
 
@@ -841,7 +841,7 @@ def create_tmlt_test_window():
                   key='-TABLE-', auto_size_columns=True, expand_x=True, expand_y=True, enable_events=True)]
     ]
 
-    window = sg.Window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True)
+    window = create_window('TMLT Test Search', layout=layout, modal=True, resizable=True, finalize=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
 
     while True:
@@ -911,7 +911,7 @@ def create_tmlt_test_form_window(data):
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1), button_color=DANGER_BUTTON_COLOR)]
     ]
 
-    window = sg.Window('Test Form', layout=layout, modal=True)
+    window = create_window('Test Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -956,7 +956,7 @@ def create_tmlt_test_edit_form_window(data):
         [sg.Button('Update', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1), button_color=DANGER_BUTTON_COLOR)]
     ]
 
-    window = sg.Window('Test Edit Form', layout=layout, modal=True)
+    window = create_window('Test Edit Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -1001,7 +1001,7 @@ def create_custom_test_form_window():
         [sg.Button('Add', button_color=('white', 'green')), sg.CloseButton('Close', size=(8, 1), button_color=DANGER_BUTTON_COLOR)]
     ]
 
-    window = sg.Window('Custom Test Form', layout=layout, modal=True)
+    window = create_window('Custom Test Form', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -1146,7 +1146,7 @@ def create_order_list_window():
             [sg.Multiline(summary, size=(92, 18), font=("Arial", 13), disabled=True)],
             [sg.Button("Open Order", key="-OPEN-ORDER-"), sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
         ]
-        popup = sg.Window(
+        popup = create_window(
             f"Duplicate Review - Order {order['order_id']}",
             layout,
             modal=True,
@@ -1175,7 +1175,7 @@ def create_order_list_window():
             [sg.Multiline(json.dumps(payload, indent=2), size=(72, 10), disabled=True)],
             [sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
         ]
-        popup = sg.Window('Uploaded Order Detail', layout, modal=True, resizable=True)
+        popup = create_window('Uploaded Order Detail', layout, modal=True, resizable=True)
         popup.read()
         popup.close()
 
@@ -1368,7 +1368,7 @@ def create_order_list_window():
         # [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
     ]
 
-    window = sg.Window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
+    window = create_window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
     window['-ORDER-TABLE-'].bind("<Double-Button-1>", " Double")
     window['-STEWARD-TABLE-'].bind("<Double-Button-1>", " Double")
     update_source_status(window, get_active_order_source())
@@ -1557,7 +1557,7 @@ def create_order_item_list_window(lab_order_id):
                      background_color='red', text_color='white', pad=(5,5), key='reject-banner', visible=False)],
         ]
 
-        window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
+        window = create_window('Ordered Item List', layout=layout, modal=True, finalize=True, resizable=True)
         window['-ORDER-ITEM-TABLE-'].bind("<Double-Button-1>", " Double")
         if order.rejected_at:
             window['reject-banner'].update(visible=True)
@@ -1699,7 +1699,7 @@ def create_item_detail_window(item_id):
             actions,
             [sg.Button('Audit Trail'), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
         ]
-    window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+    window = create_window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -1801,7 +1801,7 @@ def create_customer_list_window():
     ]
 
     flt_data = data
-    window = sg.Window('Users',
+    window = create_window('Users',
                        layout=layout,
                        resizable=True,
                        modal=True,
@@ -1858,7 +1858,7 @@ def create_customer_order_list_window(customer_id):
             [sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)]
         ]
 
-        window = sg.Window('Customer Orders',
+        window = create_window('Customer Orders',
                            layout=layout,
                            resizable=True,
                            modal=True,
@@ -1878,7 +1878,7 @@ def create_reject_reason_window():
         [sg.Multiline(size=(40, 10), key='-COMMENT-')],
         [sg.Ok('Submit'), sg.Cancel('Cancel')]
     ]
-    window = sg.Window('Ordered Item List', layout=layout, modal=True, finalize=True)
+    window = create_window('Ordered Item List', layout=layout, modal=True, finalize=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED, 'Cancel', 'Submit'):
@@ -1926,7 +1926,7 @@ def create_lab_order_item_version_list_window(item_id):
              ],
             [sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)]
         ]
-        window = sg.Window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
+        window = create_window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
@@ -1970,7 +1970,7 @@ def create_analysis_window():
          sg.Help()],
     ]
 
-    window = sg.Window('Analysis', layout=layout, modal=True, resizable=True, finalize=True)
+    window = create_window('Analysis', layout=layout, modal=True, resizable=True, finalize=True)
     window.maximize()
 
     while True:

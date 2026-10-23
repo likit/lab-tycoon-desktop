@@ -55,7 +55,7 @@ def build_main_menu() -> list[list[object]]:
                 "Settings...",
             ],
         ],
-        ["Simulation", ["!Run Simulation", "!Scenarios", "!Simulation Results"]],
+        ["Simulation", ["!Run Simulation", "Scenarios", "!Simulation Results"]],
         ["Workflow", ["Add Workflow...", "Open Workflow..."]],
         [
             "Analytics",

@@ -150,10 +150,13 @@ class WorkflowSimulationSettings:
     ) -> "WorkflowSimulationSettings":
         """Build settings from a workflow scenario when available."""
 
-        scenario = scenario or (workflow.scenarios[0] if workflow.scenarios else None)
+        scenario = scenario or workflow.active_scenario
         parameters = dict(scenario.parameters if scenario is not None else {})
 
         staff_capacity = parameters.get("staff_capacity")
+        if scenario is not None and scenario.workforce:
+            from app.system.workforce import validate_workforce
+            staff_capacity = len(validate_workforce(scenario.workforce))
         if staff_capacity is not None:
             staff_capacity = int(staff_capacity)
 
@@ -446,7 +449,7 @@ class WorkflowSimulationEngine:
         self.workflow = workflow
         self.settings = settings
         self.workflow_name = workflow_name or "Untitled Workflow"
-        self.scenario = scenario or (workflow.scenarios[0] if workflow.scenarios else None)
+        self.scenario = scenario or workflow.active_scenario
         self.router = router or WorkflowRouter()
         self._use_equipment_pool = router is None
         self.on_specimen_completed = on_specimen_completed
@@ -513,11 +516,21 @@ class WorkflowSimulationEngine:
             if node.node_id in self.active_node_ids
         }
         self.staff_capacity = self._resolve_staff_capacity()
-        self.staff_pool = simpy.Container(
-            self.env,
-            capacity=self.staff_capacity,
-            init=self.staff_capacity,
-        )
+        from app.system.workforce import WorkforcePool, scenario_workforce
+        from app.system.model import Scenario
+        roster_source = self.scenario or Scenario(name="Run")
+        roster = scenario_workforce(roster_source, self.staff_capacity)
+        # Run-only headcount overrides retain existing identities first.
+        roster = roster[:self.staff_capacity]
+        names = {member['name'].casefold() for member in roster}
+        index = 1
+        while len(roster) < self.staff_capacity:
+            name = f'Staff {index}'
+            if name.casefold() not in names:
+                roster.append(dict(id=f'run-staff-{index}', name=name))
+                names.add(name.casefold())
+            index += 1
+        self.staff_pool = WorkforcePool(self.env, roster)
         self._validate_staff_capacity()
         self._batch_queues = {}
         self._batch_wake = {}
@@ -529,6 +542,8 @@ class WorkflowSimulationEngine:
         if self.settings.staff_capacity is not None:
             return max(1, int(self.settings.staff_capacity))
 
+        if self.scenario and self.scenario.workforce:
+            return len(self.scenario.workforce)
         required_staff = []
         for node in self.workflow.graph.iter_nodes():
             if node.node_id not in self.active_node_ids:
@@ -550,15 +565,43 @@ class WorkflowSimulationEngine:
         for node in self.workflow.graph.iter_nodes():
             if node.node_id not in self.active_node_ids:
                 continue
-            if self._effective_human_processing_capacity(node) <= 0:
+            if node.metadata.get("terminal_output") or int(node.widget.required_staff) == 0:
                 continue
 
-            required_staff = max(1, int(node.widget.required_staff))
+            required_staff = int(node.widget.required_staff)
             if required_staff > self.staff_capacity:
                 raise ValueError(
                     f"Workflow node {node.widget.name!r} requires {required_staff} staff, "
                     f"but the available staff capacity is only {self.staff_capacity}."
                 )
+            eligible = self._eligible_staff(node)
+            if required_staff > len(eligible):
+                raise ValueError(
+                    f"Workflow node {node.widget.name!r} requires {required_staff} staff, "
+                    f"but only {len(eligible)} eligible staff are available."
+                )
+
+    def _eligible_staff(self, node):
+        from app.system.workforce import eligible_staff
+        assignments = self.scenario.staff_assignments if self.scenario else {}
+        try:
+            return eligible_staff(self.staff_pool.roster, assignments, node.node_id)
+        except ValueError as exc:
+            raise ValueError(f"Workflow node {node.widget.name!r}: {exc}") from exc
+
+    def _acquire_staff(self, node, specimen, count, **details):
+        self._emit_activity("staff_waiting", node, specimen, staff_count=count, **details)
+        team = yield self.staff_pool.get(count, self._eligible_staff(node))
+        self._emit_activity("staff_acquired", node, specimen, staff_count=len(team),
+                            staff_ids=[m['id'] for m in team],
+                            staff_names=[m['name'] for m in team], **details)
+        return team
+
+    def _release_staff(self, node, specimen, team, **details):
+        self._emit_activity("staff_released", node, specimen, staff_count=len(team),
+                            staff_ids=[m['id'] for m in team],
+                            staff_names=[m['name'] for m in team], **details)
+        yield self.staff_pool.put(team)
 
     def _effective_human_processing_capacity(self, node: WorkflowNode) -> float:
         return float(node.widget.human_throughput)
@@ -571,7 +614,8 @@ class WorkflowSimulationEngine:
         return max(0.0, base_time * multiplier)
 
     def _node_requires_human_attention(self, node: WorkflowNode) -> bool:
-        return self._effective_human_processing_capacity(node) > 0
+        return (int(node.widget.required_staff) > 0
+                and self._effective_human_processing_capacity(node) > 0)
 
     def _specimen_pending_tests(self, specimen: Specimen) -> list[str]:
         pending_tests = specimen.metadata.get("pending_tests", [])
@@ -856,8 +900,7 @@ class WorkflowSimulationEngine:
             if self._node_requires_human_attention(node):
                 required_staff = max(1, int(node.widget.required_staff))
                 human_wait_start = self.env.now
-                yield self.staff_pool.get(required_staff)
-                self._emit_activity("staff_acquired", node, specimen, staff_count=required_staff)
+                team = yield from self._acquire_staff(node, specimen, required_staff)
                 human_wait_time = self.env.now - human_wait_start
                 specimen.record_event(
                     node.widget.name,
@@ -873,8 +916,7 @@ class WorkflowSimulationEngine:
                 )
                 staff_busy_time = human_processing_time * required_staff
                 yield self.env.timeout(human_processing_time)
-                yield self.staff_pool.put(required_staff)
-                self._emit_activity("staff_released", node, specimen, staff_count=required_staff)
+                yield from self._release_staff(node, specimen, team)
                 specimen.record_event(
                     node.widget.name,
                     "human_finished",
@@ -935,11 +977,10 @@ class WorkflowSimulationEngine:
         staff_wait_time = 0.0
         staff_busy_time = 0.0
         acquired_staff = 0
-        if node.widget.node_type == "manual analyzer":
+        if node.widget.node_type == "manual analyzer" and int(node.widget.required_staff) > 0:
             acquired_staff = max(1, int(node.widget.required_staff))
             staff_wait_start = self.env.now
-            yield self.staff_pool.get(acquired_staff)
-            self._emit_activity("staff_acquired", node, specimen, staff_count=acquired_staff)
+            team = yield from self._acquire_staff(node, specimen, acquired_staff)
             staff_wait_time = self.env.now - staff_wait_start
             specimen.record_event(
                 node.widget.name,
@@ -971,8 +1012,7 @@ class WorkflowSimulationEngine:
         finally:
             if node.widget.node_type == "manual analyzer" and acquired_staff > 0:
                 staff_busy_time = total_processing_time * acquired_staff
-                yield self.staff_pool.put(acquired_staff)
-                self._emit_activity("staff_released", node, specimen, staff_count=acquired_staff)
+                yield from self._release_staff(node, specimen, team)
                 specimen.record_event(
                     node.widget.name,
                     "human_finished",
@@ -980,6 +1020,24 @@ class WorkflowSimulationEngine:
                     staff_required=acquired_staff,
                     time=self.env.now,
                 )
+
+        if node.widget.node_type == "automated analyzer" and self._node_requires_human_attention(node):
+            required = int(node.widget.required_staff)
+            wait_start = self.env.now
+            team = yield from self._acquire_staff(node, specimen, required)
+            staff_wait_time += self.env.now - wait_start
+            human_time = self._sample_service_time(self._effective_human_processing_capacity(node),
+                                                  self.settings.human_variation)
+            specimen.record_event(node.widget.name, "human_started", time=self.env.now,
+                                  staff_required=required, wait_time=self.env.now - wait_start)
+            try:
+                yield self.env.timeout(human_time)
+                total_processing_time += human_time
+                staff_busy_time += human_time * required
+            finally:
+                yield from self._release_staff(node, specimen, team)
+            specimen.record_event(node.widget.name, "human_finished", time=self.env.now,
+                                  staff_required=required, processing_time=human_time)
 
         completed = specimen.metadata.setdefault("completed_tests", [])
         completed.extend(code for code in processable_tests if code not in completed)
@@ -1203,8 +1261,7 @@ class WorkflowSimulationEngine:
         with self.node_resources[node.node_id].request() as request:
             yield request
             required = max(1, int(node.widget.required_staff))
-            yield self.staff_pool.get(required)
-            self._emit_activity("staff_acquired", node, representative, staff_count=required, **batch_details)
+            team = yield from self._acquire_staff(node, representative, required, **batch_details)
             try:
                 # Capacity remains per item. Batching shares one staff
                 # allocation and releases the prepared group together.
@@ -1231,8 +1288,7 @@ class WorkflowSimulationEngine:
                     specimen.record_event(node.widget.name, "preparation_finished", time=self.env.now, **batch_details)
                     self._emit_activity("finished", node, specimen, **batch_details)
             finally:
-                yield self.staff_pool.put(required)
-                self._emit_activity("staff_released", node, representative, staff_count=required, **batch_details)
+                yield from self._release_staff(node, representative, team, **batch_details)
         for specimen, arrived, duration in processed:
             wait = self.env.now - arrived - duration
             self.node_stats[node.node_id].record(wait_time=wait, processing_time=duration,
@@ -1298,6 +1354,16 @@ class WorkflowSimulationEngine:
                 specimen.record_event(node.widget.name, "system_started", wait_time=node_wait_time, time=self.env.now)
                 self._emit_activity("started", node, specimen)
 
+                # With no separate human rate, Required staff reserves a team
+                # for the node's processing duration instead.
+                whole_job_team = []
+                whole_job_wait = 0.0
+                if int(node.widget.required_staff) > 0 and self._effective_human_processing_capacity(node) <= 0:
+                    staff_wait_start = self.env.now
+                    whole_job_team = yield from self._acquire_staff(node, specimen, int(node.widget.required_staff))
+                    whole_job_wait = self.env.now - staff_wait_start
+                    whole_job_start = self.env.now
+
                 if node.widget.node_type in {"automated analyzer", "manual analyzer"}:
                     total_processing_time = yield from self._process_analyzer_node(
                         node=node,
@@ -1331,8 +1397,7 @@ class WorkflowSimulationEngine:
                     if self._node_requires_human_attention(node):
                         required_staff = max(1, int(node.widget.required_staff))
                         human_wait_start = self.env.now
-                        yield self.staff_pool.get(required_staff)
-                        self._emit_activity("staff_acquired", node, specimen, staff_count=required_staff)
+                        team = yield from self._acquire_staff(node, specimen, required_staff)
                         human_wait_time = self.env.now - human_wait_start
                         specimen.record_event(
                             node.widget.name,
@@ -1348,8 +1413,7 @@ class WorkflowSimulationEngine:
                         )
                         staff_busy_time = human_processing_time * required_staff
                         yield self.env.timeout(human_processing_time)
-                        yield self.staff_pool.put(required_staff)
-                        self._emit_activity("staff_released", node, specimen, staff_count=required_staff)
+                        yield from self._release_staff(node, specimen, team)
                         specimen.record_event(
                             node.widget.name,
                             "human_finished",
@@ -1372,6 +1436,13 @@ class WorkflowSimulationEngine:
                         processing_time=total_processing_time,
                         time=self.env.now,
                     )
+
+                if whole_job_team:
+                    stats = self.node_stats[node.node_id]
+                    stats.total_staff_busy_time += (self.env.now - whole_job_start) * len(whole_job_team)
+                    stats.total_wait_time += whole_job_wait
+                    stats.total_time_spent += whole_job_wait
+                    yield from self._release_staff(node, specimen, whole_job_team)
 
             self._emit_activity("finished", node, specimen)
             if next_node_override:
@@ -1514,7 +1585,7 @@ def run_workflow_simulation(
     )
     specimens = _build_specimens_from_orders(orders) if orders is not None else None
     resolved_specimens_number = len(specimens) if specimens is not None else specimens_number
-    scenario = scenario or (workflow_document.workflow.scenarios[0] if workflow_document.workflow.scenarios else None)
+    scenario = scenario or workflow_document.workflow.active_scenario
     settings = WorkflowSimulationSettings.from_scenario(
         specimens_number=resolved_specimens_number,
         workflow=workflow_document.workflow,
@@ -1553,7 +1624,7 @@ def run_and_print_workflow_simulation(
     workflow_document = load_workflow_document_for_simulation(repository, workflow_id=workflow_id)
     specimens = _build_specimens_from_orders(orders) if orders is not None else None
     resolved_specimens_number = len(specimens) if specimens is not None else specimens_number
-    scenario = workflow_document.workflow.scenarios[0] if workflow_document.workflow.scenarios else None
+    scenario = workflow_document.workflow.active_scenario
     settings = WorkflowSimulationSettings.from_scenario(
         specimens_number=resolved_specimens_number,
         workflow=workflow_document.workflow,

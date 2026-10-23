@@ -20,7 +20,7 @@ class LiveSimulationSession:
         if staff_capacity is not None and (not isinstance(staff_capacity, int) or staff_capacity < 1):
             raise ValueError('Available staff must be a positive whole number.')
         self.workflow = Workflow.from_dict(workflow.to_dict())
-        self.scenario = Scenario.from_dict(scenario.to_dict()) if scenario else self.workflow.scenarios[0]
+        self.scenario = Scenario.from_dict(scenario.to_dict()) if scenario else self.workflow.active_scenario
         self.events = SimpleQueue()
         self.condition = Condition()
         self.state = 'stopped'
@@ -33,6 +33,7 @@ class LiveSimulationSession:
         self._thread = None
         self._counts = {}
         self.staff_assignments = {}
+        self.staff_waiting = {}
         self._staff_random = random.Random(seed)
         self.equipment_types = dict(equipment_types or {})
         self.workflow = resolve_equipment_workflow(self.workflow, self.equipment_types)
@@ -54,8 +55,13 @@ class LiveSimulationSession:
             raise ValueError('Connect an enabled workflow source before starting the simulation.')
 
     def _activity(self, event):
+        if event['event'] == 'staff_waiting':
+            self.staff_waiting[(event['node_id'], event['specimen_id'])] = dict(event)
+            self.events.put(dict(event))
+            return
         if event['event'] in ('staff_acquired', 'staff_released'):
             key = (event['node_id'], event['specimen_id'])
+            self.staff_waiting.pop(key, None)
             if event['event'] == 'staff_released':
                 self.staff_assignments.pop(key, None)
             else:
@@ -187,6 +193,9 @@ class LiveSimulationSession:
                                            for equipment_id, resource in self.engine.equipment_resources.items()},
                     'staff_capacity': self.engine.staff_capacity,
                     'staff_available': self.engine.staff_pool.level,
+                    'staff_waiting': deepcopy(list(self.staff_waiting.values())),
+                    'equipment_waiting': {node_id: len(resource.queue)
+                                          for node_id, resource in self.engine.node_resources.items()},
                     'staff_assignments': deepcopy(list(self.staff_assignments.values()))}
 
     def _run(self):

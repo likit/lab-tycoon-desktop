@@ -9,7 +9,7 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
 from app.config import secret_key, logger
-from app.ui_styles import DANGER_BUTTON_COLOR
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 from app.system.models import engine, User, UserRole
 
 
@@ -66,7 +66,7 @@ def create_signin_window():
         [sg.Button('Submit'), sg.Exit(button_color=DANGER_BUTTON_COLOR)],
     ]
 
-    window = sg.Window('Sign In', layout=layout, modal=True)
+    window = create_window('Sign In', layout=layout, modal=True)
     access_token = ''
     expiration_datetime = datetime.now() - timedelta(hours=1)
 
@@ -126,7 +126,7 @@ def create_profile_window():
              ],
         ]
 
-        window = sg.Window('User Profile', layout=layout, modal=True)
+        window = create_window('User Profile', layout=layout, modal=True)
 
         while True:
             event, values = window.read()
@@ -155,7 +155,7 @@ def create_password_setting_window():
         [sg.Text('Confirm Password', size=(15, 1)), sg.InputText(key='-CF-PWD-', password_char='*')],
         [sg.Button('Submit'), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)]
     ]
-    window = sg.Window('User Profile', layout=layout, modal=True)
+    window = create_window('User Profile', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -193,7 +193,7 @@ def create_register_window():
         [sg.Button('Submit'), sg.Exit(button_color=DANGER_BUTTON_COLOR)],
     ]
 
-    window = sg.Window('Register', layout=layout, modal=True)
+    window = create_window('Register', layout=layout, modal=True)
 
     while True:
         event, values = window.read()
@@ -235,7 +235,7 @@ def create_user_list_window():
             [sg.Exit('Close', button_color=DANGER_BUTTON_COLOR)]
         ]
 
-        window = sg.Window('Users', layout=layout, resizable=True, modal=True, finalize=True)
+        window = create_window('Users', layout=layout, resizable=True, modal=True, finalize=True)
         window['-TABLE-'].bind("<Double-Button-1>", " Double")
 
         while True:
@@ -287,7 +287,7 @@ def create_admin_user_role_window(username):
             layout.append(
                 [sg.Button('Update'), sg.Button('Close', button_color=DANGER_BUTTON_COLOR)]
             )
-        window = sg.Window('User Roles', layout, modal=True)
+        window = create_window('User Roles', layout, modal=True)
         while True:
             event, values = window.read()
             if event in ['Close', sg.WIN_CLOSED]:

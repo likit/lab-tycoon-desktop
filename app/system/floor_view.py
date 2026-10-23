@@ -14,7 +14,7 @@ from typing import Callable, Iterable
 import FreeSimpleGUI as sg
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
-from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR, bring_window_to_front
 from app.auth.windows import login_required
 from app.project import LabTycoonProject, ProjectEquipmentInstance, ProjectFloor
 from app.system.live_simulation import LiveSimulationSession
@@ -550,7 +550,8 @@ class FloorViewRenderer:
         groups = {}
         for allocation in self.live_staff:
             key = (allocation['equipment_id'], allocation.get('activity', 'processing'))
-            group = groups.setdefault(key, dict(allocation, staff_count=0))
+            group = groups.setdefault(key, dict(allocation, staff_count=0, staff_names=[]))
+            group['staff_names'].extend(allocation.get('staff_names', []))
             group['staff_count'] += allocation['staff_count']
         instances = {item.instance_id: item for item in self.floor_plan.equipment_instances}
         slots = {}
@@ -586,7 +587,7 @@ class FloorViewRenderer:
                                     fill='#1e3a8a', outline='white', tags='attending-staff')
             self.canvas.create_text(x, y - 184, text=str(allocation['staff_count']),
                                     fill='white', font=('Arial', 11, 'bold'), tags='attending-staff')
-            self.canvas.create_text(x, y + 12, text=activity.title(), fill='white',
+            self.canvas.create_text(x, y + 12, text=activity.title() + ('\n' + ', '.join(allocation['staff_names']) if allocation['staff_names'] else ''), fill='white',
                                     font=('Arial', 9, 'bold'), tags='attending-staff')
 
     def _draw_queue_badge(self, x: float, y: float, counts: dict) -> None:
@@ -1028,19 +1029,22 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
     workflow_labels = {f"{item.name} [{item.workflow_id[:8]}]": item.workflow for item in project.workflows}
     settings_layout = [
         [sg.Text("Setup", font=("Arial", 16, "bold"))],
-        [sg.Text("Scenario", size=(16, 1)),
-         sg.Combo([], key="-LIVE-SCENARIO-", readonly=True, size=(12, 1))],
+        [sg.Text("Active scenario", size=(16, 1)),
+         sg.Combo([], key="-LIVE-SCENARIO-", readonly=True, enable_events=True, size=(12, 1))],
         [sg.Text("Specimens/orders", size=(16, 1)),
          sg.Input("10", key="-LIVE-COUNT-", size=(12, 1))],
         [sg.Text("Seed", size=(16, 1)),
          sg.Input("", key="-LIVE-SEED-", size=(12, 1))],
         [sg.Text("Speed (h/sec)", size=(16, 1), tooltip="Simulation hours per second"),
          sg.Input("0.05", key="-LIVE-SPEED-", size=(12, 1), tooltip="Simulation hours per second")],
-        [sg.Text("Available staff", size=(16, 1)),
+        [sg.Button("Manage Scenarios", key="-LIVE-MANAGE-SCENARIOS-")],
+        [sg.Text("", key="-LIVE-SCENARIO-SUMMARY-", size=(32, 3))],
+        [sg.Text("Staff for this run", size=(16, 1)),
          sg.Input("", key="-LIVE-STAFF-", size=(12, 1))],
-        [sg.Text("Blank staff uses scenario settings", text_color="#64748b")],
+        [sg.Text("Staff changes apply to this run only", text_color="#64748b")],
+        [sg.Button("Save to scenario", key="-LIVE-SAVE-SCENARIO-")],
         [sg.Text("", key="-LIVE-STAFF-STATUS-", size=(30, 1))],
-        [sg.Text("", key="-LIVE-NODES-", size=(32, 2))],
+        [sg.Text("", key="-LIVE-NODES-", size=(38, 6))],
         [sg.HorizontalSeparator()],
         *_equipment_panel_layout(),
     ]
@@ -1072,7 +1076,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
          sg.Button("Remove Equipment", key="-REMOVE-EQUIPMENT-", disabled=True),
          sg.Push(), sg.CloseButton("Back to Home" if main_workspace else "Close", key="Close", button_color=DANGER_BUTTON_COLOR)],
     ]
-    window = sg.Window(
+    window = create_window(
         f"Lab Tycoon — {project.name} — Floor Plan" if main_workspace else "Lab Tycoon — Floor View",
         layout,
         size=(window_width, window_height),
@@ -1145,7 +1149,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
         window["-FLOW-PLAY-"].update(disabled=state in ('playing', 'saving'), disabled_button_color=("#374151", "#e5e7eb"))
         window["-FLOW-PAUSE-"].update(disabled=state != 'playing', disabled_button_color=("#374151", "#e5e7eb"))
         window["-FLOW-STOP-"].update(disabled=not active or state == 'saving', disabled_button_color=("#374151", "#e5e7eb"))
-        for key in ('-FLOOR-WORKFLOW-', '-LIVE-SCENARIO-', '-LIVE-COUNT-', '-LIVE-SEED-', '-LIVE-SPEED-', '-LIVE-STAFF-'):
+        for key in ('-FLOOR-WORKFLOW-', '-LIVE-SCENARIO-', '-LIVE-COUNT-', '-LIVE-SEED-', '-LIVE-SPEED-', '-LIVE-STAFF-', '-LIVE-MANAGE-SCENARIOS-', '-LIVE-SAVE-SCENARIO-'):
             window[key].update(disabled=active)
         detail = f" · {snapshot.get('time', 0):.3f} h · {snapshot.get('completed', 0)}/{snapshot.get('total', 0)} completed" if session else ''
         if session is not None and state == 'completed' and session.result:
@@ -1154,21 +1158,53 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
         window['-LIVE-STAFF-STATUS-'].update(
             f"Free {snapshot['staff_available']} / {snapshot['staff_capacity']} staff" if session else '')
         counts = snapshot.get('counts', {}) if state in ('playing', 'paused', 'saving') else {}
-        work = [f"{node.widget.name}: {counts[node.node_id]['queued']} queued, {counts[node.node_id]['active']} active"
-                for node in renderer.workflow.graph.iter_nodes()
-                if node.node_id in counts and (counts[node.node_id]['queued'] or counts[node.node_id]['active'])]
+        work = []
+        for node in renderer.workflow.graph.iter_nodes():
+            node_counts = counts.get(node.node_id, {})
+            if not (node_counts.get('queued') or node_counts.get('active')):
+                continue
+            waiting = sum(e['node_id'] == node.node_id for e in snapshot.get('staff_waiting', []))
+            equipment_wait = snapshot.get('equipment_waiting', {}).get(node.node_id, 0)
+            names = [name for allocation in snapshot.get('staff_assignments', [])
+                     if allocation['node_id'] == node.node_id for name in allocation.get('staff_names', [])]
+            detail = f"{node.widget.name}: {equipment_wait} waiting for equipment/node capacity, {waiting} waiting for staff"
+            if names:
+                detail += ' · Working: ' + ', '.join(names)
+            work.append(detail)
         window['-LIVE-NODES-'].update(' | '.join(work) if work else ('No pending work' if session else ''))
         if snapshot.get('error'):
             window['-FLOOR-STATUS-'].update('Simulation failed: ' + snapshot['error'])
 
+    def selected_saved_scenario():
+        # Saved settings belong to the project; a live session owns a run-local copy.
+        workflow = workflow_labels[window['-FLOOR-WORKFLOW-'].get()]
+        label = window['-LIVE-SCENARIO-'].get()
+        return workflow, next((item for item in workflow.scenarios
+            if f"{item.name} [{item.scenario_id[:8]}]" == label), workflow.active_scenario)
+
+    def show_scenario_settings():
+        from app.system.scenario_editor import scenario_settings
+        workflow, scenario = selected_saved_scenario()
+        settings = scenario_settings(workflow, scenario)
+        window['-LIVE-STAFF-'].update(str(settings['staff_capacity']))
+        window['-LIVE-SCENARIO-SUMMARY-'].update(
+            f"Saved staff: {settings['staff_capacity']} · Arrival: {settings['arrival_minutes']:g} min\n"
+            f"Variation: equipment {settings['system_variation']:.0%}, human {settings['human_variation']:.0%}")
+
     def refresh_scenarios() -> None:
-        choices = [f"{item.name} [{item.scenario_id[:8]}]" for item in renderer.workflow.scenarios]
-        selected = choices[0] if choices else ''
-        if renderer.live_session is not None:
+        workflow = workflow_labels[window['-FLOOR-WORKFLOW-'].get()]
+        choices = [f"{item.name} [{item.scenario_id[:8]}]" for item in workflow.scenarios]
+        active = workflow.active_scenario
+        selected = f'{active.name} [{active.scenario_id[:8]}]'
+        running = renderer.live_session is not None and renderer.live_session.state in ('playing', 'paused', 'saving')
+        if running:
             scenario_id = renderer.live_session.scenario.scenario_id
-            selected = next((label for label, item in zip(choices, renderer.workflow.scenarios)
+            selected = next((label for label, item in zip(choices, workflow.scenarios)
                              if item.scenario_id == scenario_id), selected)
         window['-LIVE-SCENARIO-'].update(values=choices, value=selected)
+        show_scenario_settings()
+        if running:
+            window['-LIVE-STAFF-'].update(str(renderer.live_session.engine.staff_capacity))
 
     refresh_scenarios()
     update_live_controls()
@@ -1338,11 +1374,37 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
             window['-FLOOR-WORKFLOW-'].update(values=list(workflow_labels), value=selected_label)
             if renderer.live_session is None:
                 renderer.workflow = workflow_labels[selected_label]
-                refresh_scenarios()
+            refresh_scenarios()
             window['-LAB-PROJECT-NAME-'].update(project.display_name)
             last_frame = monotonic()
             renderer.sync_live_session()
             renderer.render()
+        elif event == '-LIVE-SCENARIO-':
+            if renderer.live_session is None or renderer.live_session.state not in ('playing', 'paused', 'saving'):
+                workflow, scenario = selected_saved_scenario()
+                workflow.select_scenario(scenario.scenario_id)
+                project.mark_dirty()
+                show_scenario_settings()
+        elif event in ('-LIVE-MANAGE-SCENARIOS-', '-LIVE-SAVE-SCENARIO-'):
+            if renderer.live_session is not None and renderer.live_session.state in ('playing', 'paused', 'saving'):
+                continue
+            from app.system.scenario_editor import open_scenario_manager, configure_scenario, scenario_settings
+            workflow, scenario = selected_saved_scenario()
+            if event == '-LIVE-MANAGE-SCENARIOS-':
+                open_scenario_manager(workflow, on_change=project.mark_dirty)
+            else:
+                try:
+                    settings = scenario_settings(workflow, scenario)
+                    configure_scenario(workflow, name=scenario.name, description=scenario.description,
+                        staff=_values['-LIVE-STAFF-'], arrival_minutes=settings['arrival_minutes'],
+                        system_variation=settings['system_variation'], human_variation=settings['human_variation'],
+                        source=scenario)
+                    project.mark_dirty()
+                    window['-FLOOR-STATUS-'].update('Staff setting saved to scenario; save the project to keep it on disk.')
+                except (ValueError, TypeError) as exc:
+                    sg.popup_error(str(exc), keep_on_top=True)
+            refresh_scenarios()
+            last_frame = monotonic()
         elif event == "-TOGGLE-FLOOR-PANEL-":
             panel_visible = not panel_visible
             canvas.configure(width=max(100, window.TKroot.winfo_width() -

@@ -131,3 +131,63 @@ available for these bound nodes. Completed test codes travel with the order to
 the reporting station and appear in the results feed. With no selected menu,
 generated orders request `SIM-TEST`, an explicit simulation placeholder; select
 test codes to simulate those tests. Numeric assay measurements are not generated.
+
+### Saved scenarios
+
+Use **Simulation → Scenarios** after opening a project, or **Manage** beside the
+Workflow window's active-scenario selector. **Add Scenario** opens settings before creating
+anything. Create from defaults, edit, duplicate, delete, or run a selected
+scenario. Each configuration saves an explicit staff count, generated-order
+arrival interval in minutes (0 releases orders together), and optional equipment
+and human variation (0.10 means 10%). Duplicates retain processing overrides and
+other existing parameters; edits preserve the scenario ID. Keep at least one
+scenario per workflow.
+
+The floor's **Setup & Equipment** panel shows saved scenario settings and fills
+**Staff for this run** with the resolved staff count. Changes there affect only
+the next run unless **Save to scenario** is selected. Save the project to retain
+scenario changes on disk. Scenario controls are disabled while a live run is
+playing, paused, or saving. Older scenarios retain their implicit defaults until
+edited or explicitly saved.
+
+### Named simulation workforce and node permissions
+
+Edit a scenario to add, rename, or remove simulated staff. Select an analyzer or
+process node in the Workflow Editor, open **Edit Properties**, and click
+**Allowed staff** beside the staffing settings. This edits the active scenario
+shown in the node window. You can also select a node in the scenario's
+permissions table and click **Allowed staff**. Select names or use **All staff**
+to include the entire roster, including people added later. These permissions
+belong to the simulation scenario and do not change LIS accounts or roles.
+
+**Required staff** remains a node property: that many eligible people must be
+free together. Workers are shared across all nodes and are reserved as a complete
+team. Zero required staff means unattended work. With a positive human rate,
+workers are held during human processing (manual analyzers hold them during the
+tests; preparation batches share one team). With no separate human rate, a
+positive required count reserves the team during node processing. Runs reject
+insufficient eligibility or assignments to removed staff; edit the affected
+assignments before running. Renaming staff preserves assignments through IDs.
+
+The floor displays worker names at their stations and distinguishes waiting for
+staff from waiting for equipment/node capacity. Save the project to persist the
+roster and scenario-specific node assignments. Scenario duplication copies both
+without sharing mutable state. A run-only headcount override retains the first
+N roster members; added workers receive generated names. If an override removes
+an explicitly assigned worker, update the roster/assignments or choose a larger
+headcount before running.
+
+### Active scenario
+
+Choose **Active scenario** in the Workflow Editor or Floor View, or select a
+scenario in Manage Scenarios and click **Use scenario**. One scenario is active
+per workflow. It supplies the default for repeated runs and node staff
+permissions until you select another. Save the project to retain the selection
+when reopening it. Choosing a different scenario in the Run dialog makes that
+scenario active when you click Run; cancelling does not change the selection.
+
+Node configuration labels distinguish shared node settings (including Required
+staff, capacity, processing rates, and batching) from Allowed staff for the
+named active scenario. Editing a different scenario in the manager does not
+automatically make it active. If the active scenario is deleted, the first
+remaining scenario becomes active. Older projects default to their first scenario.

@@ -11,7 +11,7 @@ from typing import Any, Callable
 import FreeSimpleGUI as sg
 
 from app.auth.windows import login_required
-from app.ui_styles import DANGER_BUTTON_COLOR, bring_window_to_front
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR, bring_window_to_front
 from app.project import ProjectEquipmentInstance
 from app.system.floor_view import EQUIPMENT_CATALOG, EquipmentMetadata
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.system.models import Test, engine
 from app.system.model import Scenario, Workflow, WorkflowNode
+from app.system.scenario_editor import scenario_settings
 from app.system.order_adapter import ADAPTER_TYPES
 from app.system.staff_batching import DEFAULT_BATCH_SIZE, DEFAULT_BATCH_WAIT_MINUTES, validate_batch_settings
 from app.system.storage import WorkflowDocument, WorkflowRepository
@@ -152,6 +153,8 @@ def _bind_graph_double_click_properties(
 def _show_node_form_dialog(
     node: WorkflowNode | None,
     equipment_choices: list[tuple[str, str]] | None = None,
+    configure_staff: Callable[[WorkflowNode], None] | None = None,
+    active_scenario_name: str = "",
 ) -> dict[str, Any] | None:
     """Prompt for node configuration values."""
 
@@ -191,10 +194,13 @@ def _show_node_form_dialog(
         ],
         [sg.Text("Name"), sg.Input(node.widget.name, key="-NAME-", expand_x=True)],
         [sg.Column([
+            [sg.Text("Shared node settings — all scenarios", text_color="#64748b")],
             [sg.Text("Processing Capacity (per hours)"), sg.Input(str(node.widget.throughput), key="-THROUGHPUT-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.throughput), key="-THROUGHPUT-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
             [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.human_throughput), key="-HUMAN-THROUGHPUT-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
             [sg.Text("Capacity"), sg.Input(str(node.widget.capacity), key="-CAPACITY-", size=(14, 1))],
             [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff), key="-STAFF-", size=(14, 1))],
+            [sg.Button("Allowed staff", key="-NODE-ALLOWED-STAFF-", disabled=configure_staff is None),
+             sg.Text(f"Scenario: {active_scenario_name}", text_color="#2563eb")],
             [sg.Text("Attend at"), sg.Combo(list(attendance_choices), default_value=attendance_label,
                                           key="-ATTEND-AT-", readonly=True, size=(38, 1))],
         ], key="-PROCESSING-FIELDS-", visible=current_type != "order adapter")],
@@ -213,12 +219,15 @@ def _show_node_form_dialog(
         [sg.Checkbox("Enabled", default=node.widget.enabled, key="-ENABLED-")],
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
+    window = create_window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
     try:
         while True:
             event, values = window.read()
             if event in ("Cancel", sg.WIN_CLOSED):
                 return None
+            if event == "-NODE-ALLOWED-STAFF-" and configure_staff is not None:
+                configure_staff(node)
+                continue
             if event in ("-THROUGHPUT-", "-HUMAN-THROUGHPUT-"):
                 window[f"{event}TIME-"].update(_capacity_time_label(values.get(event)))
                 continue
@@ -290,7 +299,7 @@ def _show_resource_dialog(node: WorkflowNode | None = None) -> tuple[str, str, b
         [sg.Checkbox("Enabled", default=node.widget.enabled if node else True, key="-RESOURCE-ENABLED-")],
         [sg.Button("Save"), sg.Button("Cancel")],
     ]
-    dialog = sg.Window("Resource Settings", layout, modal=True, finalize=True, keep_on_top=True)
+    dialog = create_window("Resource Settings", layout, modal=True, finalize=True, keep_on_top=True)
     try:
         while True:
             event, values = dialog.read()
@@ -374,7 +383,7 @@ def _show_test_selection_dialog(
             sg.Button("Cancel"),
         ],
     ]
-    window = sg.Window(
+    window = create_window(
         "Analyzer Tests",
         layout=layout,
         modal=True,
@@ -920,7 +929,7 @@ class WorkflowEditorController:
             window["-WF-NAME-"].update("No workflow loaded")
             window["-WF-SUMMARY-"].update("Create a workflow to begin.")
             window["-WF-STATUS-"].update("Status: No workflow", text_color="#64748b")
-            window["-WF-SCENARIOS-"].update(values=[])
+            window["-WF-ACTIVE-SCENARIO-"].update(values=[], value="")
             window["-WF-WIDGETS-"].update(values=[])
             window["-WF-DETAILS-"].update("Select a node to edit its properties.")
             self.update_analyzer_tests_button(window)
@@ -932,12 +941,10 @@ class WorkflowEditorController:
         window["-WF-SUMMARY-"].update(
             f"Nodes: {len(workflow.graph.nodes)} | Edges: {len(workflow.graph.edges)} | Scenarios: {len(workflow.scenarios)}"
         )
-        window["-WF-SCENARIOS-"].update(
-            values=[
-                [scenario.name, scenario.description or "-", len(scenario.widget_service_times)]
-                for scenario in workflow.scenarios
-            ]
-        )
+        scenario_labels = {f"{s.name} [{s.scenario_id[:8]}]": s for s in workflow.scenarios}
+        active_label = next((label for label, s in scenario_labels.items()
+                             if s is workflow.active_scenario), "")
+        window["-WF-ACTIVE-SCENARIO-"].update(values=list(scenario_labels), value=active_label)
         window["-WF-WIDGETS-"].update(
             values=[
                 [
@@ -1172,6 +1179,11 @@ class WorkflowEditorController:
                     stack.append(edge.target)
         return True
 
+    def configure_node_staff(self, node: WorkflowNode) -> None:
+        from app.system.scenario_editor import node_staff_dialog
+        if node_staff_dialog(self.current_document.workflow, node):
+            self.persist_current_workflow()
+
     def persist_current_workflow(self, window: sg.Window | None = None) -> str:
         """Write the current workflow document to disk."""
 
@@ -1281,8 +1293,13 @@ class WorkflowEditorController:
         if self.current_document is None:
             raise ValueError("No workflow is loaded.")
         scenario_name = f"Scenario {len(self.current_document.workflow.scenarios) + 1}"
-        scenario = Scenario(name=scenario_name, description="Alternative run configuration")
-        self.current_document.workflow.add_scenario(scenario)
+        from app.system.scenario_editor import configure_scenario
+        workflow = self.current_document.workflow
+        while any(s.name == scenario_name for s in workflow.scenarios):
+            scenario_name += ' copy'
+        settings = scenario_settings(workflow, Scenario(name=''))
+        configure_scenario(workflow, name=scenario_name, staff=settings['staff_capacity'],
+                           arrival_minutes=0)
         self.persist_current_workflow(window)
         return scenario_name
 
@@ -1753,7 +1770,7 @@ def _show_node_properties_dialog(
         [sg.Checkbox("Enabled", default=node.widget.enabled, key="-ENABLED-")],
         [sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
+    window = create_window("Node Properties", layout=layout, modal=True, finalize=True, keep_on_top=True)
     try:
         while True:
             event, values = window.read()
@@ -1804,6 +1821,7 @@ def _show_equipment_node_dialog(
     )
     layout = [
         [sg.Text("Equipment Resource", font=("Arial", 16, "bold"))],
+        [sg.Text("Shared node settings — all scenarios", text_color="#64748b")],
         [
             sg.Text("Resource", size=(12, 1)),
             sg.Combo(
@@ -1819,6 +1837,9 @@ def _show_equipment_node_dialog(
         [sg.Text("Human Processing Capacity (per hour)"), sg.Input(str(node.widget.human_throughput if node else 0.0), key="-WF-EQUIPMENT-HUMAN-", size=(14, 1), enable_events=True), sg.Text(_capacity_time_label(node.widget.human_throughput if node else 0.0), key="-WF-EQUIPMENT-HUMAN-TIME-", size=(29, 1), tooltip=_CAPACITY_TIME_TOOLTIP)],
         [sg.Text("Capacity"), sg.Input(str(node.widget.capacity if node else 1), key="-WF-EQUIPMENT-CAPACITY-", size=(14, 1))],
         [sg.Text("Required staff"), sg.Input(str(node.widget.required_staff if node else 0), key="-WF-EQUIPMENT-STAFF-", size=(14, 1))],
+        [sg.Button("Allowed staff", key="-WF-EQUIPMENT-ALLOWED-STAFF-", disabled=node is None,
+                   tooltip="Save a new node before assigning staff."),
+         sg.Text(f"Scenario: {controller.current_document.workflow.active_scenario.name}", text_color="#2563eb")],
         [sg.Text("Description"), sg.Multiline(node.widget.description if node else "", key="-WF-EQUIPMENT-DESC-", size=(42, 4))],
         [sg.Frame("Output", [[
             sg.Checkbox("Data", default=bool(node.metadata.get("output_data", False)) if node else False,
@@ -1832,11 +1853,12 @@ def _show_equipment_node_dialog(
         [sg.Text("Operating settings belong to this workflow node, not the floor equipment.", text_color="#64748b")],
         [sg.Push(), sg.Button("Save", key="-SAVE-", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Equipment Node", layout, modal=True, finalize=True, keep_on_top=True)
+    window = create_window("Equipment Node", layout, modal=True, finalize=True, keep_on_top=True)
     def update_role_fields() -> None:
         equipment_id = label_to_id.get(window["-WF-EQUIPMENT-"].get(), "")
         terminal = controller.is_reporting_station(equipment_id)
         window["-WF-EQUIPMENT-ENDPOINT-"].update(visible=terminal)
+        window["-WF-EQUIPMENT-ALLOWED-STAFF-"].update(disabled=terminal or node is None)
         for key in ("THROUGHPUT", "HUMAN", "STAFF", "OUTPUT-DATA", "OUTPUT-SPECIMENS"):
             window[f"-WF-EQUIPMENT-{key}-"].update(disabled=terminal)
             if terminal:
@@ -1854,6 +1876,9 @@ def _show_equipment_node_dialog(
             event, values = window.read()
             if event in (sg.WIN_CLOSED, "Cancel"):
                 return None
+            if event == "-WF-EQUIPMENT-ALLOWED-STAFF-" and node is not None:
+                controller.configure_node_staff(node)
+                continue
             if event == "-WF-EQUIPMENT-":
                 update_role_fields()
                 update_capacity_times()
@@ -1910,7 +1935,7 @@ def _show_connection_target_dialog(controller: WorkflowEditorController) -> list
         [sg.Column(checkbox_rows, size=(440, min(360, max(60, len(choice_items) * 32))), scrollable=True, vertical_scroll_only=True)],
         [sg.Push(), sg.Button("Connect", key="-CONNECT-", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Connect Workflow Nodes", layout, modal=True, finalize=True, keep_on_top=True)
+    window = create_window("Connect Workflow Nodes", layout, modal=True, finalize=True, keep_on_top=True)
     try:
         while True:
             event, values = window.read()
@@ -1929,7 +1954,7 @@ def _show_connection_target_dialog(controller: WorkflowEditorController) -> list
         window.close()
 
 
-def _show_run_workflow_dialog(workflow: Workflow) -> tuple[str, int, int | None] | None:
+def _show_run_workflow_dialog(workflow: Workflow, *, selected_scenario_id=None) -> tuple[str, int, int | None] | None:
     """Choose a persisted scenario and size for one project simulation run."""
 
     choices = [(scenario.scenario_id, scenario.name) for scenario in workflow.scenarios]
@@ -1937,14 +1962,15 @@ def _show_run_workflow_dialog(workflow: Workflow) -> tuple[str, int, int | None]
         _notify("This workflow has no scenario to run.")
         return None
     labels = [f"{name} [{scenario_id[:8]}]" for scenario_id, name in choices]
+    selected_scenario_id = selected_scenario_id or workflow.active_scenario.scenario_id
     layout = [
         [sg.Text("Run Workflow", font=("Arial", 16, "bold"))],
-        [sg.Text("Scenario"), sg.Combo(labels, default_value=labels[0], key="-RUN-SCENARIO-", readonly=True, size=(36, 1))],
+        [sg.Text("Active scenario"), sg.Combo(labels, default_value=next((label for label, (sid, _) in zip(labels, choices) if sid == selected_scenario_id), labels[0]), key="-RUN-SCENARIO-", readonly=True, size=(36, 1))],
         [sg.Text("Orders to generate"), sg.Input("10", key="-RUN-ORDERS-", size=(12, 1))],
         [sg.Text("Random seed (optional)"), sg.Input("", key="-RUN-SEED-", size=(12, 1))],
         [sg.Push(), sg.Button("Run", key="-RUN-", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Run Workflow", layout, modal=True, finalize=True, keep_on_top=True)
+    window = create_window("Run Workflow", layout, modal=True, finalize=True, keep_on_top=True)
     try:
         while True:
             event, values = window.read()
@@ -1964,7 +1990,9 @@ def _show_run_workflow_dialog(workflow: Workflow) -> tuple[str, int, int | None]
                 if selected_label not in labels:
                     _notify("Select a scenario.")
                     continue
-                return choices[labels.index(selected_label)][0], orders_number, random_seed
+                scenario_id = choices[labels.index(selected_label)][0]
+                workflow.select_scenario(scenario_id)
+                return scenario_id, orders_number, random_seed
     finally:
         window.close()
 
@@ -2074,19 +2102,9 @@ def open_workflow_editor_window(
                             enable_events=True,
                         )
                     ],
-                    [sg.Text("Scenarios", font=("Arial", 14, "bold"))],
-                    [
-                        sg.Table(
-                            values=[],
-                            headings=["Scenario", "Description", "Overrides"],
-                            key="-WF-SCENARIOS-",
-                            auto_size_columns=True,
-                            expand_x=True,
-                            num_rows=4,
-                            alternating_row_color="lightgreen",
-                            font=("Arial", 11),
-                        )
-                    ],
+                    [sg.Text("Active scenario"), sg.Combo([], key="-WF-ACTIVE-SCENARIO-",
+                        readonly=True, enable_events=True, size=(32, 1)),
+                     sg.Button("Manage", key="-WF-MANAGE-SCENARIOS-")],
                     [sg.Text("Workflow nodes", font=("Arial", 14, "bold"))],
                     [
                         sg.Table(
@@ -2110,7 +2128,7 @@ def open_workflow_editor_window(
         ],
     ]
 
-    window = sg.Window(
+    window = create_window(
         "Workflow Editor",
         layout=layout,
         modal=False,
@@ -2158,7 +2176,8 @@ def open_workflow_editor_window(
                     if settings is not None:
                         controller.bind_selected_equipment(window=window, **settings)
                 else:
-                    result = _show_node_form_dialog(node, controller.equipment_choices())
+                    result = _show_node_form_dialog(node, controller.equipment_choices(), controller.configure_node_staff,
+                        controller.current_document.workflow.active_scenario.name)
                     if result is not None and node is not None:
                         if result["node_type"] == "order adapter":
                             controller.update_order_adapter_from_form(node.node_id, window=window, **result)
@@ -2236,16 +2255,38 @@ def open_workflow_editor_window(
                     controller.load_workflow_by_row(selected_row)
                     controller.refresh(window)
                     controller.focus_diagram(window)
-                elif event == "-WF-ADD-SCENARIO-":
-                    scenario_name = controller.add_scenario(window)
+                elif event == "-WF-ACTIVE-SCENARIO-":
+                    if controller.current_document is not None:
+                        workflow = controller.current_document.workflow
+                        label = values.get("-WF-ACTIVE-SCENARIO-")
+                        scenario = next((s for s in workflow.scenarios
+                            if f"{s.name} [{s.scenario_id[:8]}]" == label), None)
+                        if scenario is not None:
+                            workflow.select_scenario(scenario.scenario_id)
+                            controller.persist_current_workflow(window)
+                            controller.refresh_summary(window)
+                elif event in ("-WF-ADD-SCENARIO-", "-WF-MANAGE-SCENARIOS-"):
+                    if controller.current_document is None:
+                        _notify("Create or load a workflow first.")
+                        continue
+                    from app.system.scenario_editor import scenario_dialog, open_scenario_manager
+                    workflow = controller.current_document.workflow
+                    if event == "-WF-ADD-SCENARIO-":
+                        if scenario_dialog(workflow) is not None:
+                            controller.persist_current_workflow(window)
+                    else:
+                        open_scenario_manager(workflow,
+                            on_change=lambda: controller.persist_current_workflow(window),
+                            run_simulation=run_simulation)
                     controller.refresh_summary(window)
-                    _notify(f"{scenario_name} added.")
                 elif event == "-WF-RUN-" and run_simulation is not None:
                     if controller.current_document is None:
                         _notify("Create or load a workflow before running it.")
                         continue
                     run_settings = _show_run_workflow_dialog(controller.current_document.workflow)
                     if run_settings is not None:
+                        controller.persist_current_workflow(window)
+                        controller.refresh_summary(window)
                         summary = run_simulation(*run_settings)
                         sg.popup(
                             f"Scenario: {summary.scenario_name}\n"
@@ -2296,7 +2337,8 @@ def open_workflow_editor_window(
                             controller.bind_selected_equipment(window=window, **settings)
                             controller.refresh(window)
                         continue
-                    result = _show_node_form_dialog(node, controller.equipment_choices())
+                    result = _show_node_form_dialog(node, controller.equipment_choices(), controller.configure_node_staff,
+                        controller.current_document.workflow.active_scenario.name)
                     if result is not None and node is not None:
                         if result["node_type"] == "order adapter":
                             controller.update_order_adapter_from_form(node.node_id, window=window, **result)

@@ -27,6 +27,8 @@ class Scenario:
     widget_service_times: dict[str, float] = field(default_factory=dict)
     parameters: dict[str, float | int | str | bool] = field(default_factory=dict)
     scenario_id: str = field(default_factory=lambda: uuid4().hex)
+    workforce: list[dict[str, str]] = field(default_factory=list)
+    staff_assignments: dict[str, list[str] | None] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the scenario for storage."""
@@ -37,6 +39,9 @@ class Scenario:
             "description": self.description,
             "widget_service_times": dict(self.widget_service_times),
             "parameters": dict(self.parameters),
+            "workforce": [dict(member) for member in self.workforce],
+            "staff_assignments": {key: None if ids is None else list(ids)
+                                  for key, ids in self.staff_assignments.items()},
         }
 
     @classmethod
@@ -48,6 +53,9 @@ class Scenario:
             description=str(data.get("description", "")),
             widget_service_times=dict(data.get("widget_service_times", {})),
             parameters=dict(data.get("parameters", {})),
+            workforce=[dict(member) for member in data.get("workforce", [])],
+            staff_assignments={key: None if ids is None else list(ids)
+                               for key, ids in data.get("staff_assignments", {}).items()},
             scenario_id=str(data.get("id") or uuid5(NAMESPACE_URL, f"labtycoon-scenario:{data.get('name', 'Default Scenario')}").hex),
         )
 
@@ -62,6 +70,18 @@ class Workflow:
     def __init__(self) -> None:
         self.graph = WorkflowGraph()
         self.scenarios: list[Scenario] = [Scenario(name="Default Scenario")]
+        self.active_scenario_id: str | None = self.scenarios[0].scenario_id
+
+    @property
+    def active_scenario(self) -> Scenario | None:
+        """Resolve old projects and deleted selections to the first scenario."""
+        return next((s for s in self.scenarios if s.scenario_id == self.active_scenario_id),
+                    self.scenarios[0] if self.scenarios else None)
+
+    def select_scenario(self, scenario_id: str) -> None:
+        if not any(s.scenario_id == scenario_id for s in self.scenarios):
+            raise ValueError('Select an existing scenario.')
+        self.active_scenario_id = scenario_id
 
     @property
     def widgets(self) -> list[BaseWidget]:
@@ -115,6 +135,7 @@ class Workflow:
             "edges": payload["edges"],
         }
         payload["scenarios"] = [scenario.to_dict() for scenario in self.scenarios]
+        payload["active_scenario_id"] = self.active_scenario.scenario_id if self.active_scenario else None
         return payload
 
     @classmethod
@@ -140,6 +161,8 @@ class Workflow:
             if isinstance(scenario_data, dict):
                 scenarios.append(Scenario.from_dict(scenario_data))
         workflow.scenarios = scenarios or [Scenario(name="Default Scenario")]
+        workflow.active_scenario_id = data.get('active_scenario_id')
+        workflow.active_scenario_id = workflow.active_scenario.scenario_id
         return workflow
 
     def get_node_ids(self) -> list[str]:
