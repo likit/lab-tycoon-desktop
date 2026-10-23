@@ -49,7 +49,7 @@ def add_project_workflow(project: LabTycoonProject) -> str | None:
 
 
 @login_required
-def choose_project_workflow(project: LabTycoonProject) -> str | None:
+def choose_project_workflow(project: LabTycoonProject, *, parent=None) -> str | None:
     """Choose an existing project workflow."""
 
     labels = {f"{item.name} [{item.workflow_id[:8]}]": item.workflow_id for item in project.workflows}
@@ -58,7 +58,8 @@ def choose_project_workflow(project: LabTycoonProject) -> str | None:
         [sg.Listbox(list(labels), default_values=[next(iter(labels))], key="-WORKFLOW-CHOICE-", size=(42, 7))],
         [sg.Button("Open"), sg.Button("Cancel")],
     ]
-    dialog = create_window("Project Workflows", layout, modal=True, finalize=True)
+    dialog = create_window("Project Workflows", layout, modal=True, finalize=True, parent=parent,
+                           always_on_top=True)
     bring_window_to_front(dialog)
     try:
         while True:
@@ -81,6 +82,8 @@ def open_project_workflow(project: LabTycoonProject, workflow_id: str = "main") 
     if selected is None:
         raise ValueError("The selected workflow is no longer available.")
     document = WorkflowDocument(selected.workflow_id, selected.name, selected.workflow)
+    from app.config import update_config_yaml
+    update_config_yaml(active_workflow_id=selected.workflow_id, active_project_id=project.project_id)
     create_workflow_window(
         current_document=document,
         on_change=project.mark_dirty,
@@ -257,12 +260,46 @@ def load_customer_rows(
 
 
 @login_required
-def open_project_scenarios(project, workflow_id='main'):
+def create_lis_results_window() -> None:
+    """Review real LIS results without requiring a simulation project."""
+    rows = load_result_rows(source='LIS')
+    layout = [[sg.Text('Laboratory Results', font=('Arial', 18, 'bold'))],
+              [sg.Text('Select a result to view its details, reporting, and approval actions.')],
+              [sg.Table(values=rows, headings=RESULT_HEADINGS, key='results', num_rows=18,
+                        auto_size_columns=False, col_widths=[10, 10, 14, 22, 12, 16, 20, 20],
+                        expand_x=True, expand_y=True, enable_events=True)],
+              [sg.Text(f'{len(rows)} most recent LIS result items', key='result_count')],
+              [sg.Button('Open Result'), sg.Button('Refresh'), sg.Push(),
+               sg.Button('Close', button_color=DANGER_BUTTON_COLOR)]]
+    window = create_window('LIS Results', layout, resizable=True, modal=True)
+    window['results'].bind('<Double-Button-1>', ' Open')
+    try:
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, 'Close'):
+                break
+            if event in ('Open Result', 'results Open'):
+                selected = values.get('results', [])
+                if not selected:
+                    sg.popup_error('Select a result first.', keep_on_top=True)
+                    continue
+                from app.system.windows import create_item_detail_window
+                create_item_detail_window(rows[selected[0]][0])
+            if event in ('Refresh', 'Open Result', 'results Open'):
+                rows = load_result_rows(source='LIS')
+                window['results'].update(values=rows)
+                window['result_count'].update(f'{len(rows)} most recent LIS result items')
+    finally:
+        window.close()
+
+
+@login_required
+def open_project_scenarios(project, workflow_id='main', *, parent=None):
     from app.system.scenario_editor import open_scenario_manager
     selected = project.get_workflow(workflow_id)
     if selected is None:
         raise ValueError('The selected workflow is no longer available.')
-    open_scenario_manager(selected.workflow, on_change=project.mark_dirty,
+    open_scenario_manager(selected.workflow, on_change=project.mark_dirty, parent=parent,
         run_simulation=(lambda scenario_id, count, seed: run_project_scenario(
             project, scenario_id=scenario_id, orders_number=count, random_seed=seed))
             if workflow_id == 'main' else None)

@@ -22,7 +22,9 @@ from app.system.order_sources import (
     load_uploaded_order_source,
     use_sqlite_order_source,
     use_uploaded_order_source,
+    set_active_order_source,
 )
+from app.system.simulation_lis import SimulationLISOrderSource, choose_simulation_source
 from app.system.events import DomainEventName, publish_domain_event
 from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User, Doctor
 from app.system.model import Scenario, Workflow
@@ -436,7 +438,7 @@ def create_workflow_window():
         window.refresh()
 
     def set_active_workflow(document: WorkflowDocument | None) -> None:
-        update_config_yaml(active_workflow_id=document.workflow_id if document is not None else None)
+        update_config_yaml(active_workflow_id=document.workflow_id if document is not None else None, active_project_id=None)
 
     def open_editor_for_workflow(selected_row: int | None = None) -> None:
         global _current_workflow_document
@@ -1030,7 +1032,7 @@ def create_order_list_window():
     order_headings = ['ID', 'HN', 'Customer', 'Ordered At', 'Priority', 'Duplicate',
                       'Doctor', 'Status', 'Time', 'Items']
     flagged_order_headings = ['Order ID', 'HN', 'Patient', 'Ordered At', 'Priority', 'Test', 'Reason']
-    source_options = ['SQLite', 'Uploaded file']
+    source_options = ['SQLite', 'Uploaded file', 'Simulation']
     priority_chart_colors = {
         'urgent': '#d9534f',
         'routine': '#5cb85c',
@@ -1052,12 +1054,16 @@ def create_order_list_window():
 
     def order_source_label():
         source = get_active_order_source()
+        if isinstance(source, SimulationLISOrderSource):
+            return 'Simulation'
         if isinstance(source, SQLiteOrderSource):
             return 'SQLite'
         return 'Uploaded file'
 
     def update_source_status(window, source):
-        if isinstance(source, SQLiteOrderSource):
+        if isinstance(source, SimulationLISOrderSource):
+            message = f'Data source: Simulation → LIS demonstration ({source.count()} orders; run {source.run_id[:8]})'
+        elif isinstance(source, SQLiteOrderSource):
             message = f'Data source: SQLite ({source.count()} orders)'
         else:
             message = f'Data source: Uploaded file ({source.count()} loaded orders)'
@@ -1307,6 +1313,9 @@ def create_order_list_window():
     flagged_data = flagged_order_rows(flagged_orders)
 
     layout = [
+        [sg.Button('Analyze', key='-ANALYZE-SELECTED-ORDERS-'),
+         sg.Button('Analyze All', key='-ANALYZE-ALL-ORDERS-'),
+         sg.Text('Pending tests in selected orders, or all orders displayed below.')],
         [sg.TabGroup(
             [
                 [
@@ -1316,6 +1325,7 @@ def create_order_list_window():
                             [sg.Text(f'Total rows: {len(data)}', key='-ORDER-COUNT-')],
                             [sg.Table(values=data, headings=order_headings,
                                       key="-ORDER-TABLE-", auto_size_columns=True,
+                                      select_mode=sg.TABLE_SELECT_MODE_EXTENDED,
                                       alternating_row_color='lightblue',
                                       font=('Arial', 16),
                                       expand_x=True, expand_y=True,
@@ -1356,6 +1366,7 @@ def create_order_list_window():
             sg.Text('Data source:'),
             sg.Combo(source_options, default_value=order_source_label(), key='-DATA-SOURCE-', readonly=True, enable_events=True),
             sg.Button('Load Uploaded File', key='-LOAD-UPLOADED-'),
+            sg.Button('Load Simulation Run', key='-LOAD-SIMULATION-'),
             sg.Text('', key='-SOURCE-STATUS-', size=(42, 1)),
         ],
         [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
@@ -1365,7 +1376,8 @@ def create_order_list_window():
          sg.Button('Download Review Queue', key='-DOWNLOAD-REVIEW-'),
          sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
         [sg.Text('Activity Log', font=('Arial', 15, 'bold'))],
-        # [sg.Output(key='-OUTPUT-', size=(75,5), font=('Arial', 15))],
+        [sg.Multiline('', key='-ORDER-ACTIVITY-LOG-', size=(85, 3), disabled=True,
+                      expand_x=True, autoscroll=True)],
     ]
 
     window = create_window('Order List', layout=layout, modal=True, resizable=True, finalize=True)
@@ -1379,6 +1391,32 @@ def create_order_list_window():
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
+        elif event in ('-ANALYZE-SELECTED-ORDERS-', '-ANALYZE-ALL-ORDERS-'):
+            if not isinstance(get_active_order_source(), SQLiteOrderSource):
+                sg.popup_error('Select SQLite or import a Simulation run to analyze LIS orders.', keep_on_top=True)
+                continue
+            selected = values.get('-ORDER-TABLE-', [])
+            if event == '-ANALYZE-SELECTED-ORDERS-' and not selected:
+                sg.popup_error('Select one or more orders first.', keep_on_top=True)
+                continue
+            order_ids = [row[0] for row in data] if event == '-ANALYZE-ALL-ORDERS-' else [data[index][0] for index in selected]
+            from app.system.lis_analysis import pending_item_ids_for_orders
+            item_ids = pending_item_ids_for_orders(order_ids)
+            if not item_ids:
+                sg.popup_ok('No pending eligible tests in these orders.', keep_on_top=True)
+                continue
+            summary = run_lis_workflow_analysis(item_ids, parent=window)
+            if summary is not None:
+                window['-ORDER-ACTIVITY-LOG-'].update(
+                    f'{summary.workflow_name}: {summary.analyzed} tests analyzed; '
+                    f'{summary.makespan * 60:.2f} simulated minutes. Run {summary.run_id}\n', append=True)
+            data, flagged_orders, flagged_data = refresh_source_views(window)
+        elif event == '-LOAD-SIMULATION-' or (event == '-DATA-SOURCE-' and values['-DATA-SOURCE-'] == 'Simulation'):
+            source = choose_simulation_source(parent=window)
+            if source is not None:
+                set_active_order_source(source)
+            window['-DATA-SOURCE-'].update(order_source_label())
+            data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-DATA-SOURCE-':
             if values['-DATA-SOURCE-'] == 'SQLite':
                 use_sqlite_order_source()
@@ -1484,6 +1522,63 @@ def create_order_list_window():
 
 
 @login_required
+def run_lis_workflow_analysis(item_ids, *, parent=None):
+    from app.system.lis_analysis import (analysis_workflow_choices, default_analysis_workflow,
+                                         remember_analysis_workflow, analyze_lis_items)
+    from sqlalchemy.exc import SQLAlchemyError
+    try:
+        choices = analysis_workflow_choices()
+        chosen = default_analysis_workflow(choices)
+        documents = {choice.label: choice for choice in choices}
+        document = chosen.document
+    except (ValueError, OSError) as exc:
+        sg.popup_error(str(exc), keep_on_top=True)
+        return None
+    scenario = document.workflow.active_scenario
+    layout = [[sg.Text('Choose workflow', font=('Arial', 15, 'bold'))],
+              [sg.Combo(list(documents), default_value=chosen.label, key='workflow', readonly=True,
+                        enable_events=True, size=(60, 1))],
+              [sg.Text(f'Active scenario: {scenario.name if scenario else "None"}', key='scenario')],
+              [sg.Text('Your workflow selection is remembered for the next analysis.')],
+              [sg.Text(f'{len(item_ids)} test(s) selected. Finished or cancelled work is skipped.')],
+              [sg.Text('Unreceived orders start at reception; received orders start after reception.\n'
+                       'This generates simulated results. Reporting and approval remain manual.')],
+              [sg.Text('', key='status')],
+              [sg.Button('Analyze'), sg.Button('Cancel')]]
+    dialog = create_window('Analyze through active workflow', layout, modal=True, parent=parent)
+    try:
+        while True:
+            event, values = dialog.read()
+            if event in (sg.WIN_CLOSED, 'Cancel'):
+                return None
+            if event == 'workflow':
+                choice = documents.get(values.get('workflow'))
+                scenario = choice.document.workflow.active_scenario if choice else None
+                dialog['scenario'].update(f'Active scenario: {scenario.name if scenario else "None"}')
+            if event == 'Analyze':
+                choice = documents.get(values.get('workflow'))
+                if choice is None:
+                    sg.popup_error('Select a workflow first.', keep_on_top=True)
+                    continue
+                document = choice.document
+                dialog['status'].update('Running workflow simulation…')
+                dialog.refresh()
+                try:
+                    remember_analysis_workflow(choice)
+                    summary = analyze_lis_items(item_ids, workflow_document=document,
+                        operator_username=session_manager.current_user)
+                except (ValueError, OSError, SQLAlchemyError) as exc:
+                    sg.popup_error(f'Analysis was not saved: {exc}', keep_on_top=True)
+                    return None
+                sg.popup_ok(f'{summary.analyzed} tests analyzed; {summary.skipped} skipped.\n'
+                            f'Simulated elapsed time: {summary.makespan * 60:.2f} minutes.\n'
+                            f'Workflow run: {summary.run_id}', keep_on_top=True)
+                return summary
+    finally:
+        dialog.close()
+
+
+@login_required
 def create_order_item_list_window(lab_order_id):
     def load_item_list():
         with Session(engine) as session:
@@ -1526,6 +1621,7 @@ def create_order_item_list_window(lab_order_id):
             [sg.Table(values=items, headings=['Item ID', 'Code', 'Name', 'Result', 'Reported At',
                                               'Reporter', 'Approved At', 'Approver', 'Finished At', 'Cancelled At'],
                       key="-ORDER-ITEM-TABLE-",
+                      select_mode=sg.TABLE_SELECT_MODE_EXTENDED,
                       auto_size_columns=True,
                       alternating_row_color='lightgrey',
                       font=('Arial', 16),
@@ -1534,6 +1630,9 @@ def create_order_item_list_window(lab_order_id):
                       enable_events=True,
                       )
              ],
+            [sg.Button('Analyze', disabled=is_order_rejected or is_order_cancelled or is_order_approved),
+             sg.Button('Analyze All', disabled=is_order_rejected or is_order_cancelled or is_order_approved),
+             sg.Text('Simulated analysis using the active workflow and scenario.')],
             [
                 sg.Button('Accept', button_color=('white', 'green'),
                           disabled_button_color=('white', 'lightgrey'),
@@ -1569,6 +1668,22 @@ def create_order_item_list_window(lab_order_id):
         event, values = window.read()
         if event in ('Exit', sg.WIN_CLOSED):
             break
+        elif event in ('Analyze', 'Analyze All'):
+            selected = values.get('-ORDER-ITEM-TABLE-', [])
+            if event == 'Analyze' and not selected:
+                sg.popup_error('Select one or more tests to analyze.', keep_on_top=True)
+                continue
+            item_ids = [row[0] for row in items] if event == 'Analyze All' else [items[index][0] for index in selected]
+            run_lis_workflow_analysis(item_ids, parent=window)
+            items = load_item_list()
+            window['-ORDER-ITEM-TABLE-'].update(values=items)
+            with Session(engine) as refresh_session:
+                refreshed = refresh_session.get(LabOrder, lab_order_id)
+                if refreshed.received_at:
+                    window['receive-banner'].update(
+                        f'RECEIVED at {format_datetime(refreshed.received_at)} by {refreshed.receiver}', visible=True)
+                    window['Accept'].update(disabled=True)
+                    window['Approve'].update(disabled=bool(refreshed.approved_at or refreshed.rejected_at or refreshed.cancelled_at))
         elif event == '-ORDER-ITEM-TABLE- Double' and values['-ORDER-ITEM-TABLE-']:
             create_item_detail_window(items[values['-ORDER-ITEM-TABLE-'][0]][0])
             items = load_item_list()
@@ -1936,80 +2051,46 @@ def create_lab_order_item_version_list_window(item_id):
 
 @login_required
 def create_analysis_window():
-    items = []
-    with Session(engine) as session:
-        query = select(LabOrderItem).where(and_(
-            LabOrderItem.finished_at == None,
-            LabOrderItem.cancelled_at == None)
-        )
-        for item in session.scalars(query):
-            if item.order.received_at:
-                items.append([
-                    item.id,
-                    item.test.code,
-                    item.test.label,
-                    item.test.tmlt_name,
-                    format_datetime(item.order.received_at) or '',
-                    item.order.customer.hn,
-                    item.order.customer.fullname,
-                ])
-    layout = [
-        [sg.Table(headings=['ID', 'Code', 'Label', 'TMLT Name', 'Received At', 'HN', 'Patient'],
-                  values=items,
-                  alternating_row_color='lightgrey',
-                  auto_size_columns=True,
-                  font=('Arial', 16),
-                  key='-TABLE-',
-                  expand_x=True,
-                  enable_events=True)],
-        [sg.Text('Analysis Log', font=('Arial', 16, 'bold'))],
-        [sg.Output(key='-OUTPUT-',size=(75, 15), background_color='lightgrey', font=('Arial', 15))],
-        [sg.Text('Number of Analyzers:'), sg.Input(config_dict['num_analyzers'], key='-NUM-INSTRUMENT-')],
-        [sg.Button('Run', button_color=('white', 'green')),
-         sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR),
-         sg.Help()],
-    ]
+    def pending_rows():
+        with Session(engine) as session:
+            items = session.scalars(select(LabOrderItem).join(LabOrder).where(
+                LabOrderItem.finished_at.is_(None), LabOrderItem.cancelled_at.is_(None),
+                LabOrderItem.reported_at.is_(None), LabOrderItem.approved_at.is_(None),
+                LabOrder.cancelled_at.is_(None), LabOrder.rejected_at.is_(None), LabOrder.approved_at.is_(None)
+            ).order_by(LabOrderItem.id))
+            return [[item.id, item.order_id, item.test.code, item.test.label,
+                     format_datetime(item.order.received_at) if item.order.received_at else 'Not received',
+                     item.order.customer.hn, item.order.customer.fullname] for item in items]
 
-    window = create_window('Analysis', layout=layout, modal=True, resizable=True, finalize=True)
-    window.maximize()
-
-    while True:
-        event, values = window.read()
-        if event in ('Exit', sg.WIN_CLOSED):
-            break
-        elif event == 'Run':
-            with Session(engine) as session:
-                query = select(LabOrderItem).where(and_(
-                    LabOrderItem.finished_at == None,
-                    LabOrderItem.cancelled_at == None)
-                )
-
-                start_time = datetime.datetime.now()
-
-                env = simpy.rt.RealtimeEnvironment(factor=0.1, strict=False)
-                instrument = simpy.Resource(env, capacity=int(values['-NUM-INSTRUMENT-']))
-                records = {}
-                for item in session.scalars(query):
-                    if item.order.received_at:
-                        env.process(run_test(env, item, instrument, 5, 10, records))
-                # staff = simpy.Resource(env, capacity=staff_count)
-                env.run()
-                for item, t in records.items():
-                    item.random_value()
-                    finished_at = start_time + datetime.timedelta(minutes=t)
-                    item.finished_at = finished_at
-                    item.updated_at = finished_at
-                    session.add(item)
-                    logger.info(f'LAB ORDER ID={item.id} FINISHED AT {item.finished_at}')
-                session.commit()
-                if int(config_dict['num_analyzers']) != int(values['-NUM-INSTRUMENT-']):
-                    update_config_yaml(num_analyzers=int(values['-NUM-INSTRUMENT-']))
-            popup_quick_message("All analyses have finished.", background_color='lightgreen')
-
-        elif event == 'Help':
-            sg.popup_ok('The list shows all test that waiting to be analyzed.'
-                        ' If you click run, all tests will be sent to virtual analyzers.')
-    window.close()
+    rows = pending_rows()
+    layout = [[sg.Text('Analyze through active workflow', font=('Arial', 18, 'bold'))],
+              [sg.Text('Analyze selects highlighted tests; Analyze All sends every pending test shown below.')],
+              [sg.Table(values=rows, headings=['Item ID', 'Order ID', 'Code', 'Test', 'Received At', 'HN', 'Patient'],
+                        key='tests', select_mode=sg.TABLE_SELECT_MODE_EXTENDED, auto_size_columns=True,
+                        expand_x=True, expand_y=True, num_rows=16)],
+              [sg.Button('Analyze'), sg.Button('Analyze All'), sg.Button('Refresh'),
+               sg.Push(), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)]]
+    window = create_window('Analysis', layout, modal=True, resizable=True)
+    try:
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, 'Close'):
+                break
+            if event in ('Analyze', 'Analyze All'):
+                selected = values.get('tests', [])
+                if event == 'Analyze' and not selected:
+                    sg.popup_error('Select one or more tests to analyze.', keep_on_top=True)
+                    continue
+                ids = [row[0] for row in rows] if event == 'Analyze All' else [rows[index][0] for index in selected]
+                if not ids:
+                    sg.popup_ok('No pending tests to analyze.', keep_on_top=True)
+                    continue
+                run_lis_workflow_analysis(ids, parent=window)
+            if event in ('Analyze', 'Analyze All', 'Refresh'):
+                rows = pending_rows()
+                window['tests'].update(values=rows)
+    finally:
+        window.close()
 
 
 def run_test(env, item, instrument, min_duration, max_duration, records):

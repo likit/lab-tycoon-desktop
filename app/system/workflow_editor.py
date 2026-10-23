@@ -2276,6 +2276,7 @@ def open_workflow_editor_window(
                             controller.persist_current_workflow(window)
                     else:
                         open_scenario_manager(workflow,
+                            parent=window,
                             on_change=lambda: controller.persist_current_workflow(window),
                             run_simulation=run_simulation)
                     controller.refresh_summary(window)

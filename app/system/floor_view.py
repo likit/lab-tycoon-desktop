@@ -1079,6 +1079,8 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
     window = create_window(
         f"Lab Tycoon — {project.name} — Floor Plan" if main_workspace else "Lab Tycoon — Floor View",
         layout,
+        window_role='floor',
+        independent=True,
         size=(window_width, window_height),
         location=(20, 30),
         margins=(4, 4),
@@ -1391,7 +1393,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
             from app.system.scenario_editor import open_scenario_manager, configure_scenario, scenario_settings
             workflow, scenario = selected_saved_scenario()
             if event == '-LIVE-MANAGE-SCENARIOS-':
-                open_scenario_manager(workflow, on_change=project.mark_dirty)
+                open_scenario_manager(workflow, on_change=project.mark_dirty, parent=window)
             else:
                 try:
                     settings = scenario_settings(workflow, scenario)

@@ -1304,6 +1304,12 @@ class WorkflowSimulationEngine:
         specimen = branch_specimen if branch_specimen is not None else self.specimens[specimen_index]
         if branch_specimen is not None:
             current_node_id = start_node_id
+        elif specimen.metadata.get('entry_node_id'):
+            current_node_id = specimen.metadata['entry_node_id']
+            if current_node_id not in self.active_node_ids:
+                raise ValueError('Specimen entry node must be reachable in the active workflow.')
+            if specimen.metadata.get('skip_entry_node'):
+                current_node_id = yield from self._advance_specimen(current_node_id, specimen)
         elif self.arrival_adapter_node is not None:
             current_node_id = yield from self._advance_specimen(self.arrival_adapter_node.node_id, specimen)
         else:

@@ -84,6 +84,112 @@ class WindowActivationTests(unittest.TestCase):
             create_window('Lab')
         child.TKroot.transient.assert_not_called()
 
+    def test_always_on_top_is_explicit_and_inherited_by_child_dialogs(self):
+        from unittest.mock import patch
+        from app.ui_styles import create_window
+        floor, scenarios, settings = [self.window() for _ in range(3)]
+        with patch('app.ui_styles.sg.Window', side_effect=[floor, scenarios, settings]) as constructor:
+            create_window('Floor Plan')
+            create_window('Scenarios', parent=floor, always_on_top=True)
+            create_window('Scenario Settings', parent=scenarios)
+        self.assertFalse(constructor.call_args_list[0].kwargs['keep_on_top'])
+        self.assertTrue(constructor.call_args_list[1].kwargs['keep_on_top'])
+        self.assertTrue(constructor.call_args_list[2].kwargs['keep_on_top'])
+
+    def test_floor_is_independent_and_not_topmost_even_after_topmost_dialog(self):
+        from unittest.mock import patch
+        from app.ui_styles import create_window
+        dialog, floor, scenarios = [self.window() for _ in range(3)]
+        with patch('app.ui_styles.sg.Window', side_effect=[dialog, floor, scenarios]) as constructor:
+            create_window('Chooser', always_on_top=True)
+            create_window('Floor Plan', window_role='floor', independent=True)
+            create_window('Scenarios', parent=floor, always_on_top=True)
+        self.assertFalse(constructor.call_args_list[1].kwargs['keep_on_top'])
+        floor.TKroot.transient.assert_not_called()
+        floor.TKroot.wm_attributes.assert_called_once_with('-topmost', 0)
+        scenarios.TKroot.transient.assert_called_once_with(floor.TKroot)
+        scenarios.TKroot.wm_attributes.assert_called_once_with('-topmost', 1)
+
+    def test_closed_chooser_cannot_raise_parent_while_next_dialog_is_finalizing(self):
+        from unittest.mock import patch, Mock
+        from app.ui_styles import create_window
+        parent, chooser, scenarios = self.window(), self.window(), self.window()
+        with patch('app.ui_styles.sg.Window', side_effect=[parent, chooser]):
+            create_window('Home')
+            create_window('Choose workflow', parent=parent)
+        on_destroy = chooser.TKroot.bind.call_args.args[1]
+        on_destroy(Mock(widget=chooser.TKroot))
+        restore = parent.TKroot.after_idle.call_args.args[0]
+        chooser.TKroot.winfo_viewable.return_value = False
+
+        def finalize(*args, **kwargs):
+            restore()  # Tk processes the old callback while mapping Scenarios.
+            return scenarios
+
+        with patch('app.ui_styles.sg.Window', side_effect=finalize), \
+             patch('app.ui_styles.bring_window_to_front') as activate:
+            create_window('Scenarios', parent=parent)
+        activate.assert_called_once_with(scenarios)
+        scenarios.TKroot.transient.assert_called_once_with(parent.TKroot)
+
+    def test_old_idle_activation_does_not_steal_focus_from_new_dialog(self):
+        from unittest.mock import patch
+        from app.ui_styles import create_window
+        parent, child = self.window(), self.window()
+        with patch('app.ui_styles.sg.Window', side_effect=[parent, child]):
+            create_window('Home')
+            activate_parent = parent.TKroot.after_idle.call_args.args[0]
+            create_window('Scenarios', parent=parent)
+        parent.TKroot.focus_force.reset_mock()
+        activate_parent()
+        parent.TKroot.focus_force.assert_not_called()
+
+    def test_scenario_menu_keeps_floor_as_owner_after_workflow_chooser_closes(self):
+        from unittest.mock import patch
+        from app.ui_styles import create_window, active_window
+        home, floor, chooser, scenarios = [self.window() for _ in range(4)]
+        with patch('app.ui_styles.sg.Window', side_effect=[home, floor, chooser, scenarios]):
+            create_window('Home')
+            home.TKroot.winfo_viewable.return_value = False
+            create_window('Floor Plan')
+            menu_owner = active_window()
+            self.assertIs(menu_owner, floor)
+            create_window('Project Workflows', parent=menu_owner, modal=True)
+            chooser.TKroot = None
+            create_window('Scenarios', parent=menu_owner, modal=True)
+        scenarios.TKroot.transient.assert_called_once_with(floor.TKroot)
+
+    def test_hidden_explicit_owner_falls_back_to_visible_floor(self):
+        from unittest.mock import patch
+        from app.ui_styles import create_window
+        home, floor, scenarios = [self.window() for _ in range(3)]
+        with patch('app.ui_styles.sg.Window', side_effect=[home, floor, scenarios]):
+            create_window('Home')
+            home.TKroot.winfo_viewable.return_value = False
+            create_window('Floor Plan')
+            create_window('Scenarios', parent=home, modal=True)
+        scenarios.TKroot.transient.assert_called_once_with(floor.TKroot)
+
+    def test_floor_owner_can_be_selected_even_when_menu_focus_is_on_main(self):
+        from unittest.mock import patch, Mock
+        from app.ui_styles import create_window, active_window
+        home, floor, scenarios = [self.window() for _ in range(3)]
+        with patch('app.ui_styles.sg.Window', side_effect=[home, floor, scenarios]):
+            create_window('Home')
+            create_window('Floor Plan', window_role='floor')
+            focus = Mock()
+            focus.winfo_toplevel.return_value = home.TKroot
+            home.TKroot.focus_get.return_value = focus
+            self.assertIs(active_window(), home)
+            self.assertIs(active_window(role='floor'), floor)
+            create_window('Scenarios', parent=active_window(role='floor'), always_on_top=True)
+        calls = scenarios.TKroot.method_calls
+        owner_index = next(i for i, call in enumerate(calls) if call[0] == 'transient')
+        top_index = next(i for i, call in enumerate(calls) if call[0] == 'wm_attributes')
+        self.assertLess(owner_index, top_index)
+        scenarios.TKroot.transient.assert_called_once_with(floor.TKroot)
+        scenarios.TKroot.wm_attributes.assert_called_once_with('-topmost', 1)
+
     def test_idle_activation_is_safe_after_close(self):
         from app.ui_styles import bring_window_to_front
         window = self.window()

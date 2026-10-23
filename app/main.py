@@ -1,4 +1,4 @@
-from app.ui_styles import create_window
+from app.ui_styles import create_window, active_window
 import os.path
 import platform
 import shutil
@@ -14,11 +14,12 @@ from app.auth.windows import (create_signin_window,
                               create_user_list_window)
 from app.system.models import database_is_initialized, ensure_db_schema, initialize_db
 from app.system.floor_view import create_floor_view_window
-from app.main_ui import MainWindowContext, build_main_layout, update_context_elements
+from app.main_ui import MainWindowContext, build_main_layout, build_main_menu, update_context_elements
+from app.program_settings import create_program_settings_window, simulation_menu_enabled
 from app.lis_settings import create_lis_settings_window
 from app.database_explorer import create_database_explorer_window
 from app.project import LabTycoonProject, project_session
-from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab
+from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab, create_lis_results_window
 from app.project_serializer import ProjectFormatError, ProjectSerializer
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
 from app.auth.windows import SessionManager
@@ -123,7 +124,7 @@ def run_app():
     project_session.close()
     main_context = MainWindowContext(project_name='No project open', laboratory_name='')
     window = create_window('Lab Tycoon',
-                       layout=build_main_layout(resource_path, main_context),
+                       layout=build_main_layout(resource_path, main_context, simulation_enabled=simulation_menu_enabled()),
                        resizable=True,
                        element_justification='center').finalize()
 
@@ -156,7 +157,7 @@ def run_app():
                 has_active_project=True,
             )
             window.TKroot.title(f'Lab Tycoon — {project.display_name}')
-        update_context_elements(window, context)
+        update_context_elements(window, context, simulation_enabled=simulation_menu_enabled())
 
     def save_active_project(*, force_path: bool = False) -> bool:
         project = project_session.active_project
@@ -292,6 +293,10 @@ def run_app():
             create_sql_window()
         elif event == 'Database Explorer':
             create_database_explorer_window()
+        elif event == 'Program Settings...':
+            if create_program_settings_window(parent=window):
+                window['-MAIN-MENU-'].update(build_main_menu(simulation_enabled=simulation_menu_enabled()))
+                refresh_project_display()
         elif event == 'Settings...':
             if create_lis_settings_window() and may_replace_active_project():
                 break
@@ -313,9 +318,10 @@ def run_app():
             if project is None:
                 sg.popup_error('Open a project before managing scenarios.')
             else:
-                workflow_id = choose_project_workflow(project)
+                scenario_parent = active_window(role='floor') or active_window() or window
+                workflow_id = choose_project_workflow(project, parent=scenario_parent)
                 if workflow_id is not None:
-                    open_project_scenarios(project, workflow_id)
+                    open_project_scenarios(project, workflow_id, parent=scenario_parent)
                     refresh_project_display()
         elif event == 'Rule Preview':
             create_rule_preview_window()
@@ -330,6 +336,8 @@ def run_app():
             create_analysis_window()
         elif event == 'Orders' or event == '-ORDERS-':
             create_order_list_window()
+        elif event in ('Results', '-RESULTS-'):
+            create_lis_results_window()
         elif event == 'Logs' or event == '-LOGGING-':
             create_logging_window()
         elif event == 'Manage Users' or event == '-USERS-':

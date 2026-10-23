@@ -350,6 +350,30 @@ class SimulationOrder(Base):
     patient: Mapped["SimulationPatient | None"] = relationship(back_populates="orders")
 
 
+class LISWorkflowAnalysis(Base):
+    """Audit of a real workflow-engine execution for LIS test items."""
+    __tablename__ = 'lis_workflow_analyses'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    operator_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False)
+    workflow_name: Mapped[str] = mapped_column(String(), nullable=False)
+    scenario_id: Mapped[str] = mapped_column(String(), nullable=False)
+    workflow_json: Mapped[str] = mapped_column(Text(), nullable=False)
+    trace_json: Mapped[str] = mapped_column(Text(), nullable=False)
+    item_ids_json: Mapped[str] = mapped_column(Text(), nullable=False)
+    makespan: Mapped[float] = mapped_column(Numeric(), nullable=False)
+
+
+class SimulationLISImport(Base):
+    """Durable provenance and duplicate protection for LIS demonstration orders."""
+
+    __tablename__ = 'simulation_lis_imports'
+    simulation_order_id: Mapped[int] = mapped_column(ForeignKey('simulation_orders.id'), primary_key=True)
+    lis_order_id: Mapped[int] = mapped_column(ForeignKey('lab_orders.id'), nullable=False, unique=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    order: Mapped['LabOrder'] = relationship()
+
+
 class LabOrderItem(Base):
     __versioned__ = {}
     __tablename__ = 'lab_order_items'
@@ -448,7 +472,7 @@ def ensure_db_schema(database_engine=None):
             connection.execute(
                 text("ALTER TABLE lab_orders ADD COLUMN priority VARCHAR(7) NOT NULL DEFAULT 'routine'")
             )
-    Base.metadata.create_all(target_engine, tables=[SimulationRun.__table__, SimulationPatient.__table__, SimulationOrder.__table__])
+    Base.metadata.create_all(target_engine, tables=[SimulationRun.__table__, SimulationPatient.__table__, SimulationOrder.__table__, SimulationLISImport.__table__, LISWorkflowAnalysis.__table__])
     with target_engine.begin() as connection:
         columns = {column['name'] for column in inspect(connection).get_columns('simulation_orders')}
         if 'patient_ref_id' not in columns:

@@ -239,13 +239,14 @@ def scenario_dialog(workflow, source=None, *, duplicate=False):
 
 
 @login_required
-def open_scenario_manager(workflow, *, on_change, run_simulation=None):
+def open_scenario_manager(workflow, *, on_change, run_simulation=None, parent=None):
     layout = [[sg.Text('Saved experiment settings', font=('Arial', 14, 'bold'))],
               [sg.Table(values=[], headings=['Active', 'Scenario', 'Staff', 'Arrival (min)', 'Overrides'],
                         key='scenarios', num_rows=8, auto_size_columns=True, enable_events=True)],
               [sg.Button('Use scenario'), sg.Button('Create from defaults'), sg.Button('Edit'), sg.Button('Duplicate'),
                sg.Button('Delete'), sg.Button('Run', disabled=run_simulation is None), sg.Button('Close', button_color=DANGER_BUTTON_COLOR)]]
-    window = create_window('Scenarios', layout, modal=True, finalize=True, keep_on_top=True)
+    window = create_window('Scenarios', layout, modal=True, finalize=True, parent=parent,
+                           always_on_top=True)
     def refresh():
         window['scenarios'].update(values=[['Yes' if s is workflow.active_scenario else '', s.name, scenario_settings(workflow, s)['staff_capacity'],
             f"{scenario_settings(workflow, s)['arrival_minutes']:g}", len(s.widget_service_times)]

@@ -191,3 +191,72 @@ staff, capacity, processing rates, and batching) from Allowed staff for the
 named active scenario. Editing a different scenario in the manager does not
 automatically make it active. If the active scenario is deleted, the first
 remaining scenario becomes active. Older projects default to their first scenario.
+
+### Show or hide simulation navigation
+
+Open **File → Program Settings** and toggle **Show Simulation menu**. Saving
+updates the menu immediately and remembers the preference across launches.
+Simulation is shown by default for existing installations. Laboratory Design,
+Workflows, Scenarios, and simulation run/result entries are grouped under this
+menu. LIS navigation and database settings remain available when it is hidden.
+
+### Use saved simulation orders for LIS demonstrations
+
+In the standalone **Orders** window, select **Simulation** as the data source
+(or click **Load Simulation Run**). Choose a saved run, map any unknown simulation
+test codes to active LIS tests, and click **Import as LIS orders**. No simulation
+project needs to be open. Source selection is available even when the Simulation
+menu is hidden.
+
+Conversion creates real LIS order/customer records in the current database.
+Orders start pending, without results, reception, or approval state, so normal
+LIS actions can be demonstrated. Customers have run-scoped `DEMO-` HNs and
+`[DEMO]` names. Because simulation records do not include age or gender, these
+synthetic records use Unknown gender and placeholder DOB 2000-01-01, noted in
+the customer address. No real patient is matched by the simulation HN.
+
+Existing test codes match the LIS catalogue directly. Missing codes such as
+`SIM-TEST` require an explicit mapping; the importer does not create laboratory
+tests or invent results. Each run is imported atomically. Re-selecting it reuses
+previously imported orders and preserves their LIS edits. Source simulation
+records remain unchanged, and a provenance table prevents duplicate imports.
+The Simulation source shows converted LIS orders from the selected run; SQLite
+shows all LIS orders, including imported demonstration records. Customers and
+Results also show those normal LIS records as they progress through the workflow.
+
+### Analyze LIS tests through the active workflow
+
+Double-click a LIS order to open its test list. Select one or more rows and click
+**Analyze**, or click **Analyze All** for all eligible pending tests in that
+order. **LIS → Analyze** offers the same actions across all pending LIS tests.
+Finished, reported, approved, cancelled, or rejected work is skipped. These
+controls also work for orders imported from saved simulation runs.
+
+Open a workflow to make it active; its active scenario supplies workforce,
+permissions, processing rates, and variation. The analysis dialog names the
+workflow and scenario before execution. With no project open, the selected
+saved workflow is used (or the sole saved workflow when there is no selection).
+Analysis requires one reachable Specimen Registration/reception node connected
+to the rest of the workflow, and analyzers supporting the requested test codes.
+
+Each selected test is submitted as a specimen to the actual SimPy workflow
+engine. Unreceived work enters reception; received work starts through the
+outgoing routes after reception. Named staff, shared equipment capacity,
+batching, routing, and downstream workflow processing remain in effect. Existing
+tests are submitted together, rather than using the scenario's generated-order
+arrival interval. Original receipt times are preserved. New receipt and analyzer
+completion timestamps come from the simulated event times in hours.
+
+On successful completion, LIS items receive simulated values when no value was
+already entered, a completion time, an updater, and a simulation-run comment.
+Reporting and approval still require normal LIS actions. Failure saves no LIS
+changes. Each execution stores its operator, selected item IDs, workflow/scenario
+snapshot, specimen event histories, and elapsed simulation time in
+`lis_workflow_analyses`. The dialog reports the saved run ID and simulated elapsed
+minutes; this is an engine execution without opening the Floor Plan.
+
+Both **Analyze** actions open a workflow-selection modal listing current-project
+and saved standalone workflows. The sole available workflow is preselected;
+otherwise the previous analysis choice is preselected when still available.
+Clicking Analyze saves that choice as the default across launches and displays
+the selected workflow's active scenario. Cancelling does not change the default.

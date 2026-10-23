@@ -17,6 +17,31 @@ class ProjectWorkspaceTests(unittest.TestCase):
         database = patch('app.auth.windows.Session')
         database.start().return_value.__enter__.return_value.scalar.return_value = Mock(active=True)
         self.addCleanup(database.stop)
+        settings = patch('app.config.update_config_yaml')
+        settings.start()
+        self.addCleanup(settings.stop)
+
+    def test_standalone_results_uses_lis_data_and_opens_selected_item(self):
+        from app.project_workspace import create_lis_results_window
+        from unittest.mock import MagicMock
+        rows = [[42, 7, 'HN', 'Patient', 'TEST', '10', '', '']]
+        window = MagicMock()
+        window.read.side_effect = [('Open Result', {'results': [0]}), ('Close', {})]
+        with patch('app.project_workspace.load_result_rows', return_value=rows) as load, \
+             patch('app.project_workspace.create_window', return_value=window), \
+             patch('app.system.windows.create_item_detail_window') as detail:
+            create_lis_results_window()
+        self.assertTrue(all(call.kwargs == {'source': 'LIS'} for call in load.call_args_list))
+        detail.assert_called_once_with(42)
+        window.close.assert_called_once()
+
+    def test_standalone_results_requires_signin(self):
+        from app.project_workspace import create_lis_results_window
+        with patch('app.auth.windows.session_manager.is_logged_in', return_value=False), \
+             patch('app.auth.windows.sg.popup_error'), \
+             patch('app.project_workspace.load_result_rows') as load:
+            create_lis_results_window()
+        load.assert_not_called()
 
     def test_go_to_lab_hides_home_and_opens_floor_as_workspace(self):
         project = LabTycoonProject.create('Demo Lab')
