@@ -205,6 +205,11 @@ def run_app():
         else:
             project_session.activate(remembered_project)
 
+    from app.order_source_preferences import restore_order_source
+    source_restore_error = restore_order_source()
+    if source_restore_error:
+        sg.popup_error(source_restore_error, title='Restore Order Source')
+
     refresh_project_display()
 
     while True:

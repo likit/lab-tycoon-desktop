@@ -455,6 +455,7 @@ class WorkflowSimulationEngine:
         self.on_specimen_completed = on_specimen_completed
         self.on_order_created = on_order_created
         self.on_activity = on_activity
+        self.active_processing = {}
         if settings.realtime_factor is not None:
             self.env = simpy.rt.RealtimeEnvironment(factor=float(settings.realtime_factor), strict=False)
         else:
@@ -871,6 +872,16 @@ class WorkflowSimulationEngine:
 
         return False, next_node_override
 
+    def _processing_timeout(self, node, specimen, duration, phase):
+        """Expose the actual sampled service interval without changing its timing."""
+        key = (node.node_id, specimen.specimen_id)
+        self.active_processing[key] = dict(start=self.env.now, end=self.env.now + duration,
+                                           phase=phase)
+        try:
+            yield self.env.timeout(duration)
+        finally:
+            self.active_processing.pop(key, None)
+
     def _process_analyzer_node(
         self,
         *,
@@ -889,7 +900,7 @@ class WorkflowSimulationEngine:
                 self._effective_processing_capacity(node),
                 self.settings.system_variation,
             )
-            yield self.env.timeout(system_processing_time)
+            yield from self._processing_timeout(node, specimen, system_processing_time, 'Processing')
             specimen.record_event(
                 node.widget.name,
                 "system_finished",
@@ -915,7 +926,7 @@ class WorkflowSimulationEngine:
                     self.settings.human_variation,
                 )
                 staff_busy_time = human_processing_time * required_staff
-                yield self.env.timeout(human_processing_time)
+                yield from self._processing_timeout(node, specimen, human_processing_time, 'Staff work')
                 yield from self._release_staff(node, specimen, team)
                 specimen.record_event(
                     node.widget.name,
@@ -1000,7 +1011,7 @@ class WorkflowSimulationEngine:
                     test_code=test_code,
                     time=self.env.now,
                 )
-                yield self.env.timeout(test_processing_time)
+                yield from self._processing_timeout(node, specimen, test_processing_time, 'Testing')
                 total_processing_time += test_processing_time
                 specimen.record_event(
                     node.widget.name,
@@ -1031,7 +1042,7 @@ class WorkflowSimulationEngine:
             specimen.record_event(node.widget.name, "human_started", time=self.env.now,
                                   staff_required=required, wait_time=self.env.now - wait_start)
             try:
-                yield self.env.timeout(human_time)
+                yield from self._processing_timeout(node, specimen, human_time, 'Staff work')
                 total_processing_time += human_time
                 staff_busy_time += human_time * required
             finally:
@@ -1273,14 +1284,14 @@ class WorkflowSimulationEngine:
                     self._emit_activity("started", node, specimen, **batch_details)
                     system_time = self._sample_service_time(self._effective_processing_capacity(node),
                                                            self.settings.system_variation)
-                    yield self.env.timeout(system_time)
+                    yield from self._processing_timeout(node, specimen, system_time, 'Processing')
                     specimen.record_event(node.widget.name, "system_finished", processing_time=system_time,
                                           time=self.env.now, **batch_details)
                     specimen.record_event(node.widget.name, "human_started", staff_required=required,
                                           time=self.env.now, **batch_details)
                     human_time = self._sample_service_time(self._effective_human_processing_capacity(node),
                                                           self.settings.human_variation)
-                    yield self.env.timeout(human_time)
+                    yield from self._processing_timeout(node, specimen, human_time, 'Staff work')
                     specimen.record_event(node.widget.name, "human_finished", processing_time=human_time,
                                           staff_required=required, time=self.env.now, **batch_details)
                     duration = system_time + human_time
@@ -1392,7 +1403,7 @@ class WorkflowSimulationEngine:
                         self._effective_processing_capacity(node),
                         self.settings.system_variation,
                     )
-                    yield self.env.timeout(system_processing_time)
+                    yield from self._processing_timeout(node, specimen, system_processing_time, 'Processing')
                     specimen.record_event(
                         node.widget.name,
                         "system_finished",
@@ -1418,7 +1429,7 @@ class WorkflowSimulationEngine:
                             self.settings.human_variation,
                         )
                         staff_busy_time = human_processing_time * required_staff
-                        yield self.env.timeout(human_processing_time)
+                        yield from self._processing_timeout(node, specimen, human_processing_time, 'Staff work')
                         yield from self._release_staff(node, specimen, team)
                         specimen.record_event(
                             node.widget.name,
@@ -1518,6 +1529,10 @@ class WorkflowSimulationEngine:
         arrivals = self.env.process(self._arrival_process())
         self.env.run(until=arrivals)
 
+        return self.result_summary()
+
+    def result_summary(self) -> WorkflowSimulationResult:
+        """Summarize the current engine without starting another arrival process."""
         return WorkflowSimulationResult(
             workflow_name=self.workflow_name,
             specimens_number=len(self.specimens),

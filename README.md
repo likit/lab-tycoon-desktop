@@ -75,7 +75,7 @@ routers retain control of routing.
 For parallel testing, connect each centrifuge to the analyzer alternatives and
 connect every analyzer directly to the same reporting process or Reporting
 Station. Equipment nodes linked to a placed chemistry analyzer automatically use
-analyzer processing. Use **Select tests** on that Equipment node to configure
+analyzer processing. Open that Equipment node’s configuration and use **Select tests** to configure
 its test menu and a positive Processing Capacity. Explicit manual analyzer
 nodes retain their Human Processing Capacity settings. An empty test menu retains the existing meaning of accepting any
 test. The engine assigns each pending test code once to a compatible enabled
@@ -200,29 +200,33 @@ Simulation is shown by default for existing installations. Laboratory Design,
 Workflows, Scenarios, and simulation run/result entries are grouped under this
 menu. LIS navigation and database settings remain available when it is hidden.
 
-### Use saved simulation orders for LIS demonstrations
+### Load simulated orders for LIS demonstrations
 
-In the standalone **Orders** window, select **Simulation** as the data source
-(or click **Load Simulation Run**). Choose a saved run, map any unknown simulation
-test codes to active LIS tests, and click **Import as LIS orders**. No simulation
-project needs to be open. Source selection is available even when the Simulation
-menu is hidden.
+In **Orders**, select **Simulation** as the data source and choose a scenario.
+Set **Number orders** and click **Load Simulated Orders**. There is no saved-run
+picker, test-mapping step, or extra import confirmation. Repeated clicks generate
+fresh pending batches using the selected scenario; choosing the Simulation
+source again lets you change scenarios. This works with the Simulation menu
+hidden, and saved standalone workflows can be used without an open project.
 
-Conversion creates real LIS order/customer records in the current database.
-Orders start pending, without results, reception, or approval state, so normal
-LIS actions can be demonstrated. Customers have run-scoped `DEMO-` HNs and
-`[DEMO]` names. Because simulation records do not include age or gender, these
-synthetic records use Unknown gender and placeholder DOB 2000-01-01, noted in
-the customer address. No real patient is matched by the simulation HN.
+Orders use the real LIS test codes selected on reachable analyzers in the
+scenario's workflow. When analyzer menus are unrestricted, generation cycles
+through active LIS catalogue tests instead of inventing `SIM-TEST`. Inactive or
+missing configured codes produce a configuration error before anything is saved.
+The scenario's arrival interval determines the generated order timestamps.
 
-Existing test codes match the LIS catalogue directly. Missing codes such as
-`SIM-TEST` require an explicit mapping; the importer does not create laboratory
-tests or invent results. Each run is imported atomically. Re-selecting it reuses
-previously imported orders and preserves their LIS edits. Source simulation
-records remain unchanged, and a provenance table prevents duplicate imports.
-The Simulation source shows converted LIS orders from the selected run; SQLite
-shows all LIS orders, including imported demonstration records. Customers and
-Results also show those normal LIS records as they progress through the workflow.
+Loading creates only pending LIS records. **Analyze** subsequently runs tests
+through the chosen workflow. Order generation does not execute or create a
+management/research simulation run. Each load is atomic and receives its own
+batch ID; the Simulation source displays all batches for the selected workflow
+and scenario, so loading adds orders to the existing list. Previous batches retain
+all results, reporting, receipt, and approval state and remain available under
+SQLite. Older saved-run imports also remain accessible there.
+
+Generated customers have batch-scoped `DEMO-` HNs and `[DEMO]` names, Unknown
+gender, and placeholder DOB 2000-01-01 documented in their address. Orders have
+real catalogue test items without results or approvals. Generation provenance
+is saved in `lis_demonstration_orders` with the batch, workflow, and scenario IDs.
 
 ### Analyze LIS tests through the active workflow
 
@@ -249,8 +253,15 @@ completion timestamps come from the simulated event times in hours.
 
 On successful completion, LIS items receive simulated values when no value was
 already entered, a completion time, an updater, and a simulation-run comment.
-Reporting and approval still require normal LIS actions. Failure saves no LIS
-changes. Each execution stores its operator, selected item IDs, workflow/scenario
+Executed Result Reporting and Result Validation steps set reporting and approval
+timestamps from their simulation completion events and attribute them to the
+acting LIS user. The user must have the reporter/approver role respectively;
+missing permissions abort the transaction. Workflows without those executed
+steps leave the corresponding timestamps empty for manual LIS actions.
+Validation requires reporting first, and a reporting step requires a result.
+A visual reporting endpoint alone does not report or approve results. An order
+is released only once every non-cancelled item is approved. Previously completed
+results are not overwritten or backfilled. Failure saves no LIS changes. Each execution stores its operator, selected item IDs, workflow/scenario
 snapshot, specimen event histories, and elapsed simulation time in
 `lis_workflow_analyses`. The dialog reports the saved run ID and simulated elapsed
 minutes; this is an engine execution without opening the Floor Plan.
@@ -260,3 +271,11 @@ and saved standalone workflows. The sole available workflow is preselected;
 otherwise the previous analysis choice is preselected when still available.
 Clicking Analyze saves that choice as the default across launches and displays
 the selected workflow's active scenario. Cancelling does not change the default.
+
+The Orders data-source choice is saved in Program Settings storage and restored
+on app startup. Simulation remembers its workflow and scenario and restores the
+existing scenario order list without generating another batch. If the original
+project is closed, a saved workflow definition keeps the selection usable.
+Uploaded-file selection remembers the file path and reloads it on startup,
+without putting patient rows in settings. An unavailable saved source falls back
+to SQLite with an explanation while retaining the preference for recovery.

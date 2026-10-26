@@ -10,6 +10,7 @@ from FreeSimpleGUI import popup_quick_message
 from sql_formatter.core import format_sql
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from tabulate import tabulate
 
 from app.auth.windows import login_required, session_manager
@@ -24,7 +25,8 @@ from app.system.order_sources import (
     use_uploaded_order_source,
     set_active_order_source,
 )
-from app.system.simulation_lis import SimulationLISOrderSource, choose_simulation_source
+from app.system.simulation_lis import (SimulationLISOrderSource, ScenarioLISOrderSource,
+                                       choose_simulation_source, generate_scenario_lis_orders)
 from app.system.events import DomainEventName, publish_domain_event
 from app.system.models import engine, Test, LabOrder, Customer, LabOrderItem, User, Doctor
 from app.system.model import Scenario, Workflow
@@ -1029,6 +1031,15 @@ def format_datetime(dt, datetime_format='%d/%m/%Y %H:%M:%S'):
 
 @login_required
 def create_order_list_window():
+    from app.order_source_preferences import remember_order_source
+
+    def set_selected_order_source(source):
+        set_active_order_source(source)
+        try:
+            remember_order_source(source)
+        except OSError as exc:
+            sg.popup_error(f'The source is selected for this session, but could not be saved: {exc}', keep_on_top=True)
+
     order_headings = ['ID', 'HN', 'Customer', 'Ordered At', 'Priority', 'Duplicate',
                       'Doctor', 'Status', 'Time', 'Items']
     flagged_order_headings = ['Order ID', 'HN', 'Patient', 'Ordered At', 'Priority', 'Test', 'Reason']
@@ -1061,8 +1072,17 @@ def create_order_list_window():
         return 'Uploaded file'
 
     def update_source_status(window, source):
-        if isinstance(source, SimulationLISOrderSource):
-            message = f'Data source: Simulation → LIS demonstration ({source.count()} orders; run {source.run_id[:8]})'
+        scenario_source = isinstance(source, ScenarioLISOrderSource)
+        window['-GET-ORDER-'].update(disabled=scenario_source)
+        window['-AUTO-RECEIVE-'].update(disabled=scenario_source)
+        if isinstance(source, ScenarioLISOrderSource):
+            message = f'Simulation: {source.scenario.name} ({source.count()} orders)'
+            if source.batch_id:
+                message += f'\nBatch {source.batch_id[:8]}'
+        elif isinstance(source, SimulationLISOrderSource):
+            message = f'Simulation → LIS: {source.count()} orders\nRun {source.run_id[:8]}'
+            if source.batch_id:
+                message += f' · Batch {source.batch_id[:8]}'
         elif isinstance(source, SQLiteOrderSource):
             message = f'Data source: SQLite ({source.count()} orders)'
         else:
@@ -1366,8 +1386,8 @@ def create_order_list_window():
             sg.Text('Data source:'),
             sg.Combo(source_options, default_value=order_source_label(), key='-DATA-SOURCE-', readonly=True, enable_events=True),
             sg.Button('Load Uploaded File', key='-LOAD-UPLOADED-'),
-            sg.Button('Load Simulation Run', key='-LOAD-SIMULATION-'),
-            sg.Text('', key='-SOURCE-STATUS-', size=(42, 1)),
+            sg.Button('Load Simulated Orders', key='-LOAD-SIMULATION-'),
+            sg.Text('', key='-SOURCE-STATUS-', size=(42, 2)),
         ],
         [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
         [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
@@ -1411,23 +1431,41 @@ def create_order_list_window():
                     f'{summary.workflow_name}: {summary.analyzed} tests analyzed; '
                     f'{summary.makespan * 60:.2f} simulated minutes. Run {summary.run_id}\n', append=True)
             data, flagged_orders, flagged_data = refresh_source_views(window)
-        elif event == '-LOAD-SIMULATION-' or (event == '-DATA-SOURCE-' and values['-DATA-SOURCE-'] == 'Simulation'):
+        elif event == '-DATA-SOURCE-' and values['-DATA-SOURCE-'] == 'Simulation':
             source = choose_simulation_source(parent=window)
             if source is not None:
-                set_active_order_source(source)
+                set_selected_order_source(source)
             window['-DATA-SOURCE-'].update(order_source_label())
             data, flagged_orders, flagged_data = refresh_source_views(window)
+        elif event == '-LOAD-SIMULATION-':
+            source = get_active_order_source()
+            if not isinstance(source, ScenarioLISOrderSource):
+                source = choose_simulation_source(parent=window)
+                if source is None:
+                    continue
+            try:
+                loaded = generate_scenario_lis_orders(source, count=values['-NUM-ORDERS-'])
+            except (ValueError, TypeError, OverflowError, SQLAlchemyError) as exc:
+                sg.popup_error(str(exc), keep_on_top=True)
+                continue
+            set_selected_order_source(loaded)
+            window['-DATA-SOURCE-'].update('Simulation')
+            data, flagged_orders, flagged_data = refresh_source_views(window)
+            window['-ORDER-ACTIVITY-LOG-'].update(
+                f'Added {int(values["-NUM-ORDERS-"])} orders from scenario {loaded.scenario.name}; '
+                f'{len(data)} total displayed; '
+                f'batch {loaded.batch_id[:8]}.\n', append=True)
         elif event == '-DATA-SOURCE-':
             if values['-DATA-SOURCE-'] == 'SQLite':
-                use_sqlite_order_source()
+                set_selected_order_source(use_sqlite_order_source())
                 data, flagged_orders, flagged_data = refresh_source_views(window)
             else:
                 try:
-                    use_uploaded_order_source()
+                    set_selected_order_source(use_uploaded_order_source())
                 except UploadedOrderValidationError as exc:
                     sg.popup_error(str(exc), title='Uploaded Orders')
                     window['-DATA-SOURCE-'].update('SQLite')
-                    use_sqlite_order_source()
+                    set_selected_order_source(use_sqlite_order_source())
                 data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-LOAD-UPLOADED-':
             filepath = show_open_order_data_dialog()
@@ -1437,7 +1475,7 @@ def create_order_list_window():
             try:
                 load_uploaded_order_source(filepath)
                 window['-DATA-SOURCE-'].update('Uploaded file')
-                use_uploaded_order_source()
+                set_selected_order_source(use_uploaded_order_source())
             except UploadedOrderValidationError as exc:
                 sg.popup_error(str(exc), title='Uploaded Orders')
                 continue
@@ -1524,8 +1562,11 @@ def create_order_list_window():
 @login_required
 def run_lis_workflow_analysis(item_ids, *, parent=None):
     from app.system.lis_analysis import (analysis_workflow_choices, default_analysis_workflow,
-                                         remember_analysis_workflow, analyze_lis_items)
+                                         remember_analysis_workflow)
     from sqlalchemy.exc import SQLAlchemyError
+    from app.project import project_session
+    from app.system.analysis_floor import LISAnalysisSession
+    from app.system.floor_view import create_floor_view_window
     try:
         choices = analysis_workflow_choices()
         chosen = default_analysis_workflow(choices)
@@ -1542,7 +1583,7 @@ def run_lis_workflow_analysis(item_ids, *, parent=None):
               [sg.Text('Your workflow selection is remembered for the next analysis.')],
               [sg.Text(f'{len(item_ids)} test(s) selected. Finished or cancelled work is skipped.')],
               [sg.Text('Unreceived orders start at reception; received orders start after reception.\n'
-                       'This generates simulated results. Reporting and approval remain manual.')],
+                       'Reporting and validation steps set dates using your reporter/approver permissions.')],
               [sg.Text('', key='status')],
               [sg.Button('Analyze'), sg.Button('Cancel')]]
     dialog = create_window('Analyze through active workflow', layout, modal=True, parent=parent)
@@ -1563,16 +1604,20 @@ def run_lis_workflow_analysis(item_ids, *, parent=None):
                 document = choice.document
                 dialog['status'].update('Running workflow simulation…')
                 dialog.refresh()
+                project = project_session.active_project
+                if project is not None and project.project_id != choice.project_id:
+                    project = None
                 try:
                     remember_analysis_workflow(choice)
-                    summary = analyze_lis_items(item_ids, workflow_document=document,
-                        operator_username=session_manager.current_user)
+                    live = LISAnalysisSession(item_ids, workflow_document=document,
+                        operator_username=session_manager.current_user, project=project)
+                    summary = create_floor_view_window(live.floor_project, live_session=live,
+                        modal=True, parent=dialog)
+                    if live.error:
+                        sg.popup_error(f'Analysis was not saved: {live.error}', keep_on_top=True)
                 except (ValueError, OSError, SQLAlchemyError) as exc:
                     sg.popup_error(f'Analysis was not saved: {exc}', keep_on_top=True)
                     return None
-                sg.popup_ok(f'{summary.analyzed} tests analyzed; {summary.skipped} skipped.\n'
-                            f'Simulated elapsed time: {summary.makespan * 60:.2f} minutes.\n'
-                            f'Workflow run: {summary.run_id}', keep_on_top=True)
                 return summary
     finally:
         dialog.close()
@@ -1684,6 +1729,11 @@ def create_order_item_list_window(lab_order_id):
                         f'RECEIVED at {format_datetime(refreshed.received_at)} by {refreshed.receiver}', visible=True)
                     window['Accept'].update(disabled=True)
                     window['Approve'].update(disabled=bool(refreshed.approved_at or refreshed.rejected_at or refreshed.cancelled_at))
+                if refreshed.approved_at:
+                    window['approve-banner'].update(
+                        f'APPROVED at {format_datetime(refreshed.approved_at)} by {refreshed.approver}', visible=True)
+                    for key in ('Analyze', 'Analyze All', 'Reject', 'Cancel'):
+                        window[key].update(disabled=True)
         elif event == '-ORDER-ITEM-TABLE- Double' and values['-ORDER-ITEM-TABLE-']:
             create_item_detail_window(items[values['-ORDER-ITEM-TABLE-'][0]][0])
             items = load_item_list()

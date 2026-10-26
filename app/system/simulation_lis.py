@@ -2,12 +2,13 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.system.models import (Customer, LabOrder, LabOrderItem, SimulationOrder,
-                               SimulationRun, SimulationLISImport, Test, engine)
+                               SimulationRun, SimulationLISImport, SimulationLISBatchOrder, LISDemonstrationOrder, Test, engine)
 from app.system.order_sources import SQLiteOrderSource
 from app.auth.windows import login_required
 
@@ -27,11 +28,14 @@ class ImportSummary:
     created: int
     skipped: int
     run_id: str
+    batch_id: str
 
 
 def import_simulation_orders(run_id, *, test_mapping=None, database_engine=None):
-    """One transaction; repeat imports retain existing orders and their LIS state."""
+    """Atomically create a fresh pending batch without modifying previous copies."""
     mapping = test_mapping or {}
+    batch_id = uuid4().hex
+    imported_at = datetime.now()
     with Session(database_engine or engine) as session, session.begin():
         if session.get(SimulationRun, run_id) is None:
             raise ValueError('The simulation run no longer exists.')
@@ -39,13 +43,9 @@ def import_simulation_orders(run_id, *, test_mapping=None, database_engine=None)
                                       .options(selectinload(SimulationOrder.patient)).order_by(SimulationOrder.id)))
         if not orders:
             raise ValueError('This simulation run has no saved orders.')
-        imported = set(session.scalars(select(SimulationLISImport.simulation_order_id)
-                                      .join(SimulationOrder).where(SimulationOrder.run_id == run_id)))
         tests = {test.code: test for test in session.scalars(select(Test).where(Test.active.is_(True)))}
         prepared = []
         for order in orders:
-            if order.id in imported:
-                continue
             if order.priority not in ('routine', 'urgent'):
                 raise ValueError(f'Simulation order {order.order_id}: invalid priority.')
             codes = list(dict.fromkeys(mapping.get(code, code) for code in requested_codes(order)))
@@ -67,27 +67,35 @@ def import_simulation_orders(run_id, *, test_mapping=None, database_engine=None)
                     session.add(customer)
                 patients[patient_key] = customer
             order = LabOrder(customer=customer, order_datetime=source.ordered_at, priority=source.priority,
-                             comment=f'DEMONSTRATION: simulation run {source.run_id}, order {source.order_id}.')
+                             comment=f'DEMONSTRATION: batch {batch_id}, simulation run {source.run_id}, order {source.order_id}.')
             order.order_items = [LabOrderItem(test=tests[code]) for code in codes]
-            session.add(SimulationLISImport(simulation_order_id=source.id, order=order,
-                                            imported_at=datetime.now()))
-        return ImportSummary(len(prepared), len(imported), run_id)
+            session.add(SimulationLISBatchOrder(batch_id=batch_id, simulation_order_id=source.id, order=order,
+                                                 imported_at=imported_at))
+        return ImportSummary(len(prepared), 0, run_id, batch_id)
 
 
 class SimulationLISOrderSource(SQLiteOrderSource):
     """Normal editable LIS orders, filtered to one imported simulation run."""
     label = 'Simulation'
 
-    def __init__(self, run_id, *, database_engine=None):
+    def __init__(self, run_id, *, batch_id=None, database_engine=None):
         self.run_id = run_id
+        self.batch_id = batch_id
         self.database_engine = database_engine or engine
 
     def list_orders(self):
         from app.system.models import LabOrderItem
         with Session(self.database_engine) as session:
-            query = (select(LabOrder).join(SimulationLISImport)
-                     .join(SimulationOrder, SimulationOrder.id == SimulationLISImport.simulation_order_id)
-                     .where(SimulationOrder.run_id == self.run_id)
+            batch_ids = (select(SimulationLISBatchOrder.lis_order_id)
+                         .join(SimulationOrder, SimulationOrder.id == SimulationLISBatchOrder.simulation_order_id)
+                         .where(SimulationOrder.run_id == self.run_id))
+            if self.batch_id is not None:
+                selected_ids = batch_ids.where(SimulationLISBatchOrder.batch_id == self.batch_id)
+            else:
+                legacy_ids = (select(SimulationLISImport.lis_order_id).join(SimulationOrder)
+                              .where(SimulationOrder.run_id == self.run_id))
+                selected_ids = batch_ids.union(legacy_ids)
+            query = (select(LabOrder).where(LabOrder.id.in_(selected_ids))
                      .options(selectinload(LabOrder.customer), selectinload(LabOrder.doctor),
                               selectinload(LabOrder.order_items).selectinload(LabOrderItem.test))
                      .order_by(LabOrder.order_datetime, LabOrder.id))
@@ -97,71 +105,99 @@ class SimulationLISOrderSource(SQLiteOrderSource):
         return next((order for order in self.list_orders() if str(order.id) == str(order_id)), None)
 
 
+class ScenarioLISOrderSource(SimulationLISOrderSource):
+    """All LIS demonstration orders generated from the selected workflow/scenario."""
+
+    def __init__(self, choice, scenario_id, *, batch_id=None, database_engine=None):
+        super().__init__('', batch_id=batch_id, database_engine=database_engine)
+        self.choice = choice
+        self.scenario_id = scenario_id
+        self.scenario = next(s for s in choice.document.workflow.scenarios if s.scenario_id == scenario_id)
+
+    def list_orders(self):
+        with Session(self.database_engine) as session:
+            query = (select(LabOrder).join(LISDemonstrationOrder)
+                     .where(LISDemonstrationOrder.scenario_id == self.scenario_id,
+                            LISDemonstrationOrder.workflow_id == self.choice.document.workflow_id)
+                     .options(selectinload(LabOrder.customer), selectinload(LabOrder.doctor),
+                              selectinload(LabOrder.order_items).selectinload(LabOrderItem.test))
+                     .order_by(LabOrder.id))
+            return list(session.scalars(query))
+
+
+def generate_scenario_lis_orders(source, *, count):
+    """Generate pending real-test orders; do not run the management simulation."""
+    from datetime import timedelta
+    from math import isfinite
+    from app.system.simulation.lab import WorkflowRouter
+    from app.system.equipment_workflow import resolve_equipment_workflow
+    if isinstance(count, bool) or int(count) != float(count) or int(count) < 1:
+        raise ValueError('Number of orders must be a positive whole number.')
+    count = int(count)
+    workflow = resolve_equipment_workflow(source.choice.document.workflow)
+    router = WorkflowRouter()
+    reachable = set(router.reachable_node_ids(workflow, router.start_node_id(workflow)))
+    analyzers = [node for node in workflow.graph.iter_nodes() if node.node_id in reachable
+                 and node.widget.enabled and node.widget.node_type in ('automated analyzer', 'manual analyzer')]
+    if not analyzers:
+        raise ValueError('The scenario workflow needs an enabled analyzer.')
+    selected = sorted({str(code) for node in analyzers for code in node.widget.metadata.get('analyzer_tests', [])})
+    interval = float(source.scenario.parameters.get('interarrival_time', 0))
+    if not isfinite(interval) or interval < 0:
+        raise ValueError('Scenario arrival interval must be finite and non-negative.')
+    batch_id, generated_at = uuid4().hex, datetime.now()
+    with Session(source.database_engine) as session, session.begin():
+        catalogue = {test.code: test for test in session.scalars(select(Test).where(Test.active.is_(True)))}
+        unavailable = set(selected) - set(catalogue)
+        if unavailable:
+            raise ValueError('Update the analyzer selection; these tests are inactive or missing: ' + ', '.join(sorted(unavailable)))
+        codes = selected or sorted(catalogue)
+        if not codes:
+            raise ValueError('Add at least one active LIS test before loading orders.')
+        for index in range(count):
+            customer = Customer(hn=f'DEMO-{batch_id}-{index + 1}',
+                                firstname=f'[DEMO] Simulated Patient {index + 1}', lastname='',
+                                gender='Unknown', dob=date(2000, 1, 1),
+                                address='Synthetic demonstration patient; DOB is a placeholder (2000-01-01).')
+            order = LabOrder(customer=customer, order_datetime=generated_at + timedelta(hours=index * interval),
+                             priority='routine', comment=f'DEMONSTRATION: batch {batch_id}; scenario {source.scenario.name}.')
+            # Configured menus retain the workflow's requested test set. An
+            # unrestricted analyzer cycles through real catalogue assays.
+            requested = codes if selected else [codes[index % len(codes)]]
+            order.order_items = [LabOrderItem(test=catalogue[code]) for code in requested]
+            session.add(LISDemonstrationOrder(batch_id=batch_id, scenario_id=source.scenario_id,
+                        workflow_id=source.choice.document.workflow_id, generated_at=generated_at, order=order))
+    return ScenarioLISOrderSource(source.choice, source.scenario_id, batch_id=batch_id,
+                                  database_engine=source.database_engine)
+
+
 @login_required
 def choose_simulation_source(*, parent=None):
-    """Choose saved teaching data, map unknown tests, and explicitly import it."""
+    """Select a scenario only; loading orders is a separate one-click action."""
     import FreeSimpleGUI as sg
-    from app.ui_styles import create_window, DANGER_BUTTON_COLOR
-    from sqlalchemy.exc import SQLAlchemyError
-    with Session(engine) as session:
-        runs = list(session.scalars(select(SimulationRun).order_by(SimulationRun.started_at.desc())))
-        choices = {f'{run.scenario_name} · {run.started_at:%Y-%m-%d %H:%M} [{run.id[:8]}]': run.id
-                   for run in runs}
+    from app.ui_styles import create_window
+    from app.system.lis_analysis import analysis_workflow_choices
+    choices = {}
+    for choice in analysis_workflow_choices():
+        for scenario in choice.document.workflow.scenarios:
+            choices[f'{scenario.name} — {choice.label}'] = (choice, scenario)
     if not choices:
-        sg.popup_error('No saved simulation runs are available.', keep_on_top=True)
+        sg.popup_error('Create a workflow with a scenario before loading simulated orders.', keep_on_top=True)
         return None
-    layout = [[sg.Text('Simulation orders for LIS demonstration', font=('Arial', 16, 'bold'))],
-              [sg.Text('Saved run'), sg.Combo(list(choices), default_value=next(iter(choices)),
-                                             key='run', readonly=True, size=(55, 1))],
-              [sg.Text('Creates normal LIS orders and synthetic customers in the current database.\n'
-                       'Existing imports are reused. Original simulation records are retained.')],
-              [sg.Button('Next'), sg.Button('Cancel')]]
-    window = create_window('Choose Simulation Run', layout, modal=True, parent=parent, always_on_top=True)
-    try:
-        event, values = window.read()
-        if event != 'Next':
-            return None
-        run_id = choices.get(values.get('run'))
-        if run_id is None:
-            return None
-    finally:
-        window.close()
-    with Session(engine) as session:
-        orders = list(session.scalars(select(SimulationOrder).where(SimulationOrder.run_id == run_id)))
-        imported = set(session.scalars(select(SimulationLISImport.simulation_order_id)
-                                      .join(SimulationOrder).where(SimulationOrder.run_id == run_id)))
-        test_codes = list(session.scalars(select(Test.code).where(Test.active.is_(True)).order_by(Test.code)))
-        try:
-            missing = sorted({code for order in orders if order.id not in imported
-                              for code in requested_codes(order)} - set(test_codes))
-        except ValueError as exc:
-            sg.popup_error(str(exc), keep_on_top=True)
-            return None
-    mapping_rows = [[sg.Text(code, size=(20, 1)), sg.Combo(test_codes, readonly=True, key=f'test:{index}', size=(30, 1))]
-                    for index, code in enumerate(missing)]
-    layout = [[sg.Text(f'{len(orders)} saved orders · {len(imported)} already imported')],
-              [sg.Text('Map unknown simulation codes to active LIS tests.' if missing else 'All requested tests match the LIS catalogue.')],
-              [sg.Column(mapping_rows, scrollable=True, vertical_scroll_only=True, size=(520, 220))] if missing else [],
-              [sg.Text('New orders start pending, without results or approvals.\n'
-                       'Patients are marked [DEMO]; missing demographics use Unknown gender and DOB 2000-01-01.')],
-              [sg.Button('Import as LIS orders'), sg.Button('Cancel', button_color=DANGER_BUTTON_COLOR)]]
-    window = create_window('Import Simulation Orders', layout, modal=True, parent=parent, always_on_top=True)
+    default = next((label for label, (choice, scenario) in choices.items()
+                    if scenario is choice.document.workflow.active_scenario), next(iter(choices)))
+    layout = [[sg.Text('Choose scenario', font=('Arial', 16, 'bold'))],
+              [sg.Combo(list(choices), default_value=default, key='scenario', readonly=True, size=(65, 1))],
+              [sg.Text('Then click Load Simulated Orders to generate a fresh batch with real LIS tests.')],
+              [sg.Button('Select'), sg.Button('Cancel')]]
+    window = create_window('Simulation order scenario', layout, modal=True, parent=parent, always_on_top=True)
     try:
         while True:
             event, values = window.read()
             if event in (sg.WIN_CLOSED, 'Cancel'):
                 return None
-            if event == 'Import as LIS orders':
-                mapping = {code: values.get(f'test:{index}') for index, code in enumerate(missing)}
-                if any(value not in test_codes for value in mapping.values()):
-                    sg.popup_error('Choose an active LIS test for every simulation code.', keep_on_top=True)
-                    continue
-                try:
-                    summary = import_simulation_orders(run_id, test_mapping=mapping)
-                except (ValueError, SQLAlchemyError) as exc:
-                    sg.popup_error(f'No orders were imported: {exc}', keep_on_top=True)
-                    continue
-                sg.popup_ok(f'{summary.created} LIS orders created; {summary.skipped} existing imports reused.', keep_on_top=True)
-                return SimulationLISOrderSource(run_id)
+            if event == 'Select' and values.get('scenario') in choices:
+                choice, scenario = choices[values['scenario']]
+                return ScenarioLISOrderSource(choice, scenario.scenario_id)
     finally:
         window.close()

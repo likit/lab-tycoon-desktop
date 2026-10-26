@@ -9,6 +9,15 @@ from app.system.floor_view import create_floor_view_window
 
 
 class FloorAuthenticationTests(unittest.TestCase):
+    def test_signed_out_analysis_modal_cannot_start_its_worker(self):
+        live = Mock()
+        with patch('app.auth.windows.session_manager.is_logged_in', return_value=False), \
+             patch('app.auth.windows.sg.popup_error'), \
+             patch('app.system.floor_view.create_window') as window:
+            create_floor_view_window(LabTycoonProject.create('Demo'), live_session=live, modal=True)
+        live.play.assert_not_called()
+        window.assert_not_called()
+
     def test_signed_out_entry_points_do_not_open_windows_or_hide_home(self):
         project, home = LabTycoonProject.create('Demo'), Mock()
         with patch('app.auth.windows.session_manager.is_logged_in', return_value=False), \

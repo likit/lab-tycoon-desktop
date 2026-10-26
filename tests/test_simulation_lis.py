@@ -9,8 +9,8 @@ from sqlalchemy import create_engine, select, func, inspect
 from sqlalchemy.orm import Session
 
 from app.system.models import (Base, Customer, LabOrder, LabOrderItem, Test, Specimens, TestMethod,
-                               SimulationRun, SimulationOrder, SimulationPatient, SimulationLISImport,
-                               ensure_db_schema)
+                               SimulationRun, SimulationOrder, SimulationPatient, SimulationLISImport, SimulationLISBatchOrder,
+                               ensure_db_schema, LISDemonstrationOrder)
 from app.system.simulation_lis import import_simulation_orders, SimulationLISOrderSource
 
 
@@ -66,8 +66,8 @@ class SimulationLISImportTests(unittest.TestCase):
         self.assertTrue(all(item._value is None and item.reported_at is None and item.approved_at is None
                             for order in orders for item in order.order_items))
 
-    def test_reimport_preserves_operational_changes_and_creates_no_duplicates(self):
-        self.convert()
+    def test_reimport_creates_fresh_pending_batch_and_preserves_previous_edits(self):
+        first_batch = self.convert()
         with Session(self.engine) as session, session.begin():
             order = session.scalar(select(LabOrder).order_by(LabOrder.id))
             order.received_at = datetime(2026, 1, 2)
@@ -76,14 +76,21 @@ class SimulationLISImportTests(unittest.TestCase):
             order.order_items[0].approved_at = datetime(2026, 1, 3)
             order_id = order.id
         summary = self.convert()
-        self.assertEqual((summary.created, summary.skipped), (0, 2))
-        self.assertEqual(self.count(LabOrder), 2)
+        self.assertEqual((summary.created, summary.skipped), (2, 0))
+        self.assertNotEqual(summary.batch_id, first_batch.batch_id)
+        self.assertEqual(self.count(LabOrder), 4)
         self.assertEqual(self.count(Customer), 1)
         with Session(self.engine) as session:
             order = session.get(LabOrder, order_id)
             self.assertEqual(order.received_at, datetime(2026, 1, 2))
             self.assertEqual(order.order_items[0]._value, '101')
             self.assertEqual(order.order_items[0].approved_at, datetime(2026, 1, 3))
+        fresh = SimulationLISOrderSource('run-a', batch_id=summary.batch_id, database_engine=self.engine).list_orders()
+        self.assertEqual(len(fresh), 2)
+        self.assertTrue(all(order.received_at is None and order.approved_at is None for order in fresh))
+        self.assertTrue(all(item._value is None and item.finished_at is None and item.reported_at is None
+                            and item.approved_at is None for order in fresh for item in order.order_items))
+        self.assertNotIn(order_id, [order.id for order in fresh])
 
     def test_unknown_code_requires_explicit_mapping_and_failure_is_atomic(self):
         self.add_run('unknown', ['GLU', 'SIM-TEST'])
@@ -92,6 +99,7 @@ class SimulationLISImportTests(unittest.TestCase):
         self.assertEqual(self.count(LabOrder), 0)
         self.assertEqual(self.count(Customer), 0)
         self.assertEqual(self.count(SimulationLISImport), 0)
+        self.assertEqual(self.count(SimulationLISBatchOrder), 0)
         summary = self.convert('unknown', test_mapping={'SIM-TEST': 'ALT'})
         self.assertEqual(summary.created, 2)
 
@@ -123,11 +131,29 @@ class SimulationLISImportTests(unittest.TestCase):
         self.assertEqual(self.count(LabOrder), 0)
 
     def test_existing_database_gets_import_provenance_table(self):
-        SimulationLISImport.__table__.drop(self.engine)
+        SimulationLISBatchOrder.__table__.drop(self.engine)
         ensure_db_schema(self.engine)
-        self.assertIn('simulation_lis_imports', inspect(self.engine).get_table_names())
+        self.assertIn('simulation_lis_batch_orders', inspect(self.engine).get_table_names())
         self.convert()
-        self.assertEqual(self.count(SimulationLISImport), 2)
+        self.assertEqual(self.count(SimulationLISBatchOrder), 2)
+
+    def test_legacy_imports_remain_accessible_and_do_not_block_new_batches(self):
+        first = self.convert()
+        with self.engine.begin() as connection:
+            mappings = connection.execute(select(SimulationLISBatchOrder.__table__)).mappings().all()
+            connection.execute(SimulationLISBatchOrder.__table__.delete())
+            connection.execute(SimulationLISImport.__table__.insert(), [
+                dict(simulation_order_id=row['simulation_order_id'], lis_order_id=row['lis_order_id'],
+                     imported_at=row['imported_at']) for row in mappings])
+        fresh = self.convert()
+        self.assertNotEqual(first.batch_id, fresh.batch_id)
+        source = SimulationLISOrderSource('run-a', batch_id=fresh.batch_id, database_engine=self.engine)
+        self.assertEqual(source.count(), 2)
+        legacy_id = mappings[0]['lis_order_id']
+        self.assertIsNone(source.get_order(legacy_id))
+        all_batches = SimulationLISOrderSource('run-a', database_engine=self.engine)
+        self.assertEqual(all_batches.count(), 4)
+        self.assertIsNotNone(all_batches.get_order(legacy_id))
 
     def test_conversion_dialog_requires_signin(self):
         from unittest.mock import patch
@@ -138,26 +164,92 @@ class SimulationLISImportTests(unittest.TestCase):
             self.assertIsNone(choose_simulation_source())
         database.assert_not_called()
 
-    def test_dialog_selects_saved_run_and_creates_editable_lis_source(self):
-        from unittest.mock import patch, Mock, MagicMock
+    def scenario_source(self, codes=None):
+        from app.system.model import Workflow
+        from app.system.storage import WorkflowDocument
+        from app.system.lis_analysis import AnalysisWorkflowChoice
+        from app.system.simulation_lis import ScenarioLISOrderSource
+        workflow = Workflow()
+        adapter = workflow.create_node('Orders', kind='order_adapter',
+            metadata={'node_type': 'order adapter', 'adapter_type': 'simulation'})
+        workflow.create_connected_node(adapter.node_id, 'Analyzer', 60,
+            metadata={'node_type': 'automated analyzer', 'throughput': 60,
+                      'analyzer_tests': codes if codes is not None else ['GLU', 'ALT']})
+        workflow.active_scenario.parameters['interarrival_time'] = 1 / 60
+        document = WorkflowDocument('workflow', 'Teaching workflow', workflow)
+        choice = AnalysisWorkflowChoice('saved:workflow', 'Teaching workflow', document)
+        return ScenarioLISOrderSource(choice, workflow.active_scenario.scenario_id, database_engine=self.engine)
+
+    def test_dialog_selects_only_scenario_without_importing_or_generating(self):
+        from unittest.mock import patch, Mock
         from app.system.simulation_lis import choose_simulation_source
-        chooser, importer = MagicMock(), MagicMock()
-        label = 'Demo · 2026-01-01 00:00 [run-a]'
-        chooser.read.return_value = ('Next', {'run': label})
-        importer.read.return_value = ('Import as LIS orders', {})
+        expected = self.scenario_source()
+        chooser = Mock()
+        label = f'{expected.scenario.name} — {expected.choice.label}'
+        chooser.read.return_value = ('Select', {'scenario': label})
         with patch('app.auth.windows.session_manager.is_logged_in', return_value=True), \
              patch('app.auth.windows.Session') as auth_database, \
              patch('app.system.simulation_lis.engine', self.engine), \
-             patch('app.ui_styles.create_window', side_effect=[chooser, importer]), \
-             patch('FreeSimpleGUI.popup_ok'):
+             patch('app.system.lis_analysis.analysis_workflow_choices', return_value=[expected.choice]), \
+             patch('app.ui_styles.create_window', return_value=chooser) as create:
             auth_database.return_value.__enter__.return_value.scalar.return_value = Mock(active=True)
             source = choose_simulation_source()
-        self.assertIsInstance(source, SimulationLISOrderSource)
-        self.assertEqual(source.run_id, 'run-a')
-        self.assertEqual(source.count(), 2)
-        self.assertEqual(self.count(LabOrderItem), 4)
+        self.assertEqual(source.scenario_id, expected.scenario_id)
+        self.assertIsNone(source.batch_id)
+        self.assertEqual(source.count(), 0)
+        self.assertEqual(self.count(LabOrder), 0)
+        create.assert_called_once()
         chooser.close.assert_called_once()
-        importer.close.assert_called_once()
+
+    def test_scenario_generation_uses_real_selected_tests_without_simulation_run(self):
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        source = self.scenario_source()
+        before = self.count(SimulationRun)
+        generated = generate_scenario_lis_orders(source, count=3)
+        orders = generated.list_orders()
+        self.assertEqual(len(orders), 3)
+        self.assertEqual(self.count(SimulationRun), before)
+        self.assertEqual(self.count(LISDemonstrationOrder), 3)
+        self.assertEqual({item.test.code for order in orders for item in order.order_items}, {'GLU', 'ALT'})
+        self.assertTrue(all(order.received_at is None and order.approved_at is None for order in orders))
+        self.assertTrue(all(item.finished_at is None and item._value is None for order in orders for item in order.order_items))
+        self.assertEqual((orders[1].order_datetime - orders[0].order_datetime).total_seconds(), 60)
+
+    def test_unrestricted_analyzer_generates_catalogue_tests_instead_of_placeholder(self):
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        generated = generate_scenario_lis_orders(self.scenario_source([]), count=2)
+        self.assertEqual([order.order_items[0].test.code for order in generated.list_orders()], ['ALT', 'GLU'])
+
+    def test_each_scenario_load_creates_fresh_batch_and_keeps_previous_results(self):
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        first = generate_scenario_lis_orders(self.scenario_source(), count=2)
+        first_id = first.list_orders()[0].id
+        with Session(self.engine) as session, session.begin():
+            item = session.get(LabOrder, first_id).order_items[0]
+            item._value = '101'
+            item.approved_at = datetime(2026, 1, 3)
+        second = generate_scenario_lis_orders(first, count=2)
+        self.assertNotEqual(first.batch_id, second.batch_id)
+        self.assertEqual(second.count(), 4)
+        self.assertEqual(self.count(LabOrder), 4)
+        self.assertIsNotNone(second.get_order(first_id))
+        with Session(self.engine) as session:
+            new_ids = set(session.scalars(select(LISDemonstrationOrder.lis_order_id)
+                          .where(LISDemonstrationOrder.batch_id == second.batch_id)))
+        self.assertEqual(len(new_ids), 2)
+        self.assertTrue(all(item._value is None for order in second.list_orders() if order.id in new_ids
+                            for item in order.order_items))
+        self.assertEqual(first.get_order(first_id).order_items[0]._value, '101')
+        from app.system.simulation_lis import ScenarioLISOrderSource
+        reopened = ScenarioLISOrderSource(first.choice, first.scenario_id, database_engine=self.engine)
+        self.assertEqual(reopened.count(), 4)
+
+    def test_invalid_scenario_test_selection_creates_nothing(self):
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        with self.assertRaisesRegex(ValueError, 'inactive or missing'):
+            generate_scenario_lis_orders(self.scenario_source(['SIM-TEST']), count=2)
+        self.assertEqual(self.count(LabOrder), 0)
+        self.assertEqual(self.count(Customer), 0)
 
     def test_cancelling_source_selection_creates_nothing(self):
         from unittest.mock import patch, Mock
@@ -167,6 +259,7 @@ class SimulationLISImportTests(unittest.TestCase):
         with patch('app.auth.windows.session_manager.is_logged_in', return_value=True), \
              patch('app.auth.windows.Session') as auth_database, \
              patch('app.system.simulation_lis.engine', self.engine), \
+             patch('app.system.lis_analysis.analysis_workflow_choices', return_value=[self.scenario_source().choice]), \
              patch('app.ui_styles.create_window', return_value=chooser):
             auth_database.return_value.__enter__.return_value.scalar.return_value = Mock(active=True)
             self.assertIsNone(choose_simulation_source())

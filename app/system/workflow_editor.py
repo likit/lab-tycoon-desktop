@@ -932,7 +932,6 @@ class WorkflowEditorController:
             window["-WF-ACTIVE-SCENARIO-"].update(values=[], value="")
             window["-WF-WIDGETS-"].update(values=[])
             window["-WF-DETAILS-"].update("Select a node to edit its properties.")
-            self.update_analyzer_tests_button(window)
             return
 
         workflow = self.current_document.workflow
@@ -1006,7 +1005,6 @@ class WorkflowEditorController:
         if node.metadata:
             details.append(f"Metadata: {node.metadata}")
         window["-WF-DETAILS-"].update("\n".join(details))
-        self.update_analyzer_tests_button(window)
 
     def is_analyzer_node(self, node: WorkflowNode | None) -> bool:
         if node is None:
@@ -1016,14 +1014,6 @@ class WorkflowEditorController:
         instance = self.equipment_instance(str(node.metadata.get("equipment_id", "")))
         return bool(node.kind == "equipment" and instance
                     and instance.equipment_type == "chemistry_analyzer")
-
-    def update_analyzer_tests_button(self, window: sg.Window) -> None:
-        """Enable the test selection button only for analyzer nodes."""
-
-        button = window["-WF-SELECT-TESTS-"]
-        node = self.selected_node()
-        is_analyzer = self.is_analyzer_node(node)
-        button.update(disabled=not is_analyzer)
 
     def rerender(self, window: sg.Window) -> None:
         if self.current_document is None:
@@ -1840,6 +1830,10 @@ def _show_equipment_node_dialog(
         [sg.Button("Allowed staff", key="-WF-EQUIPMENT-ALLOWED-STAFF-", disabled=node is None,
                    tooltip="Save a new node before assigning staff."),
          sg.Text(f"Scenario: {controller.current_document.workflow.active_scenario.name}", text_color="#2563eb")],
+        [sg.Button("Select tests", key="-WF-EQUIPMENT-TESTS-", disabled=True,
+                   tooltip="Save the analyzer equipment node before selecting tests."),
+         sg.Text(f"{len(node.widget.metadata.get('analyzer_tests', [])) if node else 0} tests selected",
+                 key="-WF-EQUIPMENT-TEST-COUNT-")],
         [sg.Text("Description"), sg.Multiline(node.widget.description if node else "", key="-WF-EQUIPMENT-DESC-", size=(42, 4))],
         [sg.Frame("Output", [[
             sg.Checkbox("Data", default=bool(node.metadata.get("output_data", False)) if node else False,
@@ -1858,6 +1852,10 @@ def _show_equipment_node_dialog(
         equipment_id = label_to_id.get(window["-WF-EQUIPMENT-"].get(), "")
         terminal = controller.is_reporting_station(equipment_id)
         window["-WF-EQUIPMENT-ENDPOINT-"].update(visible=terminal)
+        instance = controller.equipment_instance(equipment_id)
+        can_select_tests = bool(node is not None and equipment_id == current_id and instance
+                                and controller.is_analyzer_node(node))
+        window["-WF-EQUIPMENT-TESTS-"].update(disabled=not can_select_tests)
         window["-WF-EQUIPMENT-ALLOWED-STAFF-"].update(disabled=terminal or node is None)
         for key in ("THROUGHPUT", "HUMAN", "STAFF", "OUTPUT-DATA", "OUTPUT-SPECIMENS"):
             window[f"-WF-EQUIPMENT-{key}-"].update(disabled=terminal)
@@ -1876,6 +1874,12 @@ def _show_equipment_node_dialog(
             event, values = window.read()
             if event in (sg.WIN_CLOSED, "Cancel"):
                 return None
+            if event == "-WF-EQUIPMENT-TESTS-" and node is not None:
+                selected_codes = _show_test_selection_dialog(node=node, available_tests=_load_available_tests())
+                if selected_codes is not None:
+                    controller.set_analyzer_tests(node.node_id, selected_codes)
+                    window["-WF-EQUIPMENT-TEST-COUNT-"].update(f"{len(selected_codes)} tests selected")
+                continue
             if event == "-WF-EQUIPMENT-ALLOWED-STAFF-" and node is not None:
                 controller.configure_node_staff(node)
                 continue
@@ -2047,7 +2051,6 @@ def open_workflow_editor_window(
             *([sg.Button("Add Equipment Node", key="-WF-ADD-EQUIPMENT-")] if project_mode else []),
             sg.Button("Connect Nodes", key="-WF-CONNECT-"),
             sg.Button("Edit Properties", key="-WF-PROPS-"),
-            sg.Button("Select tests", key="-WF-SELECT-TESTS-", disabled=True),
             sg.Button("Delete Node", key="-WF-DELETE-", button_color=("white", "#b91c1c")),
             sg.Button("Add Scenario", key="-WF-ADD-SCENARIO-"),
             *([sg.Button("Run Workflow", key="-WF-RUN-")] if run_simulation is not None else []),
@@ -2220,24 +2223,6 @@ def open_workflow_editor_window(
                         _notify("Connection removed.")
                     else:
                         _notify("Unsupported workflow action.")
-                    continue
-                if event == "-WF-SELECT-TESTS-":
-                    node = controller.selected_node()
-                    if node is None:
-                        _notify("Select an analyzer node first.")
-                        continue
-                    if not controller.is_analyzer_node(node):
-                        _notify("Select an analyzer node first.")
-                        continue
-                    available_tests = _load_available_tests()
-                    selected_codes = _show_test_selection_dialog(
-                        node=node,
-                        available_tests=available_tests,
-                    )
-                    if selected_codes is not None:
-                        controller.set_analyzer_tests(node.node_id, selected_codes, window)
-                        controller.refresh(window)
-                        _notify("Analyzer tests updated.")
                     continue
                 if event == "-WF-NEW-":
                     workflow_name = controller.create_new_workflow(window)
