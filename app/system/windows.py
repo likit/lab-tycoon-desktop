@@ -1691,6 +1691,8 @@ def create_order_item_list_window(lab_order_id):
                 sg.Button('Cancel', button_color=('white', 'red'),
                        disabled_button_color=('white', 'lightgrey'),
                        disabled=is_order_cancelled or is_order_rejected or is_order_approved),
+                sg.Button('FHIR Preview'),
+                sg.Button('PPC-125 Preview'),
                 sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)
             ],
             [sg.Text(f'RECEIVED at {format_datetime(order.received_at)} by {order.receiver}',
@@ -1711,8 +1713,12 @@ def create_order_item_list_window(lab_order_id):
             window['receive-banner'].update(visible=True)
     while True:
         event, values = window.read()
-        if event in ('Exit', sg.WIN_CLOSED):
+        if event in ('Exit', 'Close', sg.WIN_CLOSED):
             break
+        elif event == 'FHIR Preview':
+            create_order_fhir_preview_window(lab_order_id, parent=window)
+        elif event == 'PPC-125 Preview':
+            create_ppc125_preview_window(lab_order_id, parent=window)
         elif event in ('Analyze', 'Analyze All'):
             selected = values.get('-ORDER-ITEM-TABLE-', [])
             if event == 'Analyze' and not selected:
@@ -1862,12 +1868,13 @@ def create_item_detail_window(item_id):
             [sg.Text('Comment', font=('Arial', 14))],
             [sg.Multiline(item.comment, key='-UPDATE-COMMENT-', size=(45, 10), disabled=is_item_cancelled)],
             actions,
-            [sg.Button('Audit Trail'), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
+            [sg.Button('Audit Trail'), sg.Button('FHIR Preview'), sg.Button('HL7 V2 Preview'),
+             sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
         ]
     window = create_window('Lab Order Item Detail', layout=layout, modal=True, resizable=True)
     while True:
         event, values = window.read()
-        if event in ('Exit', sg.WIN_CLOSED):
+        if event in ('Exit', 'Close', sg.WIN_CLOSED):
             break
         elif event == 'Cancel':
             response = sg.popup_ok_cancel('Are you sure want to cancel this item?')
@@ -1946,7 +1953,166 @@ def create_item_detail_window(item_id):
                 break
         elif event == 'Audit Trail':
             create_lab_order_item_version_list_window(item_id)
+        elif event == 'FHIR Preview':
+            create_fhir_preview_window(item_id, parent=window)
+        elif event == 'HL7 V2 Preview':
+            create_hl7_preview_window(item_id, parent=window)
     window.close()
+
+
+@login_required
+def create_fhir_preview_window(item_id, *, parent=None):
+    from app.system.fhir_preview import result_observation
+    with Session(engine) as session:
+        item = session.get(LabOrderItem, item_id)
+        if item is None:
+            sg.popup_error('This result no longer exists.')
+            return
+        payload = json.dumps(result_observation(item), ensure_ascii=False, indent=2, allow_nan=False)
+    _show_fhir_json(payload, 'FHIR R4 · Observation · Saved result', parent=parent)
+
+
+@login_required
+def create_order_fhir_preview_window(order_id, *, parent=None):
+    from app.system.fhir_preview import order_bundle
+    with Session(engine) as session:
+        order = session.get(LabOrder, order_id)
+        if order is None:
+            sg.popup_error('This order no longer exists.')
+            return
+        payload = json.dumps(order_bundle(order), ensure_ascii=False, indent=2, allow_nan=False)
+    _show_fhir_json(payload, 'FHIR R4 · Order Bundle · All saved order items', parent=parent)
+
+
+def _show_fhir_json(payload, heading, *, parent=None):
+    layout = [
+        [sg.Text(heading)],
+        [sg.Text('Preview uses saved data. Save any edits before previewing.')],
+        [sg.Multiline(payload, key='-FHIR-JSON-', size=(90, 30), disabled=True,
+                      font=('Courier', 11), expand_x=True, expand_y=True)],
+        [sg.Button('Copy JSON'), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
+    ]
+    preview = create_window('FHIR Preview', layout, modal=True, parent=parent, resizable=True)
+    try:
+        while True:
+            event, _ = preview.read()
+            if event in (sg.WIN_CLOSED, 'Close'):
+                break
+            if event == 'Copy JSON':
+                preview.TKroot.clipboard_clear()
+                preview.TKroot.clipboard_append(payload)
+    finally:
+        preview.close()
+
+
+@login_required
+def create_hl7_preview_window(item_id, *, parent=None):
+    from app.system.hl7_preview import result_message
+    with Session(engine) as session:
+        item = session.get(LabOrderItem, item_id)
+        if item is None:
+            sg.popup_error('This result no longer exists.')
+            return
+        payload = result_message(item)
+    layout = [
+        [sg.Text('HL7 v2.5.1 · ORU^R01 · Saved result')],
+        [sg.Text('Preview uses saved data. Save any edits before previewing.')],
+        [sg.Multiline(payload.replace('\r', '\n'), key='-HL7-MESSAGE-', size=(100, 22),
+                      disabled=True, font=('Courier', 11), horizontal_scroll=True,
+                      expand_x=True, expand_y=True)],
+        [sg.Button('Copy Message'), sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
+    ]
+    preview = create_window('HL7 V2 Preview', layout, modal=True, parent=parent, resizable=True)
+    try:
+        while True:
+            event, _ = preview.read()
+            if event in (sg.WIN_CLOSED, 'Close'):
+                break
+            if event == 'Copy Message':
+                preview.TKroot.clipboard_clear()
+                preview.TKroot.clipboard_append(payload)
+    finally:
+        preview.close()
+
+
+@login_required
+def create_ppc125_preview_window(order_id, *, parent=None):
+    from app.system.ppc125_preview import order_preview
+    with Session(engine) as session:
+        order = session.get(LabOrder, order_id)
+        if order is None:
+            sg.popup_error('This order no longer exists.')
+            return
+        codes = list(dict.fromkeys(item.test.code for item in order.order_items if not item.cancelled_at))
+    layout = [
+        [sg.Text('PPC 125 Protocol v1.0 · LIS → Analyzer · Sample ID mode')],
+        [sg.Text('Sample ID'), sg.Input(str(order_id), key='sample', size=(23, 1)),
+         sg.Text('Disk'), sg.Input('1', key='disk', size=(3, 1)),
+         sg.Text('Cup position'), sg.Input('1', key='position', size=(3, 1)),
+         sg.Text('Diluent'), sg.Combo(['N', 'Y'], default_value='N', readonly=True, key='diluent', size=(3, 1))],
+        [sg.Text('Specimen'), sg.Combo(['1 Serum', '2 Urine', '3 CSF', '4 Suprnt', '5 Others'],
+            default_value='1 Serum', readonly=True, key='specimen'),
+         sg.Text('Preview settings only; no message is sent.')],
+        [sg.Text('Test mapping: LIS code=analyzer code (one per line)')],
+        [sg.Multiline('\n'.join(f'{code}={code}' for code in codes), key='mapping', size=(90, 4), expand_x=True)],
+        [sg.Button('Update Preview')],
+        [sg.Text('', key='-PPC-NOTES-', size=(110, 4), expand_x=True)],
+        [sg.TabGroup([[
+            sg.Tab('Order records', [[sg.Multiline('', key='-PPC-RECORDS-', size=(110, 18),
+                disabled=True, font=('Courier', 11), horizontal_scroll=True, expand_x=True, expand_y=True)]]),
+            sg.Tab('Framed exchange', [[sg.Multiline('', key='-PPC-EXCHANGE-', size=(110, 18),
+                disabled=True, font=('Courier', 11), horizontal_scroll=True, expand_x=True, expand_y=True)]]),
+        ]], expand_x=True, expand_y=True)],
+        [sg.Button('Copy Records'), sg.Button('Copy Exchange'),
+         sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
+    ]
+    preview = create_window('PPC-125 Preview', layout, modal=True, parent=parent, resizable=True)
+    result = None
+
+    def update(values):
+        nonlocal result
+        result = None
+        try:
+            mapping = {}
+            for line in values['mapping'].splitlines():
+                if not line.strip():
+                    continue
+                source, separator, target = line.partition('=')
+                if not separator or source.strip() not in codes or source.strip() in mapping:
+                    raise ValueError('Each mapping must be a unique LIS code=analyzer code from this order.')
+                mapping[source.strip()] = target.strip()
+            with Session(engine) as session:
+                order = session.get(LabOrder, order_id)
+                if order is None:
+                    raise ValueError('This order no longer exists.')
+                result = order_preview(order, sample_id=values['sample'], disk=values['disk'],
+                    position=values['position'], diluent=values['diluent'],
+                    specimen=values['specimen'].split()[0], test_codes=mapping)
+            preview['-PPC-RECORDS-'].update('\n'.join(result.records))
+            preview['-PPC-EXCHANGE-'].update(result.exchange)
+            preview['-PPC-NOTES-'].update('\n'.join(result.notes))
+        except ValueError as exc:
+            preview['-PPC-RECORDS-'].update('')
+            preview['-PPC-EXCHANGE-'].update('')
+            preview['-PPC-NOTES-'].update(str(exc))
+        preview['Copy Records'].update(disabled=result is None)
+        preview['Copy Exchange'].update(disabled=result is None)
+
+    try:
+        update(dict(sample=str(order_id), disk='1', position='1', diluent='N',
+                    specimen='1 Serum', mapping='\n'.join(f'{code}={code}' for code in codes)))
+        while True:
+            event, values = preview.read()
+            if event in (sg.WIN_CLOSED, 'Close'):
+                break
+            if event in ('Update Preview', 'Copy Records', 'Copy Exchange'):
+                update(values)
+            if result is not None and event in ('Copy Records', 'Copy Exchange'):
+                payload = '\r'.join(result.records) + '\r' if event == 'Copy Records' else result.exchange
+                preview.TKroot.clipboard_clear()
+                preview.TKroot.clipboard_append(payload)
+    finally:
+        preview.close()
 
 
 @login_required
