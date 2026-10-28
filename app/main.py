@@ -113,7 +113,7 @@ def get_token_and_decode_payload():
     if current_token:
         try:
             decoded_payload = jwt.decode(current_token, secret_key, algorithms=['HS256'])
-        except jwt.exceptions.ExpiredSignatureError:
+        except jwt.exceptions.InvalidTokenError:
             pass
         else:
             return decoded_payload

@@ -50,7 +50,7 @@ from app.system.order_sources import REQUIRED_UPLOADED_COLUMNS_ORDER
 from app.system.signals.duplicate import detect_duplicate_candidate
 from app.system.signals.repository import find_prior_orders_for_duplicate_check
 from app.system.storage import WorkflowDocument, WorkflowRepository
-from app.config import logger, config_dict, update_config_yaml
+from app.config import LOG_PATH, logger, config_dict, update_config_yaml
 from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 
 _workflow_repository = WorkflowRepository()
@@ -634,7 +634,7 @@ def create_workflow_window():
 
 @login_required
 def create_logging_window():
-    logs = open('run_log.txt').readlines()
+    logs = LOG_PATH.read_text(encoding='utf-8').splitlines(keepends=True)
     layout = [
         [sg.Multiline('\n'.join(logs), size=(80, 10), disabled=True,
                       font='Courier 13', horizontal_scroll=True, expand_x=True, expand_y=True)],
