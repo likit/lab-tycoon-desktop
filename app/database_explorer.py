@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import os
+from pathlib import Path
+import tempfile
+from tkinter import filedialog, messagebox, TclError
+
 import FreeSimpleGUI as sg
 from sqlalchemy import MetaData, Table, inspect, select
 from sqlalchemy.engine import Engine
@@ -9,7 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.system.models import engine
 from app.auth.windows import login_required
-from app.ui_styles import create_window, DANGER_BUTTON_COLOR
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR, bring_window_to_front
 
 
 PREVIEW_LIMIT = 100
@@ -62,12 +68,39 @@ def format_preview(headings: list[str], rows: list[list[object]]) -> str:
     return "\n".join(lines)
 
 
+def export_database_table(database_engine: Engine, table_name: str, destination) -> int:
+    """Export all rows with headers, replacing the target only after success."""
+    if table_name not in list_database_tables(database_engine):
+        raise ValueError(f"Unknown database table: {table_name}")
+    table = Table(table_name, MetaData(), autoload_with=database_engine)
+    destination = Path(destination)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8-sig', newline='',
+                dir=destination.parent, prefix='.table-export-', suffix='.csv', delete=False) as output:
+            temporary_path = Path(output.name)
+            writer = csv.writer(output)
+            writer.writerow(column.name for column in table.columns)
+            count = 0
+            with database_engine.connect() as connection:
+                result = connection.execution_options(yield_per=1000).execute(select(table))
+                for row in result:
+                    writer.writerow(row)
+                    count += 1
+        os.replace(temporary_path, destination)
+        return count
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 @login_required
 def create_database_explorer_window() -> None:
     """Open a read-only schema and data browser for the active LIS database."""
 
     try:
-        table_names = list_database_tables(engine)
+        table_names = [name for name in list_database_tables(engine)
+                       if name != 'transaction' and not name.startswith(('lis_', 'simulation_'))]
     except SQLAlchemyError as exc:
         sg.popup_error(f"Database tables could not be loaded:\n{exc}", title="Database Explorer")
         return
@@ -123,7 +156,9 @@ def create_database_explorer_window() -> None:
                 expand_y=True,
             ),
         ],
-        [sg.Push(), sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
+        [sg.Button('Download Table', key='-DBX-DOWNLOAD-', disabled=True,
+                   tooltip='Save all rows of the selected table as CSV'),
+         sg.Push(), sg.CloseButton("Close", button_color=DANGER_BUTTON_COLOR)],
     ]
     window = create_window(
         "Database Explorer",
@@ -132,6 +167,7 @@ def create_database_explorer_window() -> None:
         finalize=True,
         size=(1250, 820),
     )
+    selected_table = None
     try:
         while True:
             event, values = window.read()
@@ -139,6 +175,8 @@ def create_database_explorer_window() -> None:
                 break
             if event == "-DBX-TREE-" and values.get("-DBX-TREE-"):
                 selected_key = values["-DBX-TREE-"][0]
+                selected_table = None
+                window['-DBX-DOWNLOAD-'].update(disabled=True)
                 if not str(selected_key).startswith("table:"):
                     continue
                 table_name = str(selected_key).split(":", 1)[1]
@@ -150,5 +188,29 @@ def create_database_explorer_window() -> None:
                 window["-DBX-TITLE-"].update(table_name)
                 window["-DBX-SCHEMA-"].update(values=schema_rows)
                 window["-DBX-PREVIEW-"].update(format_preview(headings, preview_rows))
+                selected_table = table_name
+                window['-DBX-DOWNLOAD-'].update(disabled=False)
+            elif event == '-DBX-DOWNLOAD-' and selected_table:
+                try:
+                    destination = filedialog.asksaveasfilename(parent=window.TKroot,
+                        title='Save table as CSV', initialfile=f'{selected_table}.csv',
+                        defaultextension='.csv', filetypes=(('CSV files', '*.csv'),))
+                except TclError as exc:
+                    messagebox.showerror(title='Download Table',
+                        message=f'The save dialog could not be opened:\n{exc}', parent=window.TKroot)
+                    continue
+                finally:
+                    bring_window_to_front(window)
+                if not destination:
+                    continue
+                try:
+                    count = export_database_table(engine, selected_table, destination)
+                except (SQLAlchemyError, ValueError, OSError, csv.Error) as exc:
+                    messagebox.showerror(title='Download Table',
+                        message=f'Table could not be downloaded:\n{exc}', parent=window.TKroot)
+                    continue
+                messagebox.showinfo(title='Download Table',
+                    message=f'Saved {count} rows from {selected_table} to:\n{destination}',
+                    parent=window.TKroot)
     finally:
         window.close()
