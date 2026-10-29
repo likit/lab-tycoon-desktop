@@ -26,6 +26,13 @@ jobs:
           architecture: x64
           cache: pip
 
+      - name: Create isolated build environment
+        run: |
+          $buildVenv = Join-Path $env:RUNNER_TEMP 'labtycoon-build-venv'
+          python -m venv $buildVenv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          (Join-Path $buildVenv 'Scripts') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
