@@ -9,6 +9,34 @@ _windows = []
 _window_generation = 0
 
 
+def table_window_layout(layout, screen_size):
+    """Bound table dialogs to the screen while keeping every control scrollable."""
+    def tables(rows):
+        for row in rows:
+            for element in row:
+                if getattr(element, 'Type', None) == sg.ELEM_TYPE_TABLE:
+                    yield element
+                children = getattr(element, 'Rows', None)
+                if children:
+                    yield from tables(children)
+
+    found = list(tables(layout))
+    if not found:
+        return layout, {}
+    screen_width, screen_height = screen_size
+    width = min(1100, max(1, int(screen_width) - 80))
+    height = min(750, max(1, int(screen_height) - 120))
+    for table in found:
+        table.VerticalScrollOnly = False
+        # Do not let a large row count consume the entire scrollable body.
+        table.NumRows = min(table.NumRows or 12, 12)
+    viewport = sg.Column(layout, scrollable=True, vertical_scroll_only=False,
+                         size=(max(1, width - 40), max(1, height - 50)),
+                         expand_x=True, expand_y=True, pad=(0, 0))
+    return [[viewport]], dict(size=(width, height), resizable=True,
+        location=((int(screen_width) - width) // 2, (int(screen_height) - height) // 2))
+
+
 def _visible(root):
     try:
         return root is not None and root.winfo_exists() and root.winfo_viewable()
@@ -60,6 +88,17 @@ def create_window(*args, parent=None, always_on_top=False, window_role=None,
                   independent=False, **kwargs):
     """Create a mapped window, associate its owner, and restore focus on close."""
     global _window_generation
+    # Wide tables can exceed the desktop's logical size on high-DPI Windows.
+    # Use an outer viewport so shrinking never strands footer actions offscreen.
+    layout = kwargs.get('layout') if 'layout' in kwargs else (args[1] if len(args) > 1 else None)
+    if layout is not None:
+        bounded_layout, options = table_window_layout(layout, sg.Window.get_screen_size())
+        if options:
+            if 'layout' in kwargs:
+                kwargs['layout'] = bounded_layout
+            else:
+                args = (args[0], bounded_layout, *args[2:])
+            kwargs.update(options)
     # Finalizing a new window can process idle callbacks from a closed dialog.
     # Invalidate those callbacks before construction so they cannot cover it.
     _window_generation += 1

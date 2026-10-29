@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.system.models import LabOrder, engine
-from app.ui_styles import create_window
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 
 
 PHASES = ('Pre-analytical', 'Analytical', 'Post-analytical', 'Lab TAT')
@@ -84,7 +84,7 @@ def create_lab_performance_window(project, *, live=None, parent=None):
               [sg.Table(values=[], headings=['Phase', 'Median (minutes)'], key='tat',
                         num_rows=4, auto_size_columns=False, col_widths=[24, 22], justification='left')],
               [sg.Text('', key='samples', size=(78, 2))],
-              [sg.Text('', key='definitions', size=(78, 4))], [sg.Button('Close')]]
+              [sg.Text('', key='definitions', size=(78, 4))], [sg.Button('Close', button_color=DANGER_BUTTON_COLOR)]]
     window = create_window(f'Lab Performance — {project.name}', layout,
                            parent=parent, independent=True, resizable=True, finalize=True)
     def refresh():

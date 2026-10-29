@@ -103,7 +103,8 @@ class ScenarioEditorTests(unittest.TestCase):
         window = Mock()
         window.read.return_value = ('Cancel', {})
         before = self.workflow.to_dict()
-        with patch('app.system.scenario_editor.sg.Window', return_value=window):
+        with patch('app.system.scenario_editor.sg.Window', return_value=window) as constructor:
+            constructor.get_screen_size.return_value = (1366, 768)
             self.assertIsNone(scenario_dialog(self.workflow))
         self.assertEqual(self.workflow.to_dict(), before)
         window.close.assert_called_once()

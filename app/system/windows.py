@@ -793,11 +793,10 @@ def create_test_list_window():
 
     window = create_window('All Tests', layout=layout, modal=True, resizable=True, finalize=True)
     window['-TABLE-'].bind("<Double-Button-1>", " Double")
-    window.maximize()
 
     while True:
         event, values = window.read()
-        if event in ['CloseButton', sg.WIN_CLOSED]:
+        if event in ['Close', 'CloseButton', sg.WIN_CLOSED]:
             break
         elif event == 'Add TMLT Test':
             create_tmlt_test_window()
@@ -1406,10 +1405,9 @@ def create_order_list_window():
     update_source_status(window, get_active_order_source())
     update_row_counts(window, data, flagged_data)
     draw_priority_chart(window, initial_orders)
-    window.maximize()
     while True:
         event, values = window.read()
-        if event in ('Exit', sg.WIN_CLOSED):
+        if event in ('Close', 'Exit', sg.WIN_CLOSED):
             break
         elif event in ('-ANALYZE-SELECTED-ORDERS-', '-ANALYZE-ALL-ORDERS-'):
             if not isinstance(get_active_order_source(), SQLiteOrderSource):
