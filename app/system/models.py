@@ -520,25 +520,10 @@ def ensure_db_schema(database_engine=None):
 
 
 def initialize_db(database_engine=None):
-    """Create and seed the LIS schema on the supplied or active engine."""
+    """Create and seed the LIS schema without creating user accounts."""
 
     target_engine = database_engine or engine
     Base.metadata.create_all(target_engine)
-    print('Populating a default admin account...')
-    user = User(firstname='Jane',
-                lastname='Doe',
-                username='jane',
-                position='Manager',
-                email='jane@labtycoon.com')
-    user.password = '1234'
-    for role in ['admin', 'approver', 'reporter']:
-        r = UserRole(role_need=role)
-        user.roles.append(r)
-
-    with Session(target_engine) as session:
-        session.add(user)
-        session.commit()
-
     fake = Faker()
     print('Populating customers database...')
     customers = []

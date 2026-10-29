@@ -1,6 +1,31 @@
 # lab-tycoon-desktop
 Demo LIS for education
 
+### First-run administrator setup
+
+When the users table is empty, startup opens **Set Up Administrator**. Enter a
+first name, last name, username, password, and matching password confirmation.
+Email, position, and license ID are optional. The account is active and receives
+all roles, including admin, approver, and reporter. Sign in with the account you
+created. Closing setup exits the app; setup appears again on the next launch.
+Existing accounts are preserved, and no default Jane account is created.
+
+### Try the demo laboratory
+
+Choose **Open Demo Project**, enter a project name, and select an existing Lab
+Tycoon database or create a new SQLite database file. The current database is
+preselected. Database selection applies to the whole application. If you change
+it, the app closes after saving the selection; reopen it to continue with your
+named demo. A new database includes sample patients, doctors, and tests and asks
+you to create an administrator account on startup. Existing database files are
+never overwritten by Create New.
+
+Then choose **Go to Lab** and **Play**. The demo includes
+reception, one chemistry analyzer performing TG tests, a reporting station, and
+one simulated staff member named Alex. The default run processes 10 orders.
+This runs the simulation without adding LIS patient or order records. Save the
+project to keep the example or your edits.
+
 ### Main laboratory workspace
 
 **Go to Lab** opens the floor plan as the main laboratory workspace. Use its

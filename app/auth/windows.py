@@ -7,6 +7,7 @@ import jwt
 import keyring
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import secret_key, logger
 from app.ui_styles import create_window, DANGER_BUTTON_COLOR
@@ -58,6 +59,67 @@ def login_required(func):
         return func(*args, **kwargs)
 
     return wrapper
+
+def users_table_is_empty(database_engine=None):
+    with Session(database_engine or engine) as session:
+        return session.scalar(select(User.id).limit(1)) is None
+
+
+def create_initial_admin(values, database_engine=None):
+    """Create the first account only, with every available role."""
+    fields = {name: str(values.get(name, '')).strip()
+              for name in ('username', 'firstname', 'lastname', 'email', 'position', 'license_id')}
+    if not all(fields[name] for name in ('username', 'firstname', 'lastname')):
+        raise ValueError('Username, first name, and last name are required.')
+    password = values.get('password', '')
+    if not password or not password.strip():
+        raise ValueError('Password is required.')
+    if password != values.get('confirm_password', ''):
+        raise ValueError('Passwords do not match.')
+    if len(password.encode('utf-8')) > 72:
+        raise ValueError('Password must be at most 72 UTF-8 bytes.')
+    with Session(database_engine or engine) as session:
+        if session.scalar(select(User.id).limit(1)) is not None:
+            raise ValueError('An account already exists. Sign in to manage users.')
+        roles = list(session.scalars(select(UserRole)))
+        for name in ('admin', 'approver', 'reporter'):
+            if not any(role.role_need == name for role in roles):
+                roles.append(UserRole(role_need=name))
+        fields['email'] = fields['email'] or None
+        user = User(**fields, active=True, roles=roles)
+        user.password = password
+        session.add(user)
+        session.commit()
+
+
+def create_initial_admin_window():
+    if not users_table_is_empty():
+        return True
+    layout = [[sg.Text('Create your administrator account. This account receives all roles.')]]
+    for label, key in (('First Name *', 'firstname'), ('Last Name *', 'lastname'),
+                       ('Email', 'email'), ('Position', 'position'), ('License ID', 'license_id'),
+                       ('Username *', 'username'), ('Password *', 'password'),
+                       ('Confirm Password *', 'confirm_password')):
+        layout.append([sg.Text(label, size=(18, 1)),
+                       sg.Input(key=key, password_char='*' if 'password' in key else '',
+                                focus=key == 'firstname')])
+    layout.append([sg.Button('Create Account'), sg.Button('Exit', button_color=DANGER_BUTTON_COLOR)])
+    window = create_window('Set Up Administrator', layout, modal=True)
+    try:
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, 'Exit'):
+                return False
+            if event == 'Create Account':
+                try:
+                    create_initial_admin(values)
+                except (ValueError, SQLAlchemyError) as exc:
+                    sg.popup_error(str(exc), title='Administrator Setup')
+                    continue
+                return True
+    finally:
+        window.close()
+
 
 def create_signin_window():
     layout = [

@@ -8,7 +8,8 @@ import FreeSimpleGUI as sg
 import jwt
 import keyring
 
-from app.auth.windows import (create_signin_window,
+from app.auth.windows import (create_initial_admin_window,
+                              create_signin_window,
                               create_profile_window,
                               create_register_window,
                               create_user_list_window)
@@ -19,6 +20,8 @@ from app.program_settings import create_program_settings_window, simulation_menu
 from app.lis_settings import create_lis_settings_window
 from app.database_explorer import create_database_explorer_window
 from app.project import LabTycoonProject, project_session
+from app.demo_project import create_demo_project
+from app.demo_setup import create_demo_setup_window
 from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab, create_lis_results_window
 from app.project_serializer import ProjectFormatError, ProjectSerializer
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
@@ -121,6 +124,13 @@ def get_token_and_decode_payload():
 
 
 def run_app():
+    pending_demo = config_dict.get('pending_demo')
+    if pending_demo:
+        session_manager.logout()
+        if keyring.get_password('labtycoon', 'access_token'):
+            keyring.delete_password('labtycoon', 'access_token')
+    if not create_initial_admin_window():
+        return
     project_session.close()
     main_context = MainWindowContext(project_name='No project open', laboratory_name='')
     window = create_window('Lab Tycoon',
@@ -192,6 +202,10 @@ def run_app():
             return save_active_project()
         return True
 
+    if pending_demo:
+        project_session.activate(create_demo_project(pending_demo['name']))
+        update_config_yaml(pending_demo=None, last_project_path=None)
+
     remembered_project_path = config_dict.get('last_project_path')
     if remembered_project_path:
         try:
@@ -250,12 +264,19 @@ def run_app():
         elif event == 'Open Demo Project':
             if not may_replace_active_project():
                 continue
-            demo_project = LabTycoonProject.create('Demo Laboratory', 'Built-in demonstration laboratory.')
-            demo_project.is_dirty = False
+            setup = create_demo_setup_window()
+            if setup is None:
+                continue
+            demo_project, needs_restart = setup
+            if needs_restart:
+                sg.popup_ok('Database configured. Reopen Lab Tycoon to continue with your demo.\n'
+                            'The demo will open automatically after administrator setup, if needed.',
+                            title='Restart Required')
+                break
             project_session.activate(demo_project)
             update_config_yaml(last_project_path=None)
             refresh_project_display()
-            sg.popup_quick_message('Demo Laboratory is ready.', background_color='lightgreen')
+            sg.popup_ok(f'{demo_project.name} is ready.\nClick Go to Lab, then Play to run 10 demo orders with Alex.\nSave the project to keep your changes.', title='Demo Laboratory')
         elif event in ('New Project...', '-NEW-PROJECT-'):
             if not may_replace_active_project():
                 continue
