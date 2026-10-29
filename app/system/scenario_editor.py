@@ -1,5 +1,6 @@
-from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 """Saved experiment settings shared by workflow and floor views."""
+from app.system.arrivals import validate_arrivals
+from app.ui_styles import create_window, DANGER_BUTTON_COLOR
 from copy import deepcopy
 from math import isfinite
 
@@ -99,13 +100,16 @@ def scenario_settings(workflow, scenario):
                            (int(n.widget.required_staff) > 0 or float(n.widget.human_throughput) > 0)])
     return dict(staff_capacity=int(staff),
                 arrival_minutes=float(scenario.parameters.get('interarrival_time', 0)) * 60,
+                arrival_distribution=scenario.parameters.get('arrival_distribution', 'fixed'),
+                arrival_seed=scenario.parameters.get('arrival_seed'),
+                rejection_percent=float(scenario.parameters.get('rejection_probability', 0)) * 100,
                 system_variation=float(scenario.parameters.get('system_variation', .10)),
                 human_variation=float(scenario.parameters.get('human_variation', .10)))
 
 
 def configure_scenario(workflow, *, name, description='', staff, arrival_minutes,
                        system_variation=.10, human_variation=.10, source=None, duplicate=False,
-                       workforce=None, staff_assignments=None):
+                       workforce=None, staff_assignments=None, arrival_distribution=None, arrival_seed=None, rejection_percent=None):
     """Validate before mutation; duplicates preserve all existing overrides."""
     name = str(name).strip()
     if not name:
@@ -116,6 +120,13 @@ def configure_scenario(workflow, *, name, description='', staff, arrival_minutes
     if not isfinite(staff_value) or staff_value < 1 or not staff_value.is_integer():
         raise ValueError('Available staff must be a positive whole number.')
     arrival = float(arrival_minutes)
+    previous = source.parameters if source else {}
+    rejection = float(previous.get('rejection_probability', 0)) * 100 if rejection_percent is None else float(rejection_percent)
+    if not isfinite(rejection) or not 0 <= rejection <= 100:
+        raise ValueError('Specimen rejection probability must be between 0 and 100 percent.')
+    distribution = arrival_distribution or previous.get('arrival_distribution', 'fixed')
+    seed = previous.get('arrival_seed') if arrival_seed is None else arrival_seed
+    _, distribution, seed = validate_arrivals(arrival / 60, distribution, seed)
     variations = [float(system_variation), float(human_variation)]
     if not isfinite(arrival) or arrival < 0:
         raise ValueError('Arrival interval must be a finite, non-negative number of minutes.')
@@ -137,6 +148,7 @@ def configure_scenario(workflow, *, name, description='', staff, arrival_minutes
     assignments = validate_assignments(workflow, roster, staff_assignments if staff_assignments is not None
                                        else (source.staff_assignments if source else {}))
     parameters.update(staff_capacity=len(roster), interarrival_time=arrival / 60,
+                      arrival_distribution=distribution, arrival_seed=seed, rejection_probability=rejection / 100,
                       system_variation=variations[0], human_variation=variations[1])
     scenario.name, scenario.description, scenario.parameters = name, str(description), parameters
     scenario.workforce = roster
@@ -173,8 +185,15 @@ def scenario_dialog(workflow, source=None, *, duplicate=False):
               [sg.Table(values=node_rows(), headings=['Node', 'Required staff', 'Allowed staff'],
                         key='staff_nodes', num_rows=5, auto_size_columns=True, enable_events=True)],
               [sg.Button('Allowed staff')],
-              [sg.Text('Arrival interval (minutes)'), sg.Input(str(settings['arrival_minutes']), key='arrival', size=(10, 1))],
-              [sg.Text('0 releases all orders together. Applies to generated orders.')],
+              [sg.Text('Arrival distribution'), sg.Combo(['Fixed', 'Exponential'],
+                  default_value=settings['arrival_distribution'].title(), key='arrival_distribution', readonly=True)],
+              [sg.Text('Interval / mean interval (minutes)'), sg.Input(str(settings['arrival_minutes']), key='arrival', size=(10, 1))],
+              [sg.Text('Fixed: 0 releases all together. Exponential: positive mean gap; random arrivals.')],
+              [sg.Text('Arrival seed (optional)'), sg.Input(
+                  '' if settings['arrival_seed'] is None else str(settings['arrival_seed']), key='arrival_seed', size=(12, 1))],
+              [sg.Text('Same seed repeats the arrival gaps. A run seed overrides this for floor simulation.')],
+              [sg.Text('Specimen rejection probability (%)'), sg.Input(str(settings['rejection_percent']), key='rejection', size=(10, 1))],
+              [sg.Text('Applied at reception before testing; 0 accepts all specimens.')],
               [sg.Checkbox('Advanced settings', key='advanced', enable_events=True)],
               [sg.pin(sg.Column([
                   [sg.Text('Equipment variation (0–1)'), sg.Input(str(settings['system_variation']), key='system', size=(10, 1))],
@@ -230,6 +249,9 @@ def scenario_dialog(workflow, source=None, *, duplicate=False):
                     return configure_scenario(workflow, name=values['name'], description=values['description'],
                         staff=len(roster), workforce=roster, arrival_minutes=values['arrival'],
                         staff_assignments=assignments,
+                        arrival_distribution=values.get('arrival_distribution', 'Fixed'),
+                        arrival_seed=values.get('arrival_seed', ''),
+                        rejection_percent=values.get('rejection', 0),
                         system_variation=values['system'], human_variation=values['human'],
                         source=source, duplicate=duplicate)
                 except (ValueError, TypeError) as exc:
@@ -241,7 +263,7 @@ def scenario_dialog(workflow, source=None, *, duplicate=False):
 @login_required
 def open_scenario_manager(workflow, *, on_change, run_simulation=None, parent=None):
     layout = [[sg.Text('Saved experiment settings', font=('Arial', 14, 'bold'))],
-              [sg.Table(values=[], headings=['Active', 'Scenario', 'Staff', 'Arrival (min)', 'Overrides'],
+              [sg.Table(values=[], headings=['Active', 'Scenario', 'Staff', 'Arrival / mean (min)', 'Overrides'],
                         key='scenarios', num_rows=8, auto_size_columns=True, enable_events=True)],
               [sg.Button('Use scenario'), sg.Button('Create from defaults'), sg.Button('Edit'), sg.Button('Duplicate'),
                sg.Button('Delete'), sg.Button('Run', disabled=run_simulation is None), sg.Button('Close', button_color=DANGER_BUTTON_COLOR)]]
@@ -249,7 +271,7 @@ def open_scenario_manager(workflow, *, on_change, run_simulation=None, parent=No
                            always_on_top=True)
     def refresh():
         window['scenarios'].update(values=[['Yes' if s is workflow.active_scenario else '', s.name, scenario_settings(workflow, s)['staff_capacity'],
-            f"{scenario_settings(workflow, s)['arrival_minutes']:g}", len(s.widget_service_times)]
+            f"{scenario_settings(workflow, s)['arrival_distribution'].title()} · {scenario_settings(workflow, s)['arrival_minutes']:g}", len(s.widget_service_times)]
             for s in workflow.scenarios])
     refresh()
     try:

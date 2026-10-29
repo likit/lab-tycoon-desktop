@@ -21,12 +21,29 @@ you to create an administrator account on startup. Existing database files are
 never overwritten by Create New.
 
 Then choose **Go to Lab** and **Play**. The demo includes
-reception, one chemistry analyzer performing TG tests, a reporting station, and
-one simulated staff member named Alex. The default run processes 10 orders.
+reception, one chemistry analyzer performing TG tests, a reporting and validation workflow ending at the reporting station, and
+one simulated staff member named Alex. The default run processes 10 orders arriving one simulated minute apart.
 This runs the simulation without adding LIS patient or order records. Save the
 project to keep the example or your edits.
 
+### Creating a project
+
+**File → New Project** accepts a project name, description, and database choice.
+Keep the preselected current database, browse to another existing Lab Tycoon
+database, or choose **Create new database** and a new file location. A database
+change applies across the app and requires reopening it. The named blank project
+and description are restored after restart, following administrator setup when
+needed. Cancelling the dialog does not change database settings.
+
 ### Main laboratory workspace
+
+An active project is required to use LIS, simulation, and tool views. On the
+home screen, choose **New Project**, **Open Project**, or **Open Demo Project**.
+The prominent **Active project** heading identifies the current project even
+when the Simulation menu is hidden. Closing the project disables workspace
+actions until another project is opened. Account sign-in and program settings
+remain available. LIS records still belong to the application's selected database;
+opening a project does not isolate or switch those records.
 
 **Go to Lab** opens the floor plan as the main laboratory workspace. Use its
 **Edit Workflow**, **Orders**, **Customers**, and **Results** buttons to open
@@ -304,3 +321,50 @@ project is closed, a saved workflow definition keeps the selection usable.
 Uploaded-file selection remembers the file path and reloads it on startup,
 without putting patient rows in settings. An unavailable saved source falls back
 to SQLite with an explanation while retaining the preference for recovery.
+
+### Random order arrivals
+
+In **Manage Scenarios → Edit**, choose **Fixed** or **Exponential** under
+**Arrival distribution**. The interval is in minutes: Fixed uses that exact gap;
+Exponential samples random gaps with that mean. A mean of 3 minutes corresponds
+to an average of 20 orders/hour. Fixed permits 0 to release all orders together;
+Exponential requires a positive mean. The first order starts at time zero.
+
+An optional **Arrival seed** repeats the same gaps for the same settings and
+order count. Floor/Run Workflow's run seed overrides the arrival seed when set.
+Arrival randomness is separate from processing-time randomness. Both floor Play
+and **Orders → Load Simulated Orders** use the scenario's arrival distribution;
+existing orders are unchanged. Save the project to retain scenario settings.
+Older scenarios continue using Fixed intervals.
+
+### Simulated specimen rejection
+
+Set **Specimen rejection probability (%)** in **Manage Scenarios → Edit**.
+The default is 0%; values from 0 to 100 are allowed. Each specimen is checked
+independently after Specimen Registration/reception finishes. A rejected specimen
+stops before analysis, with no test results or reporting, and appears in the
+floor's rejected count. Small batches may differ from the configured percentage.
+A run seed (or the scenario's arrival seed when no run seed is set) repeats the
+decisions without changing the arrival or processing random streams.
+
+**Load Simulated Orders** still creates pending LIS orders. Running **Analyze**
+uses the workflow's active scenario and saves reception rejection time, reason,
+and operator on rejected orders, with the trace retained in the analysis run.
+Orders already accepted in LIS skip the reception rejection check. Manual
+Accept/Reject remains available. Floor-generated simulation order metadata also
+retains rejection details when the run is saved. Save the project to retain the
+scenario's rejection probability.
+
+### Lab Performance dashboard
+
+Use **Lab Performance** on the floor workspace to open order/test counts and
+median pre-analytical, analytical, post-analytical, and overall lab TAT in minutes.
+Choose **Current floor run** (automatically refreshed) or **LIS database** (Refresh
+reloads records). The LIS view covers the selected database, not just the project.
+
+Floor-run milestones are arrival, first test start, last test finish, and result
+validation completion. LIS milestones are order time, receipt, last active test
+completion, and order approval. The dashboard labels these definitions. Medians
+are per order and use only non-rejected/non-cancelled orders with all four
+chronological milestones. Counts include all records in the selected source;
+an empty TAT sample displays a dash instead of zero.

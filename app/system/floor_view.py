@@ -1241,6 +1241,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
             sg.Button('Orders', key='-LAB-ORDERS-'),
             sg.Button('Customers', key='-LAB-CUSTOMERS-'),
             sg.Button('Results', key='-LAB-RESULTS-'),
+            sg.Button('Lab Performance', key='-LAB-PERFORMANCE-'),
             sg.Button('Save Project', key='-LAB-SAVE-', visible=on_save is not None),
         ]], visible=main_workspace, expand_x=True, pad=(0, 0))],
         [sg.Button("Run details" if analysis_mode else "Setup & Equipment", key="-TOGGLE-FLOOR-PANEL-"), sg.Text("Workflow"), sg.Combo(list(workflow_labels), default_value=next(iter(workflow_labels)),
@@ -1355,6 +1356,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
             window[key].update(disabled=active or analysis_mode)
         detail = (f" · {snapshot.get('time', 0):.3f} h · "
                   f"{snapshot.get('orders_completed', 0)}/{snapshot.get('orders_total', 0)} orders completed · "
+                  f"{snapshot.get('orders_rejected', 0)} rejected · "
                   f"{snapshot.get('tests_completed', 0)}/{snapshot.get('tests_total', 0)} tests completed") if session else ''
         if session is not None and state == 'completed' and session.result:
             run_id = getattr(session.result, 'run_id', session.result)
@@ -1399,7 +1401,8 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
         settings = scenario_settings(workflow, scenario)
         window['-LIVE-STAFF-'].update(str(settings['staff_capacity']))
         window['-LIVE-SCENARIO-SUMMARY-'].update(
-            f"Saved staff: {settings['staff_capacity']} · Arrival: {settings['arrival_minutes']:g} min\n"
+            f"Staff: {settings['staff_capacity']} · {settings['arrival_distribution'].title()} arrivals\n"
+            f"Interval / mean: {settings['arrival_minutes']:g} min\n"
             f"Variation: equipment {settings['system_variation']:.0%}, human {settings['human_variation']:.0%}")
 
     def refresh_scenarios() -> None:
@@ -1605,6 +1608,10 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
             break
         last_frame = now
         update_live_controls()
+        if event == '-LAB-PERFORMANCE-':
+            from app.lab_performance import create_lab_performance_window
+            create_lab_performance_window(project, live=renderer.live_session, parent=window)
+            continue
         if event in ('-FLOOR-ZOOM-OUT-', '-FLOOR-ZOOM-IN-', '-FLOOR-ZOOM-RESET-', '-FLOOR-FIT-'):
             if event == '-FLOOR-FIT-':
                 change_zoom(fit=True)

@@ -28,7 +28,7 @@ def simulation_progress(engine):
         tests = specimen.metadata.get('all_tests', [])
         tests_total += len(tests) or 1
         tests_completed += len(specimen.metadata.get('completed_tests', [])) if tests else int(specimen.specimen_id in completed)
-    return dict(orders_total=len(orders), orders_completed=sum(ids <= completed for ids in orders.values()),
+    return dict(orders_rejected=len(engine.rejected_specimens), orders_total=len(orders), orders_completed=sum(ids <= completed for ids in orders.values()),
                 tests_total=tests_total, tests_completed=tests_completed)
 
 

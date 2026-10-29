@@ -128,12 +128,21 @@ class ScenarioLISOrderSource(SimulationLISOrderSource):
 def generate_scenario_lis_orders(source, *, count):
     """Generate pending real-test orders; do not run the management simulation."""
     from datetime import timedelta
-    from math import isfinite
     from app.system.simulation.lab import WorkflowRouter
     from app.system.equipment_workflow import resolve_equipment_workflow
     if isinstance(count, bool) or int(count) != float(count) or int(count) < 1:
         raise ValueError('Number of orders must be a positive whole number.')
     count = int(count)
+    # The source picker stores a workflow snapshot. Prefer current settings
+    # after scenario edits, retaining the snapshot only if its workflow is absent.
+    from app.system.lis_analysis import analysis_workflow_choices
+    latest = next((choice for choice in analysis_workflow_choices()
+                   if choice.key == source.choice.key), None)
+    if latest is not None:
+        if not any(s.scenario_id == source.scenario_id for s in latest.document.workflow.scenarios):
+            raise ValueError('The selected scenario was deleted. Select a scenario again.')
+        source = ScenarioLISOrderSource(latest, source.scenario_id,
+                                       database_engine=source.database_engine)
     workflow = resolve_equipment_workflow(source.choice.document.workflow)
     router = WorkflowRouter()
     reachable = set(router.reachable_node_ids(workflow, router.start_node_id(workflow)))
@@ -142,9 +151,10 @@ def generate_scenario_lis_orders(source, *, count):
     if not analyzers:
         raise ValueError('The scenario workflow needs an enabled analyzer.')
     selected = sorted({str(code) for node in analyzers for code in node.widget.metadata.get('analyzer_tests', [])})
-    interval = float(source.scenario.parameters.get('interarrival_time', 0))
-    if not isfinite(interval) or interval < 0:
-        raise ValueError('Scenario arrival interval must be finite and non-negative.')
+    from app.system.arrivals import arrival_offsets
+    parameters = source.scenario.parameters
+    offsets = arrival_offsets(count, parameters.get('interarrival_time', 0),
+        parameters.get('arrival_distribution', 'fixed'), parameters.get('arrival_seed'))
     batch_id, generated_at = uuid4().hex, datetime.now()
     with Session(source.database_engine) as session, session.begin():
         catalogue = {test.code: test for test in session.scalars(select(Test).where(Test.active.is_(True)))}
@@ -159,7 +169,7 @@ def generate_scenario_lis_orders(source, *, count):
                                 firstname=f'[DEMO] Simulated Patient {index + 1}', lastname='',
                                 gender='Unknown', dob=date(2000, 1, 1),
                                 address='Synthetic demonstration patient; DOB is a placeholder (2000-01-01).')
-            order = LabOrder(customer=customer, order_datetime=generated_at + timedelta(hours=index * interval),
+            order = LabOrder(customer=customer, order_datetime=generated_at + timedelta(hours=offsets[index]),
                              priority='routine', comment=f'DEMONSTRATION: batch {batch_id}; scenario {source.scenario.name}.')
             # Configured menus retain the workflow's requested test set. An
             # unrestricted analyzer cycles through real catalogue assays.

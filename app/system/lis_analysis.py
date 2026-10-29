@@ -25,6 +25,7 @@ class AnalysisSummary:
     workflow_name: str
     reported: int = 0
     approved: int = 0
+    rejected: int = 0
 
 
 def pending_item_ids_for_orders(order_ids, *, database_engine=None):
@@ -172,6 +173,7 @@ def analyze_lis_items(item_ids, *, workflow_document, operator_username, databas
                     scenario=scenario, random_seed=random_seed)
         # These are existing selected tests, not newly generated order arrivals.
         settings.interarrival_time = 0
+        settings.arrival_distribution = 'fixed'
         stage_events = {}
         stage_started = set()
 
@@ -196,8 +198,16 @@ def analyze_lis_items(item_ids, *, workflow_document, operator_username, databas
             if not operator.has_role(role):
                 raise ValueError(f'Workflow completion requires the {role} role. No LIS changes saved.')
         completed = {specimen.specimen_id: specimen for specimen in result.completed_specimens}
+        rejected = {specimen.specimen_id: specimen for specimen in result.rejected_specimens}
+        traces = {**completed, **rejected}
         receipt_times = {}
         for item in pending:
+            rejection = rejected.get(str(item.order_id))
+            if rejection is not None:
+                item.order.rejected_at = started_at + timedelta(hours=rejection.metadata['rejected_at'])
+                item.order.rejector = operator
+                item.order.reason = rejection.metadata['rejection_reason']
+                continue
             specimen = completed.get(str(item.order_id))
             if specimen is None or item.test.code not in specimen.metadata.get('completed_tests', []):
                 raise ValueError(f'Test {item.test.code} did not complete on an analyzer. No LIS changes saved.')
@@ -252,10 +262,10 @@ def analyze_lis_items(item_ids, *, workflow_document, operator_username, databas
                     workflow_json=json.dumps(workflow.to_dict()),
                     trace_json=json.dumps([{'item_id': str(item.id), 'order_id': str(item.order_id),
                                            'specimen_id': str(item.order_id), 'test_code': item.test.code,
-                                           'history': completed[str(item.order_id)].history,
+                                           'history': traces[str(item.order_id)].history,
                                            'stage_events': stage_events.get(str(item.order_id), [])}
                                           for item in pending], default=str),
                     item_ids_json=json.dumps([item.id for item in pending]), makespan=result.makespan))
-        return AnalysisSummary(run_id, len(pending), len(items) - len(pending), result.makespan, workflow_document.name,
+        return AnalysisSummary(run_id, sum(str(item.order_id) not in rejected for item in pending), len(items) - len(pending), result.makespan, workflow_document.name,
                                reported=sum(item.reported_at is not None for item in pending),
-                               approved=sum(item.approved_at is not None for item in pending))
+                               approved=sum(item.approved_at is not None for item in pending), rejected=len(rejected))

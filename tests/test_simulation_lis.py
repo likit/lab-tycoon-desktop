@@ -215,6 +215,48 @@ class SimulationLISImportTests(unittest.TestCase):
         self.assertTrue(all(item.finished_at is None and item._value is None for order in orders for item in order.order_items))
         self.assertEqual((orders[1].order_datetime - orders[0].order_datetime).total_seconds(), 60)
 
+    def test_exponential_lis_order_timestamps_match_shared_schedule(self):
+        from app.system.arrivals import arrival_offsets
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        source = self.scenario_source()
+        source.scenario.parameters.update(interarrival_time=.05,
+            arrival_distribution='exponential', arrival_seed=42)
+        orders = generate_scenario_lis_orders(source, count=5).list_orders()
+        offsets = arrival_offsets(5, .05, 'exponential', 42)
+        for order, expected in zip(orders, offsets):
+            seconds = (order.order_datetime - orders[0].order_datetime).total_seconds()
+            self.assertAlmostEqual(seconds, expected * 3600, places=5)
+
+    def test_loading_refreshes_stale_scenario_snapshot_after_arrival_edit(self):
+        from unittest.mock import patch
+        from app.system.model import Workflow
+        from app.system.storage import WorkflowDocument
+        from app.system.lis_analysis import AnalysisWorkflowChoice
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        from app.system.arrivals import arrival_offsets
+        source = self.scenario_source()
+        source.scenario.parameters['interarrival_time'] = 0
+        current = Workflow.from_dict(source.choice.document.workflow.to_dict())
+        current.active_scenario.parameters.update(interarrival_time=5 / 60,
+            arrival_distribution='exponential', arrival_seed=42)
+        latest = AnalysisWorkflowChoice(source.choice.key, 'Updated workflow',
+            WorkflowDocument('workflow', 'Updated workflow', current))
+        with patch('app.system.lis_analysis.analysis_workflow_choices', return_value=[latest]):
+            generated = generate_scenario_lis_orders(source, count=5)
+        orders = generated.list_orders()
+        offsets = arrival_offsets(5, 5 / 60, 'exponential', 42)
+        self.assertEqual(len({order.order_datetime for order in orders}), 5)
+        for order, expected in zip(orders, offsets):
+            self.assertAlmostEqual((order.order_datetime-orders[0].order_datetime).total_seconds(),
+                                   expected * 3600, places=5)
+        self.assertEqual(generated.scenario.parameters['arrival_distribution'], 'exponential')
+        self.assertEqual(source.scenario.parameters['interarrival_time'], 0)
+        latest.document.workflow.scenarios.clear()
+        with patch('app.system.lis_analysis.analysis_workflow_choices', return_value=[latest]), \
+             self.assertRaisesRegex(ValueError, 'deleted'):
+            generate_scenario_lis_orders(source, count=5)
+        self.assertEqual(generated.count(), 5)
+
     def test_unrestricted_analyzer_generates_catalogue_tests_instead_of_placeholder(self):
         from app.system.simulation_lis import generate_scenario_lis_orders
         generated = generate_scenario_lis_orders(self.scenario_source([]), count=2)

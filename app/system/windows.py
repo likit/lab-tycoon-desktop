@@ -1428,7 +1428,7 @@ def create_order_list_window():
             summary = run_lis_workflow_analysis(item_ids, parent=window)
             if summary is not None:
                 window['-ORDER-ACTIVITY-LOG-'].update(
-                    f'{summary.workflow_name}: {summary.analyzed} tests analyzed; '
+                    f'{summary.workflow_name}: {summary.analyzed} tests analyzed; {summary.rejected} orders rejected; '
                     f'{summary.makespan * 60:.2f} simulated minutes. Run {summary.run_id}\n', append=True)
             data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-DATA-SOURCE-' and values['-DATA-SOURCE-'] == 'Simulation':
@@ -1453,6 +1453,8 @@ def create_order_list_window():
             data, flagged_orders, flagged_data = refresh_source_views(window)
             window['-ORDER-ACTIVITY-LOG-'].update(
                 f'Added {int(values["-NUM-ORDERS-"])} orders from scenario {loaded.scenario.name}; '
+                f'{loaded.scenario.parameters.get("arrival_distribution", "fixed")} arrivals, '
+                f'interval/mean {float(loaded.scenario.parameters.get("interarrival_time", 0)) * 60:g} min; '
                 f'{len(data)} total displayed; '
                 f'batch {loaded.batch_id[:8]}.\n', append=True)
         elif event == '-DATA-SOURCE-':

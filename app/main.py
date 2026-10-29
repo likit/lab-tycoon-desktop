@@ -15,13 +15,13 @@ from app.auth.windows import (create_initial_admin_window,
                               create_user_list_window)
 from app.system.models import database_is_initialized, ensure_db_schema, initialize_db
 from app.system.floor_view import create_floor_view_window
-from app.main_ui import MainWindowContext, build_main_layout, build_main_menu, update_context_elements
+from app.main_ui import MainWindowContext, build_main_layout, build_main_menu, update_context_elements, project_action_allowed
 from app.program_settings import create_program_settings_window, simulation_menu_enabled
 from app.lis_settings import create_lis_settings_window
 from app.database_explorer import create_database_explorer_window
 from app.project import LabTycoonProject, project_session
 from app.demo_project import create_demo_project
-from app.demo_setup import create_demo_setup_window
+from app.demo_setup import create_demo_setup_window, create_project_setup_window
 from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab, create_lis_results_window
 from app.project_serializer import ProjectFormatError, ProjectSerializer
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
@@ -61,26 +61,8 @@ sg.set_options(font=('Helvetica', 13))
 _project_serializer = ProjectSerializer()
 
 
-def create_project_dialog() -> tuple[str, str] | None:
-    layout = [
-        [sg.Text('Project Name *', size=(14, 1)), sg.Input(key='-PROJECT-NAME-', focus=True)],
-        [sg.Text('Description', size=(14, 1)), sg.Multiline(key='-PROJECT-DESCRIPTION-', size=(42, 5))],
-        [sg.Push(), sg.Button('Create', bind_return_key=True), sg.Button('Cancel')],
-    ]
-    dialog = create_window('New Lab Tycoon Project', layout, modal=True)
-    try:
-        while True:
-            event, values = dialog.read()
-            if event in (sg.WIN_CLOSED, 'Cancel'):
-                return None
-            if event == 'Create':
-                name = str(values.get('-PROJECT-NAME-', '')).strip()
-                if not name:
-                    sg.popup_error('Project name is required.', title='New Project')
-                    continue
-                return name, str(values.get('-PROJECT-DESCRIPTION-', '')).strip()
-    finally:
-        dialog.close()
+def create_project_dialog():
+    return create_project_setup_window()
 
 
 def dirty_project_choice(project_name: str) -> str:
@@ -125,7 +107,8 @@ def get_token_and_decode_payload():
 
 def run_app():
     pending_demo = config_dict.get('pending_demo')
-    if pending_demo:
+    pending_project = config_dict.get('pending_project')
+    if pending_demo or pending_project:
         session_manager.logout()
         if keyring.get_password('labtycoon', 'access_token'):
             keyring.delete_password('labtycoon', 'access_token')
@@ -158,7 +141,7 @@ def run_app():
         project = project_session.active_project
         if project is None:
             context = MainWindowContext(project_name='No project open', laboratory_name='')
-            window.TKroot.title('Lab Tycoon')
+            window.TKroot.title('Lab Tycoon — Open a project to continue')
         else:
             context = MainWindowContext(
                 project_name=project.name,
@@ -206,6 +189,10 @@ def run_app():
         project_session.activate(create_demo_project(pending_demo['name']))
         update_config_yaml(pending_demo=None, last_project_path=None)
 
+    elif pending_project:
+        project_session.activate(LabTycoonProject.create(**pending_project))
+        update_config_yaml(pending_project=None, last_project_path=None)
+
     remembered_project_path = config_dict.get('last_project_path')
     if remembered_project_path:
         try:
@@ -231,6 +218,9 @@ def run_app():
         if event == sg.WINDOW_CLOSED or event == 'Exit':
             if may_replace_active_project():
                 break
+            continue
+        elif not project_action_allowed(event, project_session.active_project is not None):
+            sg.popup_error('Create or open a project before using the workspace.', title='Project Required')
             continue
         elif event == 'Register':
             create_register_window()
@@ -282,7 +272,12 @@ def run_app():
                 continue
             project_values = create_project_dialog()
             if project_values is not None:
-                project_session.activate(LabTycoonProject.create(*project_values))
+                new_project, needs_restart = project_values
+                if needs_restart:
+                    sg.popup_ok('Database configured. Reopen Lab Tycoon to continue with your project.\n'
+                                'Administrator setup will appear if needed.', title='Restart Required')
+                    break
+                project_session.activate(new_project)
                 update_config_yaml(last_project_path=None)
                 refresh_project_display()
         elif event in ('Open Project...', '-OPEN-PROJECT-'):

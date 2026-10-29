@@ -34,6 +34,35 @@ class DemoSetupTests(unittest.TestCase):
                 self.assertFalse(restart)
                 save.assert_not_called()
 
+    def test_new_blank_project_preserves_description_through_database_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'project.db'
+            with patch.object(demo_setup, 'update_config_yaml') as save:
+                project, restart = demo_setup.prepare_project(
+                    'Teaching Lab', path, create_new=True, description='My laboratory')
+            self.assertTrue(restart)
+            self.assertEqual(project.name, 'Teaching Lab')
+            self.assertEqual(project.description, 'My laboratory')
+            self.assertEqual(list(project.workflow.graph.iter_nodes()), [])
+            self.assertEqual(save.call_args.kwargs['pending_project'],
+                             {'name': 'Teaching Lab', 'description': 'My laboratory'})
+            self.assertIsNone(save.call_args.kwargs['pending_demo'])
+            with patch.object(demo_setup, 'DATABASE_CONFIG', DatabaseConfig.default_sqlite(path)), \
+                 patch.object(demo_setup, 'update_config_yaml') as save:
+                _, restart = demo_setup.prepare_project('Another Lab', path)
+                self.assertFalse(restart)
+                save.assert_not_called()
+
+    def test_new_project_dialog_submits_database_and_description(self):
+        window = Mock()
+        window.read.return_value = ('Create', dict(name='Lab', path='/tmp/new.db',
+                                                   new=True, description='Example'))
+        with patch.object(demo_setup, 'create_window', return_value=window), \
+             patch.object(demo_setup, 'prepare_project', return_value=('project', True)) as prepare:
+            self.assertEqual(demo_setup.create_project_setup_window(), ('project', True))
+            prepare.assert_called_once_with('Lab', '/tmp/new.db', create_new=True, description='Example')
+            window.close.assert_called_once()
+
     def test_validation_does_not_change_settings(self):
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(demo_setup, 'update_config_yaml') as save:

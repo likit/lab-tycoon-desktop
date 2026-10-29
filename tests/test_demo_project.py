@@ -56,12 +56,35 @@ class DemoProjectTests(unittest.TestCase):
         live.engine.run()
         self.assertEqual(len(live.engine.completed_specimens), 10)
         self.assertEqual(len(live.snapshot()['results_feed']), 10)
+        times = [order.order_datetime for order in live.generated_orders]
+        self.assertEqual(len(times), 10)
+        for previous, current in zip(times, times[1:]):
+            self.assertEqual((current - previous).total_seconds(), 60)
         self.assertGreater(live.engine.env.now, 0)
         acquired = [event for event in events if event['event'] == 'staff_acquired']
         self.assertTrue(acquired)
         self.assertTrue(all(event['staff_names'] == ['Alex'] for event in acquired))
         for specimen in live.engine.completed_specimens:
             self.assertEqual(specimen.metadata['completed_tests'], ['TG'])
+
+    def test_reporting_then_validation_then_terminal_station(self):
+        from app.system.lis_analysis import result_stage
+        project = create_demo_project()
+        nodes = list(project.workflow.graph.iter_nodes())
+        reporting = next(n for n in nodes if n.widget.node_type == 'result reporting')
+        validation = next(n for n in nodes if n.widget.node_type == 'result validating')
+        terminal = next(n for n in nodes if n.metadata.get('terminal_output'))
+        self.assertEqual([e.target for e in project.workflow.graph.outgoing_edges(reporting.node_id)],
+                         [validation.node_id])
+        self.assertEqual([e.target for e in project.workflow.graph.outgoing_edges(validation.node_id)],
+                         [terminal.node_id])
+        self.assertEqual(result_stage(validation), 'approver')
+        live = LiveSimulationSession(project.workflow, count=2, seed=7,
+            equipment_types={e.instance_id: e.equipment_type for e in project.floor.equipment_instances})
+        result = live.engine.run()
+        for specimen in result.completed_specimens:
+            departures = {e['widget']: e['details']['time'] for e in specimen.history if e['event'] == 'departed'}
+            self.assertLess(departures['Result Reporting'], departures['Result Validation'])
 
     def test_demos_are_independent(self):
         first, second = create_demo_project(), create_demo_project()

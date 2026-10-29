@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 import json
+from math import isfinite
 import random
 import sys
 from typing import Callable
@@ -136,6 +137,9 @@ class WorkflowSimulationSettings:
     system_variation: float = 0.10
     human_variation: float = 0.10
     interarrival_time: float = 0.0
+    arrival_distribution: str = 'fixed'
+    arrival_seed: int | None = None
+    rejection_probability: float = 0.0
     staff_capacity: int | None = None
 
     @classmethod
@@ -167,6 +171,9 @@ class WorkflowSimulationSettings:
             system_variation=float(parameters.get("system_variation", 0.10)),
             human_variation=float(parameters.get("human_variation", 0.10)),
             interarrival_time=float(parameters.get("interarrival_time", 0.0)),
+            arrival_distribution=parameters.get('arrival_distribution', 'fixed'),
+            arrival_seed=parameters.get('arrival_seed'),
+            rejection_probability=float(parameters.get('rejection_probability', 0)),
             staff_capacity=staff_capacity,
         )
 
@@ -226,6 +233,7 @@ class WorkflowSimulationResult:
     staff_capacity: int | None = None
     node_stats: dict[str, NodeSimulationStats] = field(default_factory=dict)
     completed_specimens: list[Specimen] = field(default_factory=list)
+    rejected_specimens: list[Specimen] = field(default_factory=list)
     active_node_ids: list[str] = field(default_factory=list)
     governance_consultations: list[GovernanceConsultation] = field(default_factory=list)
 
@@ -462,6 +470,12 @@ class WorkflowSimulationEngine:
             self.env = simpy.Environment()
         self.rng = random.Random(settings.random_seed)
         self.completed_specimens: list[Specimen] = []
+        self.rejected_specimens: list[Specimen] = []
+        probability = settings.rejection_probability
+        if not isfinite(probability) or not 0 <= probability <= 1:
+            raise ValueError('Specimen rejection probability must be between 0 and 1.')
+        self.rejection_rng = random.Random(settings.random_seed if settings.random_seed is not None
+                                           else settings.arrival_seed)
         self.governance_provider = governance_provider or SopAsCodeGovernanceProvider()
         self.governance_consultations: list[GovernanceConsultation] = []
         self.debug_governance = debug_governance
@@ -471,6 +485,10 @@ class WorkflowSimulationEngine:
             if specimens is not None
             else [Specimen(specimen_id=f"specimen-{index + 1}") for index in range(settings.specimens_number)]
         )
+        from app.system.arrivals import arrival_offsets
+        self.arrival_offsets = arrival_offsets(len(self.specimens), settings.interarrival_time,
+            settings.arrival_distribution,
+            settings.random_seed if settings.random_seed is not None else settings.arrival_seed)
         self.start_node_id = self.router.start_node_id(self.workflow)
         start_node = self.workflow.get_node(self.start_node_id) if self.start_node_id else None
         self.arrival_adapter_node = (
@@ -602,7 +620,9 @@ class WorkflowSimulationEngine:
         self._emit_activity("staff_released", node, specimen, staff_count=len(team),
                             staff_ids=[m['id'] for m in team],
                             staff_names=[m['name'] for m in team], **details)
-        yield self.staff_pool.put(team)
+        # WorkforcePool.put releases the team immediately. Cleanup must not
+        # yield: Python closes suspended generators with GeneratorExit.
+        self.staff_pool.put(team)
 
     def _effective_human_processing_capacity(self, node: WorkflowNode) -> float:
         return float(node.widget.human_throughput)
@@ -927,7 +947,7 @@ class WorkflowSimulationEngine:
                 )
                 staff_busy_time = human_processing_time * required_staff
                 yield from self._processing_timeout(node, specimen, human_processing_time, 'Staff work')
-                yield from self._release_staff(node, specimen, team)
+                self._release_staff(node, specimen, team)
                 specimen.record_event(
                     node.widget.name,
                     "human_finished",
@@ -1023,7 +1043,7 @@ class WorkflowSimulationEngine:
         finally:
             if node.widget.node_type == "manual analyzer" and acquired_staff > 0:
                 staff_busy_time = total_processing_time * acquired_staff
-                yield from self._release_staff(node, specimen, team)
+                self._release_staff(node, specimen, team)
                 specimen.record_event(
                     node.widget.name,
                     "human_finished",
@@ -1046,7 +1066,7 @@ class WorkflowSimulationEngine:
                 total_processing_time += human_time
                 staff_busy_time += human_time * required
             finally:
-                yield from self._release_staff(node, specimen, team)
+                self._release_staff(node, specimen, team)
             specimen.record_event(node.widget.name, "human_finished", time=self.env.now,
                                   staff_required=required, processing_time=human_time)
 
@@ -1299,7 +1319,7 @@ class WorkflowSimulationEngine:
                     specimen.record_event(node.widget.name, "preparation_finished", time=self.env.now, **batch_details)
                     self._emit_activity("finished", node, specimen, **batch_details)
             finally:
-                yield from self._release_staff(node, representative, team, **batch_details)
+                self._release_staff(node, representative, team, **batch_details)
         for specimen, arrived, duration in processed:
             wait = self.env.now - arrived - duration
             self.node_stats[node.node_id].record(wait_time=wait, processing_time=duration,
@@ -1430,7 +1450,7 @@ class WorkflowSimulationEngine:
                         )
                         staff_busy_time = human_processing_time * required_staff
                         yield from self._processing_timeout(node, specimen, human_processing_time, 'Staff work')
-                        yield from self._release_staff(node, specimen, team)
+                        self._release_staff(node, specimen, team)
                         specimen.record_event(
                             node.widget.name,
                             "human_finished",
@@ -1459,9 +1479,21 @@ class WorkflowSimulationEngine:
                     stats.total_staff_busy_time += (self.env.now - whole_job_start) * len(whole_job_team)
                     stats.total_wait_time += whole_job_wait
                     stats.total_time_spent += whole_job_wait
-                    yield from self._release_staff(node, specimen, whole_job_team)
+                    self._release_staff(node, specimen, whole_job_team)
 
             self._emit_activity("finished", node, specimen)
+            if (node.widget.node_type == 'specimen registration'
+                    and not specimen.metadata.get('reception_checked')):
+                specimen.metadata['reception_checked'] = True
+                if (self.settings.rejection_probability > 0
+                        and self.rejection_rng.random() < self.settings.rejection_probability):
+                    reason = 'Simulated specimen quality rejection'
+                    specimen.metadata.update(rejected=True, rejected_at=float(self.env.now), rejection_reason=reason)
+                    if isinstance(getattr(specimen.payload, 'metadata', None), dict):
+                        specimen.payload.metadata.update(rejected=True, rejected_at=float(self.env.now), rejection_reason=reason)
+                    specimen.record_event(node.widget.name, 'specimen_rejected', time=self.env.now, reason=reason)
+                    self.rejected_specimens.append(specimen)
+                    return
             if next_node_override:
                 current_node_id = next_node_override
             else:
@@ -1509,8 +1541,10 @@ class WorkflowSimulationEngine:
             specimen.metadata["arrival_index"] = specimen_index
             self._observed_orders.append(specimen.payload)
             processes.append(self.env.process(self._specimen_process(specimen_index)))
-            if specimen_index + 1 < len(self.specimens) and self.settings.interarrival_time > 0:
-                yield self.env.timeout(self.settings.interarrival_time)
+            if specimen_index + 1 < len(self.specimens):
+                gap = self.arrival_offsets[specimen_index + 1] - self.arrival_offsets[specimen_index]
+                if gap > 0:
+                    yield self.env.timeout(gap)
         yield self.env.all_of(processes)
 
     def run(self) -> WorkflowSimulationResult:
@@ -1540,6 +1574,7 @@ class WorkflowSimulationEngine:
             staff_capacity=self.staff_capacity,
             node_stats=self.node_stats,
             completed_specimens=self.completed_specimens,
+            rejected_specimens=self.rejected_specimens,
             active_node_ids=self.active_node_ids,
             governance_consultations=self.governance_consultations,
         )

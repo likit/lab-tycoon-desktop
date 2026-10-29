@@ -48,6 +48,31 @@ class LISAnalysisTests(unittest.TestCase):
         return analyze_lis_items(ids or self.ids, workflow_document=self.document,
             operator_username='analyst', database_engine=self.engine, random_seed=1)
 
+    def test_rejection_marks_orders_without_results_and_keeps_trace(self):
+        self.document.workflow.active_scenario.parameters.update(rejection_probability=1,
+            arrival_distribution='exponential', interarrival_time=5 / 60)
+        summary = self.analyze()
+        self.assertEqual(summary.analyzed, 0)
+        with Session(self.engine) as session:
+            orders = list(session.scalars(select(LabOrder)))
+            self.assertEqual(summary.rejected, len(orders))
+            self.assertTrue(all(o.rejected_at and o.rejector.username == 'analyst' for o in orders))
+            self.assertTrue(all(o.reason == 'Simulated specimen quality rejection' for o in orders))
+            self.assertTrue(all(o.received_at is None for o in orders))
+            items = list(session.scalars(select(LabOrderItem)))
+            self.assertTrue(all(i.finished_at is None and i._value is None for i in items))
+            trace = json.loads(session.get(LISWorkflowAnalysis, summary.run_id).trace_json)
+            self.assertTrue(all(any(e['event'] == 'specimen_rejected' for e in row['history']) for row in trace))
+
+    def test_received_orders_skip_rejection(self):
+        self.document.workflow.active_scenario.parameters['rejection_probability'] = 1
+        with Session(self.engine) as session, session.begin():
+            for order in session.scalars(select(LabOrder)):
+                order.received_at = datetime.now()
+        summary = self.analyze()
+        self.assertEqual(summary.rejected, 0)
+        self.assertEqual(summary.analyzed, len(self.ids))
+
     def add_validation(self, *, grant_role=True):
         workflow = self.document.workflow
         report = next(node for node in workflow.graph.iter_nodes() if node.widget.node_type == 'result reporting')

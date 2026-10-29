@@ -6,11 +6,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import DATABASE_CONFIG, update_config_yaml
 from app.database import DatabaseConfig, DatabaseManager
 from app.demo_project import create_demo_project
+from app.project import LabTycoonProject
 from app.system.models import initialize_db
 from app.ui_styles import create_window
 
 
 def prepare_demo(name, database_path, *, create_new=False):
+    return prepare_project(name, database_path, create_new=create_new, demo=True)
+
+
+def prepare_project(name, database_path, *, create_new=False, demo=False, description=''):
     """Return (project, needs_restart); never replace an existing database file."""
     name = str(name).strip()
     if not name:
@@ -35,27 +40,35 @@ def prepare_demo(name, database_path, *, create_new=False):
                 raise ValueError('Select an existing Lab Tycoon database, or create a new one.')
         finally:
             target_engine.dispose()
-    project = create_demo_project(name)
+    project = create_demo_project(name) if demo else LabTycoonProject.create(name, description)
     changed = config != DATABASE_CONFIG.normalized()
     if changed:
         update_config_yaml(database=config.to_dict(), last_project_path=None,
-                           pending_demo={'name': name, 'database_path': config.database_path},
+                           pending_demo=({'name': name, 'database_path': config.database_path} if demo else None),
+                           pending_project=(None if demo else {'name': name, 'description': project.description}),
                            order_source_selection=None)
     return project, changed
 
 
 def create_demo_setup_window():
+    return create_project_setup_window(demo=True)
+
+
+def create_project_setup_window(*, demo=False):
+    title = 'Open Demo Project' if demo else 'New Lab Tycoon Project'
+    submit = 'Open Demo' if demo else 'Create'
     layout = [
-        [sg.Text('Project name'), sg.Input('Demo Laboratory', key='name')],
+        [sg.Text('Project name'), sg.Input('Demo Laboratory' if demo else '', key='name', focus=True)],
+        *([] if demo else [[sg.Text('Description'), sg.Multiline(key='description', size=(42, 4))]]),
         [sg.Radio('Use existing database', 'database', default=True, key='existing', enable_events=True),
          sg.Radio('Create new database', 'database', key='new', enable_events=True)],
         [sg.Text('Database file'), sg.Input(DATABASE_CONFIG.database_path, key='path', expand_x=True),
          sg.Button('Browse…')],
         [sg.Text('Changing the database applies to the whole app and requires reopening it.\n'
-                 'Your named demo opens after restart. A new database requires administrator setup.')],
-        [sg.Button('Open Demo'), sg.Button('Cancel')],
+                 'Your project opens after restart. A new database requires administrator setup.')],
+        [sg.Button(submit), sg.Button('Cancel')],
     ]
-    window = create_window('Open Demo Project', layout, modal=True, resizable=True)
+    window = create_window(title, layout, modal=True, resizable=True)
     try:
         while True:
             event, values = window.read()
@@ -71,10 +84,12 @@ def create_demo_setup_window():
                     file_types=(('SQLite Database', '*.db *.sqlite *.sqlite3'),))
                 if path:
                     window['path'].update(path)
-            elif event == 'Open Demo':
+            elif event == submit:
                 try:
-                    return prepare_demo(values['name'], values['path'], create_new=bool(values['new']))
+                    return (prepare_demo(values['name'], values['path'], create_new=bool(values['new']))
+                            if demo else prepare_project(values['name'], values['path'],
+                                create_new=bool(values['new']), description=values.get('description', '')))
                 except (ValueError, OSError, SQLAlchemyError) as exc:
-                    sg.popup_error(str(exc), title='Demo Setup')
+                    sg.popup_error(str(exc), title=title)
     finally:
         window.close()
