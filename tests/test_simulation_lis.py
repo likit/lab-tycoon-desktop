@@ -204,13 +204,16 @@ class SimulationLISImportTests(unittest.TestCase):
     def test_scenario_generation_uses_real_selected_tests_without_simulation_run(self):
         from app.system.simulation_lis import generate_scenario_lis_orders
         source = self.scenario_source()
+        source.scenario.parameters.update(test_selection_seed=37)
         before = self.count(SimulationRun)
         generated = generate_scenario_lis_orders(source, count=3)
         orders = generated.list_orders()
         self.assertEqual(len(orders), 3)
         self.assertEqual(self.count(SimulationRun), before)
         self.assertEqual(self.count(LISDemonstrationOrder), 3)
-        self.assertEqual({item.test.code for order in orders for item in order.order_items}, {'GLU', 'ALT'})
+        self.assertTrue(all(order.order_items for order in orders))
+        self.assertTrue(all({item.test.code for item in order.order_items} <= {'GLU', 'ALT'} for order in orders))
+        self.assertTrue(any(len(order.order_items) == 1 for order in orders))
         self.assertTrue(all(order.received_at is None and order.approved_at is None for order in orders))
         self.assertTrue(all(item.finished_at is None and item._value is None for order in orders for item in order.order_items))
         self.assertEqual((orders[1].order_datetime - orders[0].order_datetime).total_seconds(), 60)
@@ -257,10 +260,74 @@ class SimulationLISImportTests(unittest.TestCase):
             generate_scenario_lis_orders(source, count=5)
         self.assertEqual(generated.count(), 5)
 
+    def test_stat_mix_applies_only_to_new_batches(self):
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        from app.system.order_priorities import generated_priorities
+        source = self.scenario_source()
+        source.scenario.parameters.update(stat_probability=0, arrival_seed=42)
+        first = generate_scenario_lis_orders(source, count=3)
+        original_ids = {o.id for o in first.list_orders()}
+        first.scenario.parameters['stat_probability'] = .5
+        second = generate_scenario_lis_orders(first, count=10)
+        orders = second.list_orders()
+        self.assertTrue(all(o.priority == 'routine' for o in orders if o.id in original_ids))
+        self.assertEqual([o.priority for o in orders if o.id not in original_ids],
+                         generated_priorities(10, .5, 42))
+
+    def test_source_from_another_project_cannot_generate_from_old_snapshot(self):
+        from unittest.mock import patch
+        from app.project import LabTycoonProject
+        from app.system.lis_analysis import AnalysisWorkflowChoice
+        from app.system.simulation_lis import ScenarioLISOrderSource, generate_scenario_lis_orders
+        original = self.scenario_source()
+        choice = AnalysisWorkflowChoice('project:old:main', 'Old Demo', original.choice.document, 'old')
+        source = ScenarioLISOrderSource(choice, original.scenario_id, database_engine=self.engine)
+        with patch('app.project.project_session.active_project', LabTycoonProject.create('New Demo')):
+            self.assertTrue(source.belongs_to_other_project())
+            with self.assertRaisesRegex(ValueError, 'another project'):
+                generate_scenario_lis_orders(source, count=20)
+        self.assertEqual(source.count(), 0)
+
     def test_unrestricted_analyzer_generates_catalogue_tests_instead_of_placeholder(self):
         from app.system.simulation_lis import generate_scenario_lis_orders
         generated = generate_scenario_lis_orders(self.scenario_source([]), count=2)
-        self.assertEqual([order.order_items[0].test.code for order in generated.list_orders()], ['ALT', 'GLU'])
+        orders = generated.list_orders()
+        self.assertTrue(all(order.order_items for order in orders))
+        self.assertTrue(all({item.test.code for item in order.order_items} <= {'ALT', 'GLU'} for order in orders))
+
+    def test_test_selection_seed_reproduces_order_test_subsets(self):
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        source = self.scenario_source()
+        source.scenario.parameters.update(minimum_tests_per_order=1, maximum_tests_per_order=2,
+                                          test_selection_seed=37)
+        first = generate_scenario_lis_orders(source, count=8)
+        first_ids = {order.id for order in first.list_orders()}
+        first_sets = [[item.test.code for item in order.order_items]
+                      for order in first.list_orders() if order.id in first_ids]
+        second = generate_scenario_lis_orders(source, count=8)
+        with Session(self.engine) as session:
+            second_ids = set(session.scalars(select(LISDemonstrationOrder.lis_order_id)
+                                .where(LISDemonstrationOrder.batch_id == second.batch_id)))
+        second_sets = [[item.test.code for item in order.order_items]
+                       for order in second.list_orders() if order.id in second_ids - first_ids]
+        self.assertEqual(first_sets, second_sets)
+        self.assertEqual({len(order) for order in first_sets}, {1, 2})
+
+    def test_test_count_configuration_is_saved_and_validated(self):
+        from app.system.model import Workflow
+        from app.system.scenario_editor import configure_scenario, scenario_settings
+        workflow = self.scenario_source().choice.document.workflow
+        scenario = workflow.active_scenario
+        configure_scenario(workflow, name=scenario.name, staff=1, arrival_minutes=0, source=scenario,
+                           minimum_tests_per_order=2, maximum_tests_per_order=3,
+                           test_selection_seed='19')
+        settings = scenario_settings(workflow, scenario)
+        self.assertEqual(settings['minimum_tests_per_order'], 2)
+        self.assertEqual(settings['maximum_tests_per_order'], 3)
+        self.assertEqual(settings['test_selection_seed'], 19)
+        with self.assertRaisesRegex(ValueError, 'Test-count range'):
+            configure_scenario(workflow, name=scenario.name, staff=1, arrival_minutes=0, source=scenario,
+                               minimum_tests_per_order=3, maximum_tests_per_order=2)
 
     def test_each_scenario_load_creates_fresh_batch_and_keeps_previous_results(self):
         from app.system.simulation_lis import generate_scenario_lis_orders

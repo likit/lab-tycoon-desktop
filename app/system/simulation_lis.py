@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
+from random import Random
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -114,6 +115,12 @@ class ScenarioLISOrderSource(SimulationLISOrderSource):
         self.scenario_id = scenario_id
         self.scenario = next(s for s in choice.document.workflow.scenarios if s.scenario_id == scenario_id)
 
+    def belongs_to_other_project(self):
+        from app.project import project_session
+        project = project_session.active_project
+        return (project is not None and self.choice.project_id is not None
+                and self.choice.project_id != project.project_id)
+
     def list_orders(self):
         with Session(self.database_engine) as session:
             query = (select(LabOrder).join(LISDemonstrationOrder)
@@ -133,6 +140,9 @@ def generate_scenario_lis_orders(source, *, count):
     if isinstance(count, bool) or int(count) != float(count) or int(count) < 1:
         raise ValueError('Number of orders must be a positive whole number.')
     count = int(count)
+    if source.belongs_to_other_project():
+        raise ValueError('The selected simulation scenario belongs to another project. '
+                         'Choose the Simulation source again and select the current project scenario.')
     # The source picker stores a workflow snapshot. Prefer current settings
     # after scenario edits, retaining the snapshot only if its workflow is absent.
     from app.system.lis_analysis import analysis_workflow_choices
@@ -155,6 +165,9 @@ def generate_scenario_lis_orders(source, *, count):
     parameters = source.scenario.parameters
     offsets = arrival_offsets(count, parameters.get('interarrival_time', 0),
         parameters.get('arrival_distribution', 'fixed'), parameters.get('arrival_seed'))
+    from app.system.order_priorities import generated_priorities
+    priorities = generated_priorities(count, parameters.get('stat_probability', 0),
+                                      parameters.get('arrival_seed'))
     batch_id, generated_at = uuid4().hex, datetime.now()
     with Session(source.database_engine) as session, session.begin():
         catalogue = {test.code: test for test in session.scalars(select(Test).where(Test.active.is_(True)))}
@@ -164,16 +177,24 @@ def generate_scenario_lis_orders(source, *, count):
         codes = selected or sorted(catalogue)
         if not codes:
             raise ValueError('Add at least one active LIS test before loading orders.')
+        test_seed = parameters.get('test_selection_seed', parameters.get('arrival_seed'))
+        test_rng = Random(f'tests:{test_seed}' if test_seed is not None else None)
+        min_tests = min(int(parameters.get('minimum_tests_per_order', 1)), len(codes))
+        max_tests = min(int(parameters.get('maximum_tests_per_order', len(codes))), len(codes))
+        if min_tests < 1 or max_tests < min_tests:
+            raise ValueError('Test-count range must include at least one available test.')
         for index in range(count):
             customer = Customer(hn=f'DEMO-{batch_id}-{index + 1}',
                                 firstname=f'[DEMO] Simulated Patient {index + 1}', lastname='',
                                 gender='Unknown', dob=date(2000, 1, 1),
                                 address='Synthetic demonstration patient; DOB is a placeholder (2000-01-01).')
             order = LabOrder(customer=customer, order_datetime=generated_at + timedelta(hours=offsets[index]),
-                             priority='routine', comment=f'DEMONSTRATION: batch {batch_id}; scenario {source.scenario.name}.')
-            # Configured menus retain the workflow's requested test set. An
-            # unrestricted analyzer cycles through real catalogue assays.
-            requested = codes if selected else [codes[index % len(codes)]]
+                             priority=priorities[index], comment=f'DEMONSTRATION: batch {batch_id}; scenario {source.scenario.name}.')
+            # Each order receives a seeded random subset of tests the workflow
+            # can perform. Every analyzer node declares its supported assays;
+            # the configurable range represents which were ordered.
+            test_count = test_rng.randint(min_tests, max_tests)
+            requested = sorted(test_rng.sample(codes, test_count))
             order.order_items = [LabOrderItem(test=catalogue[code]) for code in requested]
             session.add(LISDemonstrationOrder(batch_id=batch_id, scenario_id=source.scenario_id,
                         workflow_id=source.choice.document.workflow_id, generated_at=generated_at, order=order))

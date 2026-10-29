@@ -21,7 +21,7 @@ from app.lis_settings import create_lis_settings_window
 from app.database_explorer import create_database_explorer_window
 from app.project import LabTycoonProject, project_session
 from app.demo_project import create_demo_project
-from app.demo_setup import create_demo_setup_window, create_project_setup_window
+from app.demo_setup import create_demo_setup_window, create_project_setup_window, show_demo_ready
 from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab, create_lis_results_window
 from app.project_serializer import ProjectFormatError, ProjectSerializer
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
@@ -186,7 +186,8 @@ def run_app():
         return True
 
     if pending_demo:
-        project_session.activate(create_demo_project(pending_demo['name']))
+        project_session.activate(create_demo_project(
+            pending_demo['name'], analyzer_tests=pending_demo.get('analyzer_tests', ['TG'])))
         update_config_yaml(pending_demo=None, last_project_path=None)
 
     elif pending_project:
@@ -266,7 +267,7 @@ def run_app():
             project_session.activate(demo_project)
             update_config_yaml(last_project_path=None)
             refresh_project_display()
-            sg.popup_ok(f'{demo_project.name} is ready.\nClick Go to Lab, then Play to run 10 demo orders with Alex.\nSave the project to keep your changes.', title='Demo Laboratory')
+            show_demo_ready(demo_project, parent=window)
         elif event in ('New Project...', '-NEW-PROJECT-'):
             if not may_replace_active_project():
                 continue

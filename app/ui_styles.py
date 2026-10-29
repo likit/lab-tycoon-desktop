@@ -10,7 +10,7 @@ _window_generation = 0
 
 
 def table_window_layout(layout, screen_size):
-    """Bound table dialogs to the screen while keeping every control scrollable."""
+    """Bound table dialogs without putting their controls inside a scroll area."""
     def tables(rows):
         for row in rows:
             for element in row:
@@ -30,11 +30,35 @@ def table_window_layout(layout, screen_size):
         table.VerticalScrollOnly = False
         # Do not let a large row count consume the entire scrollable body.
         table.NumRows = min(table.NumRows or 12, 12)
-    viewport = sg.Column(layout, scrollable=True, vertical_scroll_only=False,
-                         size=(max(1, width - 40), max(1, height - 50)),
-                         expand_x=True, expand_y=True, pad=(0, 0))
-    return [[viewport]], dict(size=(width, height), resizable=True,
+    return layout, dict(size=(width, height), resizable=True,
         location=((int(screen_width) - width) // 2, (int(screen_height) - height) // 2))
+
+
+def pin_table_controls(layout):
+    """Reserve footer rows before expandable tables consume the available height."""
+    def contains_table(rows):
+        return any(getattr(element, 'Type', None) == sg.ELEM_TYPE_TABLE or
+                   contains_table(getattr(element, 'Rows', []) or [])
+                   for row in rows for element in row)
+
+    table_rows = [i for i, row in enumerate(layout) if contains_table([row])]
+    if table_rows:
+        anchor = getattr(layout[table_rows[0]][0], 'ParentRowFrame', None)
+        if anchor is not None:
+            for row in reversed(layout[table_rows[-1] + 1:]):
+                if row:
+                    frame = getattr(row[0], 'ParentRowFrame', None)
+                    if frame is not None:
+                        frame.pack_configure(side='bottom', before=anchor)
+    for row in layout:
+        for element in row:
+            children = getattr(element, 'Rows', None)
+            if children:
+                pin_table_controls(children)
+            tree = getattr(element, 'TKTreeview', None)
+            if getattr(element, 'Type', None) == sg.ELEM_TYPE_TABLE and tree is not None:
+                for column in tree['columns']:
+                    tree.column(column, stretch=False)
 
 
 def _visible(root):
@@ -89,7 +113,7 @@ def create_window(*args, parent=None, always_on_top=False, window_role=None,
     """Create a mapped window, associate its owner, and restore focus on close."""
     global _window_generation
     # Wide tables can exceed the desktop's logical size on high-DPI Windows.
-    # Use an outer viewport so shrinking never strands footer actions offscreen.
+    # Reserve footer rows instead of scrolling the entire window.
     layout = kwargs.get('layout') if 'layout' in kwargs else (args[1] if len(args) > 1 else None)
     if layout is not None:
         bounded_layout, options = table_window_layout(layout, sg.Window.get_screen_size())
@@ -113,6 +137,8 @@ def create_window(*args, parent=None, always_on_top=False, window_role=None,
     window._lab_always_on_top = always_on_top
     window._lab_window_role = window_role
     root = window.TKroot
+    if layout is not None:
+        pin_table_controls(layout)
     if parent is not None and _visible(parent.TKroot):
         root.transient(parent.TKroot)
         parent_ref = ref(parent)

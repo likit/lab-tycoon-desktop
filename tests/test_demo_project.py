@@ -9,6 +9,12 @@ from app.system.live_simulation import LiveSimulationSession
 
 
 class DemoProjectTests(unittest.TestCase):
+    def test_demo_analyzer_supports_all_catalogue_tests(self):
+        project = create_demo_project(analyzer_tests=['A', 'B', 'C'])
+        analyzer = next(node for node in project.workflow.graph.iter_nodes()
+                        if node.metadata.get('equipment_id') == 'CHEM-001')
+        self.assertEqual(analyzer.widget.metadata['analyzer_tests'], ['A', 'B', 'C'])
+
     def test_floor_play_after_saving_analyzer_settings(self):
         from app.system.workflow_editor import WorkflowEditorController
         from app.system.storage import WorkflowDocument

@@ -392,3 +392,17 @@ functionality. The build is unsigned, so Windows may display publisher warnings.
 To build an older tag, that revision must contain the workflow. The existing
 `2026.3-beta` tag predates this workflow; use the updated branch for the first
 build. Adding the workflow does not move existing tags or publish a release.
+
+### STAT order mix
+
+In **Manage Scenarios → Edit**, set **STAT orders (%)** from 0 to 100. This is
+an independent probability per generated order, so small batches may differ
+from the configured percentage. STAT orders use the existing **urgent** priority
+and appear as urgent in the Orders table and Priority Mix panel. The default is
+0%, retaining routine-only generation for older scenarios.
+
+Both floor simulation and **Load Simulated Orders** use the setting; existing
+orders and imported priorities are unchanged. Priority generation has its own
+random stream, using the run seed or scenario arrival seed for repeatability.
+Changing the STAT percentage does not change arrival gaps or processing draws.
+This setting assigns priority only; it does not change queue order.

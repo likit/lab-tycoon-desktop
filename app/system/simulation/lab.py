@@ -140,6 +140,7 @@ class WorkflowSimulationSettings:
     arrival_distribution: str = 'fixed'
     arrival_seed: int | None = None
     rejection_probability: float = 0.0
+    stat_probability: float = 0.0
     staff_capacity: int | None = None
 
     @classmethod
@@ -174,6 +175,7 @@ class WorkflowSimulationSettings:
             arrival_distribution=parameters.get('arrival_distribution', 'fixed'),
             arrival_seed=parameters.get('arrival_seed'),
             rejection_probability=float(parameters.get('rejection_probability', 0)),
+            stat_probability=float(parameters.get('stat_probability', 0)),
             staff_capacity=staff_capacity,
         )
 
@@ -488,6 +490,9 @@ class WorkflowSimulationEngine:
         from app.system.arrivals import arrival_offsets
         self.arrival_offsets = arrival_offsets(len(self.specimens), settings.interarrival_time,
             settings.arrival_distribution,
+            settings.random_seed if settings.random_seed is not None else settings.arrival_seed)
+        from app.system.order_priorities import generated_priorities
+        self.generated_priorities = generated_priorities(len(self.specimens), settings.stat_probability,
             settings.random_seed if settings.random_seed is not None else settings.arrival_seed)
         self.start_node_id = self.router.start_node_id(self.workflow)
         start_node = self.workflow.get_node(self.start_node_id) if self.start_node_id else None
@@ -1518,6 +1523,7 @@ class WorkflowSimulationEngine:
                     simulation_time=float(self.env.now),
                     patient=self.patient_adapter.patient_for_order(specimen_index + 1),
                 )
+                order.priority = self.generated_priorities[specimen_index]
                 # Generated orders need actual test work to exercise analyzers.
                 # Imported orders retain their original requested tests.
                 analyzers = [self.workflow.get_node(node_id) for node_id in self.active_node_ids

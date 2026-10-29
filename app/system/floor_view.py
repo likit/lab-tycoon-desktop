@@ -1265,7 +1265,8 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
                           expand_y=True, visible=False))],
         [sg.Text("Analyzing selected LIS orders…" if analysis_mode else "Select equipment to move, or open Setup & Equipment to add",
                  key="-FLOOR-STATUS-", size=(text_width, 1), expand_x=True)],
-        [sg.Button("Move Equipment", key="-MOVE-EQUIPMENT-", visible=not analysis_mode),
+        [sg.Button("Edit Equipment", key="-EDIT-EQUIPMENT-", disabled=True, visible=not analysis_mode),
+         sg.Button("Move Equipment", key="-MOVE-EQUIPMENT-", visible=not analysis_mode),
          sg.Button("Remove Equipment", key="-REMOVE-EQUIPMENT-", disabled=True, visible=not analysis_mode),
          sg.Push(), sg.CloseButton("Back to Home" if main_workspace else "Close", key="Close", button_color=DANGER_BUTTON_COLOR)],
     ]
@@ -1284,6 +1285,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
         finalize=True,
     )
     canvas = window["-FLOOR-CANVAS-"].TKCanvas
+    equipment_context_menu = tk.Menu(canvas, tearoff=False)
     # Pack fixed bottom rows before the expanding viewport. Otherwise Tk grants
     # the canvas its requested height first and clips controls on smaller windows.
     viewport_row = window['-FLOOR-CANVAS-'].ParentRowFrame
@@ -1349,6 +1351,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
         inspector.update()
         state = snapshot['state']
         active = state in ('playing', 'paused', 'saving')
+        window['-EDIT-EQUIPMENT-'].update(disabled=active or analysis_mode or not floor_plan.selected_equipment_id)
         window["-FLOW-PLAY-"].update(disabled=state in ('playing', 'saving') or (analysis_mode and state in ('completed', 'cancelled', 'failed')), disabled_button_color=("#374151", "#e5e7eb"))
         window["-FLOW-PAUSE-"].update(disabled=state != 'playing', disabled_button_color=("#374151", "#e5e7eb"))
         window["-FLOW-STOP-"].update(disabled=not active or state == 'saving', disabled_button_color=("#374151", "#e5e7eb"))
@@ -1497,6 +1500,7 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
                 )
                 window["-REMOVE-EQUIPMENT-"].update(disabled=False)
         inspector.select(floor_plan.selected_equipment_id)
+        update_live_controls()
         renderer.render()
 
     def preview_tile(event) -> None:
@@ -1571,9 +1575,55 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
         window["-FLOOR-STATUS-"].update(f"Removed {removed.instance_id}")
         renderer.render()
 
+    def show_equipment_context_menu(event) -> str | None:
+        """Select equipment under the pointer and show its available actions."""
+        if analysis_mode or floor_plan.moving_equipment_id is not None or floor_plan.placement_equipment_type is not None:
+            return "break"
+        equipment_id = renderer.equipment_at_canvas_point(event.x, event.y)
+        if equipment_id is None:
+            return "break"
+        instance = next((item for item in floor_plan.equipment_instances
+                         if item.instance_id == equipment_id), None)
+        if instance is None:
+            return "break"
+
+        floor_plan.select_equipment_at(instance.row, instance.col)
+        inspector.select(equipment_id)
+        window["-FLOOR-STATUS-"].update(
+            f"Selected {instance.instance_id} ({instance.status})"
+        )
+        update_live_controls()
+        renderer.render()
+
+        equipment_context_menu.delete(0, "end")
+        session = renderer.live_session
+        busy = session is not None and session.state in ("playing", "paused", "saving")
+        equipment_context_menu.add_command(
+            label="Move Equipment",
+            state="disabled" if busy else "normal",
+            command=lambda: window.write_event_value("-MOVE-EQUIPMENT-", None),
+        )
+        equipment_context_menu.add_command(
+            label="Edit Equipment",
+            state="disabled" if busy else "normal",
+            command=lambda: window.write_event_value("-EDIT-EQUIPMENT-", None),
+        )
+        equipment_context_menu.add_command(
+            label="Remove Equipment",
+            state="disabled" if busy else "normal",
+            command=lambda: window.write_event_value("-REMOVE-EQUIPMENT-", None),
+        )
+        try:
+            equipment_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            equipment_context_menu.grab_release()
+        return "break"
+
     pan = FloorPanController(canvas, select_tile,
         lambda: floor_plan.placement_equipment_type is None and floor_plan.moving_equipment_id is None)
     canvas.bind('<ButtonPress-1>', pan.press)
+    canvas.bind('<ButtonPress-3>', show_equipment_context_menu, add='+')
+    canvas.bind('<ButtonPress-2>', show_equipment_context_menu, add='+')
     canvas.bind('<B1-Motion>', pan.drag)
     canvas.bind('<ButtonRelease-1>', pan.release)
     canvas.bind('<Control-MouseWheel>', wheel_zoom)
@@ -1685,6 +1735,23 @@ def create_floor_view_window(project: LabTycoonProject, *, main_workspace: bool 
             window["-EQUIPMENT-PANEL-"].update(visible=panel_visible)
             window.refresh()
             redraw_for_size()
+        elif event == '-EDIT-EQUIPMENT-':
+            session = renderer.live_session
+            if analysis_mode or (session is not None and session.state in ('playing', 'paused', 'saving')):
+                sg.popup_ok('Stop the simulation before editing equipment.', title='Edit Equipment', keep_on_top=True)
+                continue
+            if floor_plan.selected_equipment_id:
+                from app.system.floor_equipment import edit_floor_equipment
+                workflow = workflow_labels[_values['-FLOOR-WORKFLOW-']]
+                try:
+                    if edit_floor_equipment(project, workflow, floor_plan.selected_equipment_id, parent=window):
+                        renderer.workflow = workflow
+                        refresh_scenarios()
+                        window['-FLOOR-STATUS-'].update('Equipment settings updated. Save Project to keep changes.')
+                        window['-LAB-PROJECT-NAME-'].update(project.display_name)
+                        renderer.render()
+                except ValueError as exc:
+                    sg.popup_error(str(exc), title='Edit Equipment', keep_on_top=True)
         elif event == "-MOVE-EQUIPMENT-":
             if floor_plan.begin_move():
                 window["-FLOOR-STATUS-"].update("Moving selected equipment: click a destination tile; Esc cancels")

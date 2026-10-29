@@ -24,6 +24,11 @@ class DemoSetupTests(unittest.TestCase):
                 with Session(target) as session:
                     self.assertEqual(session.scalar(select(func.count()).select_from(User)), 0)
                     self.assertEqual(session.scalar(select(func.count()).select_from(Test)), 9)
+                    active_codes = sorted(session.scalars(select(Test.code).where(Test.active.is_(True))))
+                analyzer = next(node for node in project.workflow.graph.iter_nodes()
+                                if node.metadata.get('equipment_id') == 'CHEM-001')
+                self.assertEqual(analyzer.widget.metadata['analyzer_tests'], active_codes)
+                self.assertEqual(save.call_args.kwargs['pending_demo']['analyzer_tests'], active_codes)
             finally:
                 target.dispose()
             with self.assertRaisesRegex(ValueError, 'already exists'):
@@ -72,6 +77,16 @@ class DemoSetupTests(unittest.TestCase):
                 with self.subTest(name=name, file=file), self.assertRaises(ValueError):
                     demo_setup.prepare_demo(name, file)
             save.assert_not_called()
+
+    def test_ready_dialog_has_explicit_owner_and_closes_on_ok_or_window_close(self):
+        for event in ('OK', demo_setup.sg.WIN_CLOSED):
+            dialog, parent = Mock(), Mock()
+            dialog.read.return_value = (event, {})
+            with patch.object(demo_setup, 'create_window', return_value=dialog) as create:
+                demo_setup.show_demo_ready(Mock(name='project'), parent=parent)
+            self.assertIs(create.call_args.kwargs['parent'], parent)
+            self.assertTrue(create.call_args.kwargs['modal'])
+            dialog.close.assert_called_once()
 
     def test_cancel_does_not_create_database(self):
         window = Mock()

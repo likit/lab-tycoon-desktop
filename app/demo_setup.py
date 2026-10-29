@@ -1,14 +1,30 @@
 """Configure the built-in demo and safely stage database changes for restart."""
 import FreeSimpleGUI as sg
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import DATABASE_CONFIG, update_config_yaml
 from app.database import DatabaseConfig, DatabaseManager
 from app.demo_project import create_demo_project
 from app.project import LabTycoonProject
-from app.system.models import initialize_db
+from app.system.models import initialize_db, Test
 from app.ui_styles import create_window
+
+
+def show_demo_ready(project, *, parent):
+    """Use the shared owned-window lifecycle rather than an unmanaged popup."""
+    layout = [[sg.Text(f'{project.name} is ready.', font=('Arial', 14, 'bold'))],
+              [sg.Text('Open Simulation → Laboratory Design → Floor Plan, then Play.\n'
+                       'The demo runs 10 orders with Alex. Save the project to keep your changes.')],
+              [sg.Button('OK', bind_return_key=True)]]
+    dialog = create_window('Demo Laboratory', layout, parent=parent, modal=True)
+    try:
+        while True:
+            event, _ = dialog.read()
+            if event in ('OK', sg.WIN_CLOSED):
+                return
+    finally:
+        dialog.close()
 
 
 def prepare_demo(name, database_path, *, create_new=False):
@@ -29,6 +45,7 @@ def prepare_project(name, database_path, *, create_new=False, demo=False, descri
         target_engine = manager.create_orm_engine()
         try:
             initialize_db(target_engine)
+            analyzer_tests = _active_test_codes(target_engine)
         finally:
             target_engine.dispose()
     else:
@@ -38,16 +55,24 @@ def prepare_project(name, database_path, *, create_new=False, demo=False, descri
             inspector = inspect(target_engine)
             if not all(inspector.has_table(table) for table in ('users', 'lab_orders', 'tests')):
                 raise ValueError('Select an existing Lab Tycoon database, or create a new one.')
+            analyzer_tests = _active_test_codes(target_engine)
         finally:
             target_engine.dispose()
-    project = create_demo_project(name) if demo else LabTycoonProject.create(name, description)
+    project = create_demo_project(name, analyzer_tests=analyzer_tests) if demo else LabTycoonProject.create(name, description)
     changed = config != DATABASE_CONFIG.normalized()
     if changed:
         update_config_yaml(database=config.to_dict(), last_project_path=None,
-                           pending_demo=({'name': name, 'database_path': config.database_path} if demo else None),
+                           pending_demo=({'name': name, 'database_path': config.database_path,
+                                          'analyzer_tests': analyzer_tests} if demo else None),
                            pending_project=(None if demo else {'name': name, 'description': project.description}),
                            order_source_selection=None)
     return project, changed
+
+
+def _active_test_codes(database_engine):
+    from sqlalchemy.orm import Session
+    with Session(database_engine) as session:
+        return sorted(session.scalars(select(Test.code).where(Test.active.is_(True))))
 
 
 def create_demo_setup_window():

@@ -2,7 +2,7 @@
 from app.project import LabTycoonProject, ProjectEquipmentInstance
 
 
-def create_demo_project(name="Demo Laboratory"):
+def create_demo_project(name="Demo Laboratory", *, analyzer_tests=None):
     project = LabTycoonProject.create(
         name, 'One staff member receives, analyzes, reports, and validates demo orders.')
     project.floor.equipment_instances = [
@@ -25,7 +25,7 @@ def create_demo_project(name="Demo Laboratory"):
     analyzer = workflow.create_connected_node(centrifuge.node_id, 'Chemistry Analyzer', 20,
         kind='equipment', metadata={'node_type': 'automated analyzer',
             'equipment_id': 'CHEM-001', 'equipment_type': 'chemistry_analyzer',
-            'analyzer_tests': ['TG'], 'throughput': 20,
+            'analyzer_tests': list(analyzer_tests) if analyzer_tests is not None else ['TG'], 'throughput': 20,
             'required_staff': 1, 'human_throughput': 60,
             'capacity': 1, 'output_data': True})
     reporting = workflow.create_connected_node(analyzer.node_id, 'Result Reporting',
@@ -42,3 +42,15 @@ def create_demo_project(name="Demo Laboratory"):
     scenario.parameters.update(staff_capacity=1, interarrival_time=1 / 60,
                                system_variation=0, human_variation=0)
     return project
+
+
+def configure_demo_analyzer_tests(project, test_codes):
+    """Set the demo analyzer menu to every active LIS catalogue assay."""
+    from app.system.model import WorkflowNode
+    analyzer = next((node for node in project.workflow.graph.iter_nodes()
+                     if node.metadata.get('equipment_id') == 'CHEM-001'), None)
+    if analyzer is None:
+        return False
+    analyzer.widget.metadata['analyzer_tests'] = sorted({str(code) for code in test_codes})
+    project.mark_dirty()
+    return True

@@ -780,8 +780,10 @@ def create_test_list_window():
                             'TMLT Code', 'TMLT Name', 'Specimens',
                             'Method', 'Unit', 'Price', 'Active'],
                   key='-TABLE-', expand_x=True, expand_y=True, enable_events=True,
-                  alternating_row_color='lightblue',
-                  font=('Arial', 16),
+                  alternating_row_color='lightblue', auto_size_columns=False,
+                  col_widths=[10, 20, 30, 12, 30, 18, 14, 10, 10, 8],
+                  vertical_scroll_only=False, num_rows=12,
+                  font=('Arial', 11),
                   )
          ],
         [
@@ -1075,9 +1077,8 @@ def create_order_list_window():
         window['-GET-ORDER-'].update(disabled=scenario_source)
         window['-AUTO-RECEIVE-'].update(disabled=scenario_source)
         if isinstance(source, ScenarioLISOrderSource):
-            message = f'Simulation: {source.scenario.name} ({source.count()} orders)'
-            if source.batch_id:
-                message += f'\nBatch {source.batch_id[:8]}'
+            message = (f'Simulation: {source.scenario.name} ({source.count()} orders)'
+                       f'\nWorkflow: {source.choice.label}')
         elif isinstance(source, SimulationLISOrderSource):
             message = f'Simulation → LIS: {source.count()} orders\nRun {source.run_id[:8]}'
             if source.batch_id:
@@ -1107,7 +1108,7 @@ def create_order_list_window():
         total = sum(counts.values())
 
         canvas.create_text(
-            110,
+            180,
             16,
             text="Priority Mix",
             font=("Arial", 12, "bold"),
@@ -1115,7 +1116,7 @@ def create_order_list_window():
 
         if total == 0:
             canvas.create_text(
-                110,
+                180,
                 90,
                 text="No orders",
                 font=("Arial", 11),
@@ -1130,20 +1131,16 @@ def create_order_list_window():
             if count <= 0:
                 continue
             extent = (count / total) * 360.0
-            canvas.create_arc(
-                x0,
-                y0,
-                x1,
-                y1,
-                start=start,
-                extent=extent,
-                fill=priority_chart_colors[priority],
-                outline="white",
-                width=2,
-            )
+            if count == total:
+                # Tk arcs with a 360-degree extent can render as an empty slice.
+                canvas.create_oval(x0, y0, x1, y1,
+                    fill=priority_chart_colors[priority], outline="white", width=2)
+            else:
+                canvas.create_arc(x0, y0, x1, y1, start=start, extent=extent,
+                    fill=priority_chart_colors[priority], outline="white", width=2)
             start += extent
 
-        legend_y = 48
+        legend_y = 52
         for priority in ('routine', 'urgent'):
             count = counts[priority]
             percent = round((count / total) * 100)
@@ -1160,9 +1157,9 @@ def create_order_list_window():
                 legend_y,
                 anchor="w",
                 text=f"{priority.title()}: {count} ({percent}%)",
-                font=("Arial", 10),
+                font=("Arial", 10), width=185,
             )
-            legend_y += 24
+            legend_y += 40
 
     def show_stewardship_summary(order):
         summary = build_stewardship_ai_summary(order)
@@ -1346,16 +1343,16 @@ def create_order_list_window():
                                       key="-ORDER-TABLE-", auto_size_columns=True,
                                       select_mode=sg.TABLE_SELECT_MODE_EXTENDED,
                                       alternating_row_color='lightblue',
-                                      font=('Arial', 16),
+                                      font=('Arial', 11),
                                       expand_x=True, expand_y=True,
                                       enable_events=True,
-                                      num_rows=20,
+                                      num_rows=8,
                                       )],
                             [
                                 sg.Push(),
                                 sg.Canvas(
                                     key='-PRIORITY-CHART-',
-                                    size=(240, 150),
+                                    size=(360, 150),
                                     background_color='white',
                                 ),
                             ],
@@ -1368,10 +1365,10 @@ def create_order_list_window():
                             [sg.Table(values=flagged_data, headings=flagged_order_headings,
                                       key="-STEWARD-TABLE-", auto_size_columns=True,
                                       alternating_row_color='misty rose',
-                                      font=('Arial', 16),
+                                      font=('Arial', 11),
                                       expand_x=True, expand_y=True,
                                       enable_events=True,
-                                      num_rows=20,
+                                      num_rows=8,
                                       )],
                         ],
                     ),
@@ -1386,16 +1383,16 @@ def create_order_list_window():
             sg.Combo(source_options, default_value=order_source_label(), key='-DATA-SOURCE-', readonly=True, enable_events=True),
             sg.Button('Load Uploaded File', key='-LOAD-UPLOADED-'),
             sg.Button('Load Simulated Orders', key='-LOAD-SIMULATION-'),
-            sg.Text('', key='-SOURCE-STATUS-', size=(42, 2)),
+            ],
+        [sg.Text('', key='-SOURCE-STATUS-', size=(72, 2)),
         ],
-        [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-')],
+        [sg.Text('Number orders:'), sg.Input('1', key='-NUM-ORDERS-', size=(8, 1))],
         [sg.Checkbox('Auto receive all orders', key='-AUTO-RECEIVE-', enable_events=True)],
         [sg.Button('Get Order', key='-GET-ORDER-'),
          sg.Button('Download Orders', key='-DOWNLOAD-ORDERS-'),
          sg.Button('Download Review Queue', key='-DOWNLOAD-REVIEW-'),
          sg.CloseButton('Close', button_color=DANGER_BUTTON_COLOR)],
-        [sg.Text('Activity Log', font=('Arial', 15, 'bold'))],
-        [sg.Multiline('', key='-ORDER-ACTIVITY-LOG-', size=(85, 3), disabled=True,
+        [sg.Multiline('', key='-ORDER-ACTIVITY-LOG-', size=(70, 2), disabled=True,
                       expand_x=True, autoscroll=True)],
     ]
 
@@ -1437,7 +1434,7 @@ def create_order_list_window():
             data, flagged_orders, flagged_data = refresh_source_views(window)
         elif event == '-LOAD-SIMULATION-':
             source = get_active_order_source()
-            if not isinstance(source, ScenarioLISOrderSource):
+            if not isinstance(source, ScenarioLISOrderSource) or source.belongs_to_other_project():
                 source = choose_simulation_source(parent=window)
                 if source is None:
                     continue
@@ -1453,6 +1450,7 @@ def create_order_list_window():
                 f'Added {int(values["-NUM-ORDERS-"])} orders from scenario {loaded.scenario.name}; '
                 f'{loaded.scenario.parameters.get("arrival_distribution", "fixed")} arrivals, '
                 f'interval/mean {float(loaded.scenario.parameters.get("interarrival_time", 0)) * 60:g} min; '
+                f'STAT {float(loaded.scenario.parameters.get("stat_probability", 0)) * 100:g}%; '
                 f'{len(data)} total displayed; '
                 f'batch {loaded.batch_id[:8]}.\n', append=True)
         elif event == '-DATA-SOURCE-':
