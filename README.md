@@ -21,7 +21,7 @@ you to create an administrator account on startup. Existing database files are
 never overwritten by Create New.
 
 Then choose **Go to Lab** and **Play**. The demo includes
-reception, one chemistry analyzer performing TG tests, a reporting and validation workflow ending at the reporting station, and
+reception, a centrifuge, one chemistry analyzer performing TG tests, a reporting and validation workflow ending at the reporting station, and
 one simulated staff member named Alex. The default run processes 10 orders arriving one simulated minute apart.
 This runs the simulation without adding LIS patient or order records. Save the
 project to keep the example or your edits.
@@ -368,3 +368,27 @@ completion, and order approval. The dashboard labels these definitions. Medians
 are per order and use only non-rejected/non-cancelled orders with all four
 chronological milestones. Counts include all records in the selected source;
 an empty TAT sample displays a dash instead of zero.
+
+### Build Windows on GitHub Actions
+
+Commit and push `.github/workflows/build-windows.yml` to the repository's default
+branch. On GitHub, open **Actions → Build Windows app → Run workflow**, choose the
+branch to package, and run it. The workflow builds a Windows x64 folder-based
+application using Python 3.12 and PyInstaller. It includes artwork, orchestration
+resources, and the Windows keyring backend; local config and database files are
+not bundled. No signing credentials or repository write permissions are needed.
+
+When the run succeeds, download **LabTycoon-Windows-x64** from its **Artifacts**
+section. Extract the whole ZIP, then run `LabTycoon.exe`. Keep the `_internal`
+folder beside the executable; users do not need a separate Python installation.
+The artifact expires after 14 days. This is a portable app folder, not an installer.
+
+On Windows, verify first-run administrator setup, sign-in persistence, opening a
+project, the demo simulation, and Lab Performance. Runtime data defaults to
+`%APPDATA%\LabTycoon`; the signing key is created in Windows credential storage.
+The workflow's packaged `--help` check verifies the entry point, not full GUI
+functionality. The build is unsigned, so Windows may display publisher warnings.
+
+To build an older tag, that revision must contain the workflow. The existing
+`2026.3-beta` tag predates this workflow; use the updated branch for the first
+build. Adding the workflow does not move existing tags or publish a release.

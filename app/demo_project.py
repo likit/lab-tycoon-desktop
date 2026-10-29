@@ -7,8 +7,9 @@ def create_demo_project(name="Demo Laboratory"):
         name, 'One staff member receives, analyzes, reports, and validates demo orders.')
     project.floor.equipment_instances = [
         ProjectEquipmentInstance('RECP-001', 'specimens_reception_station', 3, 2),
-        ProjectEquipmentInstance('CHEM-001', 'chemistry_analyzer', 3, 5),
-        ProjectEquipmentInstance('REPORT-001', 'reporting_station', 6, 5),
+        ProjectEquipmentInstance('CENT-001', 'centrifuge', 3, 4),
+        ProjectEquipmentInstance('CHEM-001', 'chemistry_analyzer', 3, 7),
+        ProjectEquipmentInstance('REPORT-001', 'reporting_station', 6, 7),
     ]
     workflow = project.workflow
     source = workflow.create_node('Demo Orders', kind='order_adapter',
@@ -16,7 +17,12 @@ def create_demo_project(name="Demo Laboratory"):
     reception = workflow.create_connected_node(source.node_id, 'Specimen Registration',
         metadata={'node_type': 'specimen registration', 'required_staff': 1,
                   'human_throughput': 60, 'attend_equipment_id': 'RECP-001'})
-    analyzer = workflow.create_connected_node(reception.node_id, 'Chemistry Analyzer', 20,
+    centrifuge = workflow.create_connected_node(reception.node_id, 'Centrifuge', 12,
+        kind='equipment', metadata={'node_type': 'equipment',
+            'equipment_id': 'CENT-001', 'equipment_type': 'centrifuge',
+            'throughput': 12, 'human_throughput': 60, 'required_staff': 1,
+            'capacity': 1, 'output_specimens': True})
+    analyzer = workflow.create_connected_node(centrifuge.node_id, 'Chemistry Analyzer', 20,
         kind='equipment', metadata={'node_type': 'automated analyzer',
             'equipment_id': 'CHEM-001', 'equipment_type': 'chemistry_analyzer',
             'analyzer_tests': ['TG'], 'throughput': 20,

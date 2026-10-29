@@ -86,6 +86,24 @@ class DemoProjectTests(unittest.TestCase):
             departures = {e['widget']: e['details']['time'] for e in specimen.history if e['event'] == 'departed'}
             self.assertLess(departures['Result Reporting'], departures['Result Validation'])
 
+    def test_centrifuge_connects_reception_to_analyzer_and_processes_specimens(self):
+        project = create_demo_project()
+        workflow = project.workflow
+        nodes = list(workflow.graph.iter_nodes())
+        reception = next(n for n in nodes if n.widget.node_type == 'specimen registration')
+        centrifuge = next(n for n in nodes if n.metadata.get('equipment_id') == 'CENT-001')
+        analyzer = next(n for n in nodes if n.metadata.get('equipment_id') == 'CHEM-001')
+        self.assertEqual([e.target for e in workflow.graph.outgoing_edges(reception.node_id)], [centrifuge.node_id])
+        self.assertEqual([e.target for e in workflow.graph.outgoing_edges(centrifuge.node_id)], [analyzer.node_id])
+        live = LiveSimulationSession(workflow, count=2, seed=7,
+            equipment_types={e.instance_id: e.equipment_type for e in project.floor.equipment_instances})
+        result = live.engine.run()
+        self.assertEqual(result.node_stats[centrifuge.node_id].specimens_processed, 2)
+        for specimen in result.completed_specimens:
+            events = [(e['widget'], e['event']) for e in specimen.history]
+            self.assertLess(events.index(('Specimen Registration', 'departed')), events.index(('Centrifuge', 'arrived')))
+            self.assertLess(events.index(('Centrifuge', 'departed')), events.index(('Chemistry Analyzer', 'arrived')))
+
     def test_demos_are_independent(self):
         first, second = create_demo_project(), create_demo_project()
         first.workflow.active_scenario.workforce[0]['name'] = 'Changed'
