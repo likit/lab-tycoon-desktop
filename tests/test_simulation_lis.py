@@ -313,6 +313,20 @@ class SimulationLISImportTests(unittest.TestCase):
         self.assertEqual(first_sets, second_sets)
         self.assertEqual({len(order) for order in first_sets}, {1, 2})
 
+    def test_saved_all_test_maximum_generates_orders(self):
+        from app.system.scenario_editor import configure_scenario
+        from app.system.simulation_lis import generate_scenario_lis_orders
+        source = self.scenario_source()
+        workflow = source.choice.document.workflow
+        configure_scenario(workflow, name=source.scenario.name, staff=1,
+                           arrival_minutes=0, source=source.scenario,
+                           minimum_tests_per_order=2, maximum_tests_per_order=0)
+        generated = generate_scenario_lis_orders(source, count=3)
+        orders = generated.list_orders()
+        self.assertEqual(len(orders), 3)
+        self.assertTrue(all({item.test.code for item in order.order_items} == {'ALT', 'GLU'}
+                            for order in orders))
+
     def test_test_count_configuration_is_saved_and_validated(self):
         from app.system.model import Workflow
         from app.system.scenario_editor import configure_scenario, scenario_settings

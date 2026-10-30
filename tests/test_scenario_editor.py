@@ -1,6 +1,6 @@
 """Saved scenario semantics, validation, units and run isolation."""
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 from app.system.model import Scenario, Workflow
 from app.system.scenario_editor import configure_scenario, scenario_settings, scenario_dialog, open_scenario_manager
@@ -116,6 +116,24 @@ class ScenarioEditorTests(unittest.TestCase):
             open_scenario_manager(self.workflow, on_change=Mock())
         denied.assert_called_once()
         window.assert_not_called()
+
+    def test_small_desktop_scrolls_form_and_keeps_save_outside(self):
+        window = MagicMock()
+        window.read.side_effect = [('advanced', {'advanced': True}), ('Cancel', {})]
+        with patch('app.system.scenario_editor.sg.Window.get_screen_size', return_value=(1024, 640)), \
+             patch('app.system.scenario_editor.create_window', return_value=window) as constructor:
+            scenario_dialog(self.workflow)
+        layout = constructor.call_args.args[1]
+        form = layout[0][0]
+        self.assertTrue(form.Scrollable)
+        buttons = [element.ButtonText for row in form.Rows for element in row
+                   if hasattr(element, 'ButtonText')]
+        for label in ('Add staff', 'Rename staff', 'Remove staff'):
+            self.assertIn(label, buttons)
+        self.assertEqual([element.ButtonText for element in layout[-1]], ['Save', 'Cancel'])
+        self.assertFalse(constructor.call_args.kwargs['auto_table_layout'])
+        self.assertLess(constructor.call_args.kwargs['size'][1], 640)
+        window.__getitem__.return_value.contents_changed.assert_called_once()
 
     def test_run_staff_override_does_not_change_saved_scenario(self):
         from tests.test_live_simulation import workflow

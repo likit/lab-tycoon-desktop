@@ -117,6 +117,7 @@ def run_app():
     project_session.close()
     main_context = MainWindowContext(project_name='No project open', laboratory_name='')
     window = create_window('Lab Tycoon',
+                       independent=True,
                        layout=build_main_layout(resource_path, main_context, simulation_enabled=simulation_menu_enabled()),
                        resizable=True,
                        element_justification='center').finalize()

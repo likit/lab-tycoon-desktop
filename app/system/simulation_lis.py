@@ -180,7 +180,9 @@ def generate_scenario_lis_orders(source, *, count):
         test_seed = parameters.get('test_selection_seed', parameters.get('arrival_seed'))
         test_rng = Random(f'tests:{test_seed}' if test_seed is not None else None)
         min_tests = min(int(parameters.get('minimum_tests_per_order', 1)), len(codes))
-        max_tests = min(int(parameters.get('maximum_tests_per_order', len(codes))), len(codes))
+        # Scenario Settings persists the "All" maximum as zero.
+        maximum = int(parameters.get('maximum_tests_per_order', 0))
+        max_tests = len(codes) if maximum == 0 else min(maximum, len(codes))
         if min_tests < 1 or max_tests < min_tests:
             raise ValueError('Test-count range must include at least one available test.')
         for index in range(count):

@@ -2134,6 +2134,8 @@ def open_workflow_editor_window(
     window = create_window(
         "Workflow Editor",
         layout=layout,
+        independent=True,
+        window_role='workflow',
         modal=False,
         resizable=True,
         finalize=True,

@@ -109,13 +109,13 @@ def active_window(*, role=None):
 
 
 def create_window(*args, parent=None, always_on_top=False, window_role=None,
-                  independent=False, **kwargs):
+                  independent=False, auto_table_layout=True, **kwargs):
     """Create a mapped window, associate its owner, and restore focus on close."""
     global _window_generation
     # Wide tables can exceed the desktop's logical size on high-DPI Windows.
     # Reserve footer rows instead of scrolling the entire window.
     layout = kwargs.get('layout') if 'layout' in kwargs else (args[1] if len(args) > 1 else None)
-    if layout is not None:
+    if layout is not None and auto_table_layout:
         bounded_layout, options = table_window_layout(layout, sg.Window.get_screen_size())
         if options:
             if 'layout' in kwargs:
@@ -128,6 +128,12 @@ def create_window(*args, parent=None, always_on_top=False, window_role=None,
     _window_generation += 1
     if independent:
         parent = None
+        # Workspace windows need native window-manager controls. A transient
+        # owner makes Tk windows look like tool dialogs on Windows.
+        kwargs.setdefault('resizable', True)
+        kwargs.setdefault('disable_minimize', False)
+        kwargs.setdefault('no_titlebar', False)
+        kwargs.setdefault('use_custom_titlebar', False)
     elif parent is None or not _visible(parent.TKroot):
         parent = active_window()
     kwargs['finalize'] = True
@@ -137,7 +143,7 @@ def create_window(*args, parent=None, always_on_top=False, window_role=None,
     window._lab_always_on_top = always_on_top
     window._lab_window_role = window_role
     root = window.TKroot
-    if layout is not None:
+    if layout is not None and auto_table_layout:
         pin_table_controls(layout)
     if parent is not None and _visible(parent.TKroot):
         root.transient(parent.TKroot)

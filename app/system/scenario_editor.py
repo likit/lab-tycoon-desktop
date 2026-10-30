@@ -231,10 +231,21 @@ def scenario_dialog(workflow, source=None, *, duplicate=False):
               [sg.pin(sg.Column([
                   [sg.Text('Equipment variation (0–1)'), sg.Input(str(settings['system_variation']), key='system', size=(10, 1))],
                   [sg.Text('Human variation (0–1)'), sg.Input(str(settings['human_variation']), key='human', size=(10, 1))],
-              ], key='advanced_panel', visible=False))],
+              ], key='advanced_panel', visible=False))]]
+    # This is a long form with tables between controls, rather than a table
+    # viewer. Keep its row order and scroll the form on small/high-DPI desktops.
+    screen_width, screen_height = sg.Window.get_screen_size()
+    width = min(900, max(1, int(screen_width) - 80))
+    height = min(750, max(1, int(screen_height) - 120))
+    layout = [[sg.Column(layout, key='scenario_form', scrollable=True, vertical_scroll_only=True,
+                         size=(max(1, width - 40), max(1, height - 70)),
+                         size_subsample_width=1, size_subsample_height=1,
+                         expand_x=True, expand_y=True)],
               [sg.Button('Save'), sg.Button('Cancel')]]
     window = create_window('Duplicate Scenario' if duplicate else 'Scenario Settings', layout,
-                       modal=True, finalize=True, keep_on_top=True)
+                       modal=True, finalize=True, keep_on_top=True, auto_table_layout=False,
+                       size=(width, height), resizable=True,
+                       location=((int(screen_width) - width) // 2, (int(screen_height) - height) // 2))
     try:
         while True:
             event, values = window.read()
@@ -242,6 +253,8 @@ def scenario_dialog(workflow, source=None, *, duplicate=False):
                 return None
             if event == 'advanced':
                 window['advanced_panel'].update(visible=values['advanced'])
+                window.refresh()
+                window['scenario_form'].contents_changed()
             elif event == 'Allowed staff':
                 selected_nodes = values.get('staff_nodes', [])
                 if not selected_nodes:

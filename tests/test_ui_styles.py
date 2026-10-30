@@ -105,6 +105,11 @@ class WindowActivationTests(unittest.TestCase):
             create_window('Floor Plan', window_role='floor', independent=True)
             create_window('Scenarios', parent=floor, always_on_top=True)
         self.assertFalse(constructor.call_args_list[1].kwargs['keep_on_top'])
+        options = constructor.call_args_list[1].kwargs
+        self.assertTrue(options['resizable'])
+        self.assertFalse(options['disable_minimize'])
+        self.assertFalse(options['no_titlebar'])
+        self.assertFalse(options['use_custom_titlebar'])
         floor.TKroot.transient.assert_not_called()
         floor.TKroot.wm_attributes.assert_called_once_with('-topmost', 0)
         scenarios.TKroot.transient.assert_called_once_with(floor.TKroot)
