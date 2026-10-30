@@ -8,6 +8,7 @@ from typing import Callable
 import FreeSimpleGUI as sg
 
 from app.ui_styles import DANGER_BUTTON_COLOR
+from app.recent_projects import recent_project_menu, recent_project_index, CLEAR_RECENT_PROJECTS
 
 
 @dataclass(slots=True)
@@ -32,14 +33,16 @@ PROJECT_ACTIONS = {
 PROJECT_FREE_ACTIONS = PROJECT_ACTIONS | {
     'Exit', 'Program Settings...', 'Sign In', 'Sign Out', 'Profile',
     '-SIGNIN-', '-SIGNOUT-', 'About Lab Tycoon',
+    CLEAR_RECENT_PROJECTS,
 }
 
 
 def project_action_allowed(event, has_active_project):
-    return has_active_project or event in PROJECT_FREE_ACTIONS
+    return has_active_project or event in PROJECT_FREE_ACTIONS or recent_project_index(event) is not None
 
 
-def build_main_menu(*, simulation_enabled: bool = True, has_active_project: bool = True) -> list[list[object]]:
+def build_main_menu(*, simulation_enabled: bool = True, has_active_project: bool = True,
+                    recent_projects=()) -> list[list[object]]:
     """Return navigation grouped by user-facing platform responsibility."""
 
     menu = [
@@ -48,6 +51,7 @@ def build_main_menu(*, simulation_enabled: bool = True, has_active_project: bool
             [
                 "New Project...",
                 "Open Project...",
+                "Recent Projects", recent_project_menu(recent_projects),
                 "Open Demo Project",
                 "Save",
                 "Save As...",
@@ -106,6 +110,7 @@ def build_main_layout(
     resource_path: Callable[[str], str],
     context: MainWindowContext,
     *, simulation_enabled: bool = True,
+    recent_projects=(),
 ) -> list[list[object]]:
     """Build the LIS landing screen around the three operational views."""
 
@@ -140,12 +145,14 @@ def build_main_layout(
     ]
     return [
         [sg.Menu(build_main_menu(simulation_enabled=simulation_enabled,
-                                  has_active_project=context.has_active_project), key='-MAIN-MENU-')],
+                                  has_active_project=context.has_active_project,
+                                  recent_projects=recent_projects), key='-MAIN-MENU-')],
         [sg.Push(), sg.Column(dashboard, element_justification='center', pad=(24, 16)), sg.Push()],
     ]
 
 
-def update_context_elements(window: sg.Window, context: MainWindowContext, *, simulation_enabled=True) -> None:
+def update_context_elements(window: sg.Window, context: MainWindowContext, *, simulation_enabled=True,
+                            recent_projects=()) -> None:
     """Refresh the active-project indicator in the platform shell."""
 
     label = 'Active project: ' + context.project_name if context.has_active_project else 'No active project'
@@ -157,4 +164,5 @@ def update_context_elements(window: sg.Window, context: MainWindowContext, *, si
     for key in ('-ORDERS-', '-CUSTOMER-', '-RESULTS-'):
         window[key].update(disabled=not context.has_active_project)
     window['-MAIN-MENU-'].update(build_main_menu(
-        simulation_enabled=simulation_enabled, has_active_project=context.has_active_project))
+        simulation_enabled=simulation_enabled, has_active_project=context.has_active_project,
+        recent_projects=recent_projects))

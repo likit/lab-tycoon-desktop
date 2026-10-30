@@ -24,6 +24,7 @@ from app.demo_project import create_demo_project
 from app.demo_setup import create_demo_setup_window, create_project_setup_window, show_demo_ready
 from app.project_workspace import add_project_workflow, choose_project_workflow, create_project_workspace_window, open_project_workflow, open_project_lab, create_lis_results_window
 from app.project_serializer import ProjectFormatError, ProjectSerializer
+from app.recent_projects import recent_project_paths, recent_project_index, CLEAR_RECENT_PROJECTS
 from app.config import DATABASE_PATH, config_dict, secret_key, update_config_yaml
 from app.auth.windows import SessionManager
 from app.system.windows import *
@@ -118,7 +119,8 @@ def run_app():
     main_context = MainWindowContext(project_name='No project open', laboratory_name='')
     window = create_window('Lab Tycoon',
                        independent=True,
-                       layout=build_main_layout(resource_path, main_context, simulation_enabled=simulation_menu_enabled()),
+                       layout=build_main_layout(resource_path, main_context, simulation_enabled=simulation_menu_enabled(),
+                                                recent_projects=recent_project_paths(config_dict)),
                        resizable=True,
                        element_justification='center').finalize()
 
@@ -151,7 +153,12 @@ def run_app():
                 has_active_project=True,
             )
             window.TKroot.title(f'Lab Tycoon — {project.display_name}')
-        update_context_elements(window, context, simulation_enabled=simulation_menu_enabled())
+        update_context_elements(window, context, simulation_enabled=simulation_menu_enabled(),
+                                recent_projects=recent_project_paths(config_dict))
+
+    def remember_project(path):
+        update_config_yaml(last_project_path=str(path.resolve()),
+                           recent_project_paths=recent_project_paths(config_dict, latest=str(path)))
 
     def save_active_project(*, force_path: bool = False) -> bool:
         project = project_session.active_project
@@ -169,7 +176,7 @@ def run_app():
         except (OSError, ProjectFormatError, ValueError) as exc:
             sg.popup_error(f'Project could not be saved:\n{exc}', title='Save Project', keep_on_top=True)
             return False
-        update_config_yaml(last_project_path=str(saved_path.resolve()))
+        remember_project(saved_path)
         refresh_project_display()
         sg.popup_quick_message(f'Project saved to {saved_path}.', background_color='lightgreen',
                                keep_on_top=True)
@@ -207,6 +214,7 @@ def run_app():
             )
         else:
             project_session.activate(remembered_project)
+            remember_project(remembered_project.file_path)
 
     from app.order_source_preferences import restore_order_source
     source_restore_error = restore_order_source()
@@ -282,19 +290,29 @@ def run_app():
                 project_session.activate(new_project)
                 update_config_yaml(last_project_path=None)
                 refresh_project_display()
-        elif event in ('Open Project...', '-OPEN-PROJECT-'):
+        elif event == CLEAR_RECENT_PROJECTS:
+            update_config_yaml(recent_project_paths=[])
+            refresh_project_display()
+        elif event in ('Open Project...', '-OPEN-PROJECT-') or recent_project_index(event) is not None:
+            recent_index = recent_project_index(event)
+            # Resolve the menu selection before a possible Save changes history.
+            paths = recent_project_paths(config_dict)
+            selected_path = paths[recent_index] if recent_index is not None and recent_index < len(paths) else None
             if not may_replace_active_project():
                 continue
-            selected_path = choose_project_path(save_as=False)
+            if recent_index is None:
+                selected_path = choose_project_path(save_as=False)
             if selected_path is not None:
                 try:
                     project_session.activate(_project_serializer.load(selected_path))
                 except ProjectFormatError as exc:
                     sg.popup_error(f'Project could not be opened:\n{exc}', title='Open Project')
+                    if recent_index is not None and not os.path.isfile(selected_path):
+                        update_config_yaml(recent_project_paths=[path for path in recent_project_paths(config_dict)
+                                                                if path != selected_path])
+                        refresh_project_display()
                 else:
-                    update_config_yaml(
-                        last_project_path=str(project_session.active_project.file_path.resolve())
-                    )
+                    remember_project(project_session.active_project.file_path)
                     refresh_project_display()
                     open_project_lab(project_session.active_project, home_window=window, on_save=save_active_project)
                     refresh_project_display()
@@ -318,7 +336,6 @@ def run_app():
             create_database_explorer_window()
         elif event == 'Program Settings...':
             if create_program_settings_window(parent=window):
-                window['-MAIN-MENU-'].update(build_main_menu(simulation_enabled=simulation_menu_enabled()))
                 refresh_project_display()
         elif event == 'Settings...':
             if create_lis_settings_window() and may_replace_active_project():
